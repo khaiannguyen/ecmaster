@@ -1,0 +1,6 @@
+# build artifacts trong tools/soft_bus
+tools/soft_bus/soft_bus
+tools/soft_bus/l1_probe
+tools/soft_bus/test_offline
+*.o
+tools/hw_ts_test/hw_ts_test
