@@ -340,6 +340,126 @@ static void test_sii_pdo_category(void)
     free(c1);
 }
 
+/* Small local helper: build+process one AL Control request through the
+ * whole chain, addressed via FPWR at the given station address. */
+static void req_al_state(esc_t *c, int n, uint8_t buf[1600],
+                          uint16_t station_addr, uint16_t creq)
+{
+    uint8_t payload[2];
+    wr16(payload, creq);
+    size_t flen = build_frame(buf, CMD_FPWR, station_addr, REG_AL_CONTROL, payload, 2);
+    process_frame(c, n, buf, flen);
+}
+
+static void test_esm_sequential_valid_transitions(void)
+{
+    printf("\n[T11] ESM: INIT -> PREOP -> SAFEOP -> OP (L2-01..03)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    /* Assign station address 0x1001 (same convention as test_fprd_after_addressing) */
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    check_hex("power-on AL status = INIT", rd16(c[0].regs + REG_AL_STATUS), ESM_INIT);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_PREOP);
+    check_hex("AL status after INIT->PREOP", rd16(c[0].regs + REG_AL_STATUS), ESM_PREOP);
+    check_hex("AL status code after INIT->PREOP", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_NOERROR);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);
+    check_hex("AL status after PREOP->SAFEOP", rd16(c[0].regs + REG_AL_STATUS), ESM_SAFEOP);
+
+    /* Feed one valid output write into this node's FMMU range before
+     * requesting OP — otherwise SAFEOP->OP must be rejected (that's T12). */
+    uint8_t *f = c[0].regs + REG_FMMU_BASE;
+    wr32(f + FMMU_OFF_LOG_START, 0x00020000u);
+    wr16(f + FMMU_OFF_LENGTH, 4);
+    f[FMMU_OFF_LOG_START_BIT] = 0;
+    f[FMMU_OFF_LOG_STOP_BIT]  = 7;
+    wr16(f + FMMU_OFF_PHYS_START, REG_DPRAM_BASE);
+    f[FMMU_OFF_TYPE]     = 0x02; /* write only */
+    f[FMMU_OFF_ACTIVATE] = 0x01;
+
+    uint8_t pd[4] = {0, 0, 0, 0};
+    flen = build_frame(buf, CMD_LWR, 0x0000, 0x0002, pd, 4);
+    process_frame(c, 1, buf, flen);
+    check("got_valid_outputs set after LWR into active output FMMU", c[0].got_valid_outputs, 1);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_OP);
+    check_hex("AL status after SAFEOP->OP (with valid outputs)", rd16(c[0].regs + REG_AL_STATUS), ESM_OP);
+    check_hex("AL status code after SAFEOP->OP", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_NOERROR);
+
+    free(c);
+}
+
+static void test_esm_safeop_to_op_without_outputs(void)
+{
+    printf("\n[T12] ESM: SAFEOP -> OP without valid outputs first (L2-04)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_PREOP);
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);
+    check("got_valid_outputs is 0 right after entering SAFEOP", c[0].got_valid_outputs, 0);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_OP);
+    check_hex("AL status stays SAFEOP+ERROR (rejected)", rd16(c[0].regs + REG_AL_STATUS), (ESM_SAFEOP | 0x10));
+    check_hex("AL status code = NOVALIDOUTPUTS", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_NOVALIDOUTPUTS);
+
+    free(c);
+}
+
+static void test_esm_forced_reject(void)
+{
+    printf("\n[T13] ESM: soft_bus forces rejection of OP request (L2-05)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_PREOP);
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);
+
+    c[0].force_reject_al = 1;
+    req_al_state(c, 1, buf, 0x1001, ESM_OP);
+    check_hex("AL status stays SAFEOP+ERROR (forced reject)", rd16(c[0].regs + REG_AL_STATUS), (ESM_SAFEOP | 0x10));
+    check_hex("AL status code = UNKNOWNALCONTROL", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_UNKNOWNALCONTROL);
+    check("force_reject_al is one-shot (cleared after use)", c[0].force_reject_al, 0);
+
+    free(c);
+}
+
+static void test_esm_invalid_direct_jump(void)
+{
+    printf("\n[T14] ESM: direct INIT -> SAFEOP jump is rejected (L2-06)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    check_hex("starts at INIT", rd16(c[0].regs + REG_AL_STATUS), ESM_INIT);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);
+    check_hex("AL status stays INIT+ERROR (skip rejected)", rd16(c[0].regs + REG_AL_STATUS), (ESM_INIT | 0x10));
+    check_hex("AL status code = INVALIDALCONTROL", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_INVALIDALCONTROL);
+
+    free(c);
+}
+
 int main(void)
 {
     printf("=========================================================\n");
@@ -356,6 +476,11 @@ int main(void)
     test_sii_read();
     test_fmmu_logical();
     test_sii_pdo_category();
+
+    test_esm_sequential_valid_transitions();
+    test_esm_safeop_to_op_without_outputs();
+    test_esm_forced_reject();
+    test_esm_invalid_direct_jump();
 
     printf("\n=========================================================\n");
     printf(" RESULT: %d pass, %d fail\n", g_pass, g_fail);

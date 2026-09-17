@@ -43,4 +43,12 @@ l1_probe: l1_probe.c
 setcap-probe: l1_probe
 	sudo setcap cap_net_raw,cap_net_admin+ep ./l1_probe
 
+l2_probe: l2_probe.c
+	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
+	@echo "Using SOEM lib: $(SOEM_LIB)"
+	$(CC) $(CFLAGS) -o $@ $< $(SOEM_INC) $(SOEM_LIB) -lpthread
+
+setcap-probe2: l2_probe
+	sudo setcap cap_net_raw,cap_net_admin+ep ./l2_probe
+
 .PHONY: setcap-probe

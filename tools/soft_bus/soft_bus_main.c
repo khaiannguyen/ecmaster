@@ -29,6 +29,16 @@
 static volatile sig_atomic_t g_stop = 0;
 static void on_sigint(int sig) { (void)sig; g_stop = 1; }
 
+static esc_t *g_chain = NULL;
+static int    g_n = 0;
+
+static void on_sigusr1(int sig)
+{
+    (void)sig;
+    for (int i = 0; i < g_n; i++) g_chain[i].force_reject_al = 1;
+    fprintf(stderr, "soft_bus: SIGUSR1 received — next AL Control request will be rejected\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = NULL;
@@ -60,6 +70,9 @@ int main(int argc, char **argv)
     }
     esc_chain_wire(chain, n);
 
+    g_chain = chain;
+    g_n = n;
+
     printf("soft_bus: initialized N=%d node(s), pdo_size=%d byte/node, iface=%s\n",
            n, pdo_size, ifname);
     printf("soft_bus: DL status node[0]=0x%04X, node[%d]=0x%04X (last node: port1 loop closed)\n",
@@ -87,6 +100,7 @@ int main(int argc, char **argv)
     }
 
     signal(SIGINT, on_sigint);
+    signal(SIGUSR1, on_sigusr1);
 
     uint8_t buf[RX_BUF_SIZE];
     printf("soft_bus: listening on %s, Ctrl+C to stop...\n", ifname);

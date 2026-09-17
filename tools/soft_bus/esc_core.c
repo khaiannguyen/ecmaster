@@ -285,29 +285,139 @@ static int esc_addr_match(const esc_t *esc, uint16_t adp)
 }
 
 /* ==========================================================================
- * FMMU lookup for logical (L*) commands — byte-aligned only (see file
- * header for the declared limitation).
+ * fmmu_apply — applies a logical (L*) command across EVERY active FMMU that
+ * overlaps it, not just the first one found. A single LRW commonly spans
+ * multiple FMMU regions at once (e.g. one write-only FMMU for outputs, one
+ * read-only FMMU for inputs, packed by SOEM into one combined datagram) —
+ * the old fmmu_lookup() required FULL containment in a SINGLE FMMU, so any
+ * datagram spanning more than one FMMU silently matched nothing at all.
+ *
+ * Handles WKC accounting itself (Section I Table 5): +1 if any FMMU
+ * accepted the read direction, +1 (LWR) or +2 (LRW) if any FMMU accepted
+ * the write direction — matching a single ESC's contribution regardless of
+ * how many of its own FMMUs the datagram happened to touch.
  * ========================================================================== */
-static int fmmu_lookup(esc_t *esc, uint32_t log_addr, uint16_t dlen,
-                        uint16_t *phys_offset_out, int *allow_read, int *allow_write)
+static void fmmu_apply(esc_t *esc, uint32_t log_addr, uint8_t *data,
+                        uint16_t dlen, uint8_t cmd, uint16_t *wkc)
 {
+    int any_read = 0, any_write = 0;
+    uint32_t dg_end = log_addr + dlen;
+
     for (int f = 0; f < REG_FMMU_COUNT; f++) {
         uint8_t *e = esc->regs + REG_FMMU_BASE + f * REG_FMMU_ENTRY_SIZE;
-        if (!(e[FMMU_OFF_ACTIVATE] & 0x01)) continue; /* FMMU not enabled */
+        if (!(e[FMMU_OFF_ACTIVATE] & 0x01)) continue;
 
         uint32_t log_start  = rd_le32(e + FMMU_OFF_LOG_START);
         uint16_t length     = rd_le16(e + FMMU_OFF_LENGTH);
         uint16_t phys_start = rd_le16(e + FMMU_OFF_PHYS_START);
         uint8_t  type_op    = e[FMMU_OFF_TYPE];
+        uint32_t fmmu_end   = log_start + length;
 
-        if (log_addr >= log_start && (uint64_t)log_addr + dlen <= (uint64_t)log_start + length) {
-            *phys_offset_out = (uint16_t)(phys_start + (log_addr - log_start));
-            *allow_read  = (type_op & 0x01) != 0;
-            *allow_write = (type_op & 0x02) != 0;
-            return 1;
+        uint32_t ov_start = (log_addr > log_start) ? log_addr : log_start;
+        uint32_t ov_end   = (dg_end < fmmu_end) ? dg_end : fmmu_end;
+        if (ov_start >= ov_end) continue; /* no overlap with this FMMU */
+
+        uint16_t ov_len      = (uint16_t)(ov_end - ov_start);
+        uint16_t data_offset = (uint16_t)(ov_start - log_addr);
+        uint16_t phys_offset = (uint16_t)(phys_start + (ov_start - log_start));
+
+        int seg_read  = (type_op & 0x01) && (cmd == CMD_LRD || cmd == CMD_LRW);
+        int seg_write = (type_op & 0x02) && (cmd == CMD_LWR || cmd == CMD_LRW);
+
+        if (seg_read && seg_write) {
+            /* Same shared-buffer subtlety as Table 7: save the write value
+             * BEFORE the read overwrites it. */
+            uint8_t *write_src = malloc(ov_len);
+            if (write_src) {
+                memcpy(write_src, data + data_offset, ov_len);
+                esc_phys_read(esc, phys_offset, data + data_offset, ov_len);
+                esc_phys_write(esc, phys_offset, write_src, ov_len);
+                free(write_src);
+                any_read = 1; any_write = 1;
+            }
+        } else if (seg_read) {
+            esc_phys_read(esc, phys_offset, data + data_offset, ov_len);
+            any_read = 1;
+        } else if (seg_write) {
+            esc_phys_write(esc, phys_offset, data + data_offset, ov_len);
+            any_write = 1;
+            esc->got_valid_outputs = 1; /* this segment is a write-enabled FMMU — an output */
         }
     }
-    return 0;
+
+    if (cmd == CMD_LRD) {
+        if (any_read) *wkc += 1;
+    } else if (cmd == CMD_LWR) {
+        if (any_write) *wkc += 1;
+    } else { /* CMD_LRW */
+        if (any_read)  *wkc += 1;
+        if (any_write) *wkc += 2;
+    }
+
+    //fprintf(stderr, "  fmmu_apply result: any_read=%d any_write=%d final_wkc=%u\n",any_read, any_write, *wkc);
+}
+
+/* ==========================================================================
+ * esc_al_control_write — ESM (Phase 3). Called after any physical write
+ * that lands on AL Control (0x0120). Reads back the raw value just written,
+ * applies the state-transition graph (Section I Figure 40), updates AL
+ * Status (0x0130) / AL Status Code (0x0134) in regs[] directly.
+ * ========================================================================== */
+void esc_al_control_write(esc_t *esc)
+{
+    uint16_t al_control = rd_le16(esc->regs + REG_AL_CONTROL);
+    uint8_t  requested   = al_control & 0x0F;      /* bits 3:0 */
+    uint8_t  error_ack   = (al_control >> 4) & 0x1; /* bit 4 */
+
+    uint16_t al_status  = rd_le16(esc->regs + REG_AL_STATUS);
+    uint8_t  current    = al_status & 0x0F;
+    uint8_t  had_error  = (al_status >> 4) & 0x1;
+
+    /* Error ack: master acknowledges — clear error flag, state unchanged.
+     * (No new state requested this write — SOEM sends ack alone.) */
+    if (error_ack && had_error && requested == current) {
+        wr_le16(esc->regs + REG_AL_STATUS, current); /* bit4 cleared implicitly */
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);
+        return;
+    }
+
+    if (esc->force_reject_al && requested != current) {
+        esc->force_reject_al = 0; /* one-shot */
+        wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10));
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_UNKNOWNALCONTROL);
+        return;
+    }
+
+    int valid_transition = 0;
+    switch (current) {
+        case ESM_INIT:   valid_transition = (requested == ESM_PREOP); break;
+        case ESM_PREOP:  valid_transition = (requested == ESM_INIT || requested == ESM_SAFEOP); break;
+        case ESM_SAFEOP: valid_transition = (requested == ESM_PREOP || requested == ESM_INIT
+                                             || requested == ESM_OP); break;
+        case ESM_OP:     valid_transition = (requested == ESM_SAFEOP || requested == ESM_INIT); break;
+        default: break;
+    }
+
+    if (!valid_transition) {
+        wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10)); /* retain the old state, set the error bit */
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_INVALIDALCONTROL); /* 0x0011 — L2-06 */
+        return;
+    }
+
+    /* Specifically for SAFEOP to OP: valid outputs must have been received since entering SAFEOP. */
+    if (current == ESM_SAFEOP && requested == ESM_OP && !esc->got_valid_outputs) {
+        wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10));
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOVALIDOUTPUTS); /* 0x0019 — L2-04 */
+        return;
+    }
+
+    /* Hợp lệ — chuyển state, xoá cờ lỗi. */
+    wr_le16(esc->regs + REG_AL_STATUS, requested);
+    wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);
+
+    if (requested == ESM_SAFEOP) {
+        esc->got_valid_outputs = 0; /* Every time re-enter SAFEOP, must accept the new output */
+    }
 }
 
 /* ==========================================================================
@@ -340,15 +450,9 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
         case CMD_BRW:  matched = 1; do_read = 1; do_write = 1; break;
 
         case CMD_LRD: case CMD_LWR: case CMD_LRW: {
-            int ar = 0, aw = 0; uint16_t ph = 0;
-            if (fmmu_lookup(esc, log_addr, dlen, &ph, &ar, &aw)) {
-                matched = 1;
-                phys_offset = ph;
-                if (cmd == CMD_LRD) do_read = ar;
-                if (cmd == CMD_LWR) do_write = aw;
-                if (cmd == CMD_LRW) { do_read = ar; do_write = aw; }
-            }
-            break;
+            //fprintf(stderr, "L*-CMD: cmd=0x%02x log_addr=0x%08x dlen=%u\n", cmd, log_addr, dlen);
+            fmmu_apply(esc, log_addr, data, dlen, cmd, wkc);
+            continue; /* WKC + all reg access already done inside fmmu_apply */
         }
         default:
             break; /* NOP or unsupported command (ARMW/FRMW) — ignored on purpose */
@@ -373,6 +477,10 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
                     esc_phys_write(esc, phys_offset, write_src, dlen);
                     *wkc += 2;
 
+                    if (phys_offset == REG_AL_CONTROL) {
+                        esc_al_control_write(esc);
+                    }
+
                     free(write_src);
                 }
             } else if (do_read) {
@@ -384,6 +492,9 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
             } else if (do_write) {
                 esc_phys_write(esc, phys_offset, data, dlen);
                 *wkc += 1;
+                if (phys_offset == REG_AL_CONTROL) {
+                    esc_al_control_write(esc);
+                }
             }
         }
 

@@ -4,3 +4,4 @@ tools/soft_bus/l1_probe
 tools/soft_bus/test_offline
 *.o
 tools/hw_ts_test/hw_ts_test
+tools/soft_bus/l2_probe

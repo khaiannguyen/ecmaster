@@ -136,6 +136,7 @@
 #define ALSTATUSCODE_UNKNOWNALCONTROL     0x0012
 #define ALSTATUSCODE_NOMAILBOXTIMEOUT     0x0016
 #define ALSTATUSCODE_INVALIDMBXCONFIG     0x0017
+#define ALSTATUSCODE_NOVALIDOUTPUTS       0x0019
 #define ALSTATUSCODE_SYNCMANWATCHDOG      0x001B
 
 /* ==========================================================================
@@ -157,6 +158,10 @@ typedef struct {
     uint8_t   alias_enabled;     /* set by master via DL control bit24 */
     uint8_t   position_in_chain; /* 0-indexed */
     uint16_t  pdo_size_bytes;    /* PARAMETERIZED — not hardcoded */
+    uint8_t   got_valid_outputs; /* Reset each time SAFEOP is re-entered */
+    uint8_t   force_reject_al;     /* Test/CLI hook: force the NEXT AL Control
+                                 * request to be rejected regardless of the
+                                 * normal transition rules (L2-05 scenario) */
 
     uint16_t  sii_image_buf[ESC_SII_IMAGE_MAX_WORDS]; /* generated per node */
     size_t    sii_image_words;                        /* words actually used */
@@ -171,5 +176,10 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes);
  * array — port link state is a relationship BETWEEN nodes, not a property
  * of a single node in isolation. */
 void esc_chain_wire(esc_t *chain, int n);
+
+/* ESM: called whenever a write physically lands on AL Control (0x0120).
+ * Applies the valid state-transition graph, updates AL Status / AL Status
+ * Code in regs[] accordingly. Phase 3 scope. */
+void esc_al_control_write(esc_t *esc);
 
 #endif /* ESC_TYPES_H */
