@@ -5,3 +5,5 @@ tools/soft_bus/test_offline
 *.o
 tools/hw_ts_test/hw_ts_test
 tools/soft_bus/l2_probe
+apps/ecm_run/ecm_run
+apps/ecm_run/ecm_run_asan
