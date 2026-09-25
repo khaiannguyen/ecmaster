@@ -41,6 +41,10 @@ typedef struct {
 /* Call once after esc_init()/esc_chain_wire() on the whole chain. */
 void esc_dc_setup(esc_t *chain, int n, const esc_dc_cfg_t *cfg);
 
+/* Power-on DC state of node i only (after esc_dc_setup). Phase 7:
+ * restore_node re-powers one node without touching the others. */
+void esc_dc_node_reset(esc_t *e, int i);
+
 /* Called by soft_bus_main around process_frame(). t_host_ns must be taken
  * with CLOCK_MONOTONIC_RAW right after recvfrom() returns. */
 void esc_dc_frame_begin(esc_t *chain, int n, uint64_t t_host_ns);

@@ -25,3 +25,5 @@ ntp_freq.log
 libecmaster/telemetry/test_histogram_offline
 libecmaster/telemetry/test_ring_offline
 libecmaster/telemetry/test_turnaround_offline
+tools/rt_tail/log_rt_tail_*/
+tools/soft_bus/test_fault

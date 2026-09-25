@@ -318,8 +318,21 @@ static void test_sii_pdo_category(void)
     check("word[65] = TxPDO category size (words)", c4[0].sii_image_buf[65], 8);
     check("word[74] = RxPDO category type (51)", c4[0].sii_image_buf[74], SII_CAT_RXPDO);
     check("word[75] = RxPDO category size (words)", c4[0].sii_image_buf[75], 8);
-    check_hex("End marker present after both categories",
-              c4[0].sii_image_buf[74 + 2 + 8], SII_CAT_END);
+    /* [Phase 7] SyncManager category (41) follows the PDO categories:
+     * 4 SMs x 4 words. SM2 = outputs at 0x1100 with watchdog trigger. */
+    size_t smc = 74 + 2 + 8;
+    check("SyncManager category type (41) after PDO categories",
+          c4[0].sii_image_buf[smc], SII_CAT_SYNCM);
+    check("SyncManager category size (words) = 16", c4[0].sii_image_buf[smc + 1], 16);
+    check_hex("SM2 start = 0x1100", c4[0].sii_image_buf[smc + 2 + 2 * 4], SII_SM2_OFFSET);
+    check("SM2 length = pdo_size", c4[0].sii_image_buf[smc + 2 + 2 * 4 + 1], 4);
+    check_hex("SM2 control 0x64 (write, WD trigger), activate 1",
+              c4[0].sii_image_buf[smc + 2 + 2 * 4 + 2] | (c4[0].sii_image_buf[smc + 2 + 2 * 4 + 3] << 8),
+              0x0164);
+    check_hex("SM3 start = 0x1108 (after SM2, 8-byte aligned)",
+              c4[0].sii_image_buf[smc + 2 + 3 * 4], 0x1108);
+    check_hex("End marker present after all categories",
+              c4[0].sii_image_buf[smc + 2 + 16], SII_CAT_END);
     free(c4);
 
     /* pdo_size=64 needs 3 entries per direction (31+31+2 bytes) ->
@@ -331,12 +344,12 @@ static void test_sii_pdo_category(void)
               c64[0].sii_image_buf[64 + 2 + 16], SII_CAT_RXPDO);
     free(c64);
 
-    /* CoE bit must be cleared — no SDO server implemented yet, so leaving
-     * it set would make SOEM attempt a slow CoE PDO read before falling
-     * back to SII (see esc_build_sii() comment). */
+    /* Phase 5 added a CoE/SDO server (esc_coe.c), so the SII now
+     * ADVERTISES CoE. This assertion expected the bit cleared until Phase 5
+     * and stayed stale (68/69) until Phase 7. */
     esc_t *c1 = make_chain(1, 4);
-    check("Mailbox protocol word: CoE bit cleared",
-          c1[0].sii_image_buf[28] & SII_MBX_PROTOCOL_COE, 0);
+    check("Mailbox protocol word: CoE bit set (CoE server present)",
+          c1[0].sii_image_buf[28] & SII_MBX_PROTOCOL_COE, SII_MBX_PROTOCOL_COE);
     free(c1);
 }
 

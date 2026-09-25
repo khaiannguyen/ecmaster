@@ -24,6 +24,26 @@
 #define SII_SM1_SIZE     0x0080u
 #define SII_MBX_PROTOCOL_COE  (1u << 2)
 
+/* Process data SyncManagers, published in the SII SyncManager category (41).
+ * [Phase 7] Before this category existed, SOEM had no physical address for
+ * SM2/SM3: ecx_map_sm() then set FMMU PhysStart = SM[x].StartAddr = 0x0000,
+ * so every output write landed on ESC registers 0x0000.. (type, revision,
+ * build and, for pdo_size >= 18, the station address at 0x0010), and SM2/SM3
+ * were never programmed at all. Real ESIs always carry this category. SM3
+ * starts right after SM2, 8-byte aligned; both must fit below 0x2000. */
+#define SII_SM2_OFFSET   0x1100u  /* outputs (RxPDO, master -> slave) */
+#define SII_PD_SM_ALIGN  8u
+#define SII_PD_MAX_BYTES ((0x2000u - SII_SM2_OFFSET) / 2u)   /* 1920 */
+
+/* SM control bytes, the usual Beckhoff values (Section II §2.14.3):
+ *  SM0 0x26 mailbox, ECAT write, PDI IRQ    SM1 0x22 mailbox, ECAT read, PDI IRQ
+ *  SM2 0x64 3-buffer, ECAT write, PDI IRQ, watchdog trigger enable
+ *  SM3 0x20 3-buffer, ECAT read, PDI IRQ */
+#define SII_SM0_CONTROL  0x26u
+#define SII_SM1_CONTROL  0x22u
+#define SII_SM2_CONTROL  0x64u
+#define SII_SM3_CONTROL  0x20u
+
 #define SII_WORD0_PDI_CONTROL  0x0080u  /* SPI, matches LAN9252 */
 
 /* Category types (ETG.2000 / confirmed against SOEM ec_type.h) */
