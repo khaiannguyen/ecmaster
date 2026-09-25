@@ -79,11 +79,21 @@
 /* ---- Error counters (§2.9) ---- */
 #define REG_ERR_COUNTERS_BASE 0x0300
 #define REG_ERR_COUNTERS_END  0x0317
+#define REG_ERR_INVALID_P(p)  (0x0300 + 2 * (p))  /* invalid frame counter, port p   */
+#define REG_ERR_RX_P(p)       (0x0301 + 2 * (p))  /* RX (physical) error, port p     */
+#define REG_ERR_FWD_P(p)      (0x0308 + (p))      /* forwarded RX error, port p      */
+#define REG_ERR_ECAT_PU       0x030C              /* ECAT processing unit error      */
+#define REG_ERR_PDI           0x030D              /* PDI0 error counter (+code 0x030E) */
+#define REG_LOST_LINK_P(p)    (0x0310 + (p))      /* lost link counter, port p       */
 
 /* ---- Watchdog (§2.10) ---- */
 #define REG_WD_DIVIDER        0x0400
 #define REG_WD_TIME_PDI0      0x0410
 #define REG_WD_TIME_PROCDATA  0x0420
+#define REG_WD_STATUS_PD      0x0440  /* bit0: 0 = expired, 1 = active or disabled */
+#define REG_WD_COUNTER_PD     0x0442  /* expirations, saturates at 0xFF */
+#define WD_DIVIDER_RESET      0x09C2  /* 2498 -> 100 us base tick (§2.10.1) */
+#define WD_TIME_RESET         0x03E8  /* 1000 ticks -> 100 ms (§2.10.4) */
 
 /* ---- SII EEPROM interface (§2.11) ---- */
 #define REG_SII_BASE             0x0500  /* EEPROM ECAT access state (1 byte) */
@@ -119,6 +129,12 @@
 #define SM_OFF_STATUS          0x5
 #define SM_OFF_ACTIVATE        0x6
 #define SM_OFF_PDI_CONTROL     0x7
+#define SM_CTRL_DIR_MASK       0x0C  /* bits 3:2: 00 = ECAT read, 01 = ECAT write */
+#define SM_CTRL_DIR_WRITE      0x04
+#define SM_CTRL_WD_TRIGGER     0x40  /* bit6: watchdog trigger enable (§2.14.3) */
+#define SM_ACT_ENABLE          0x01  /* activate register bit0 */
+#define SM_ACT_REPEAT_REQ      0x02  /* activate register bit1 (master toggles) */
+#define SM_PDI_REPEAT_ACK      0x02  /* PDI control register bit1 (slave toggles) */
 
 /* SM index convention (standard EtherCAT, confirmed against esc_build_sii()'s
  * own sm_index arguments: RxPDO(outputs)=SM2, TxPDO(inputs)=SM3):
@@ -200,6 +216,31 @@ typedef struct {
     uint8_t  expected_toggle; /* next continuation frame's expected toggle bit (0x00/0x10) */
 } coe_session_t;
 
+/* Phase 7: per-node fault-injection state. Frame-scoped flags (*_frame)
+ * are set by esc_fault_frame_begin() and only live for one frame. */
+typedef struct {
+    uint8_t  powered_off;       /* drop_node: node is gone from the bus        */
+    uint32_t wkc_short_left;    /* PD frames left in which L* is ignored       */
+    uint32_t stale_left;        /* PD frames left with frozen TxPDO            */
+    uint8_t  skip_logical;      /* this frame: ignore L* datagrams             */
+    uint8_t  stale_frame;       /* this frame: do not refresh TxPDO            */
+    uint8_t  sm1_consumed;      /* this frame: master read the SM1 mailbox     */
+    uint8_t  mbx_lose_armed;    /* mbx_repeat: lose the reply of the next read */
+    uint8_t  mbx_dup_armed;     /* mbx_dup: re-post the next response once     */
+    uint8_t  mbx_dup_pending;   /* re-post at the start of the next frame      */
+    uint16_t app_seq;           /* --app-seq: slave application counter        */
+    uint64_t mbx_repeats_served;/* master repeat requests answered (0x080E)    */
+} esc_node_fault_t;
+
+/* Phase 7: process data watchdog (Section I §13.1, Section II §2.10). */
+typedef struct {
+    uint64_t now_ns;            /* arrival time of the frame being processed   */
+    uint64_t last_trigger_ns;   /* last complete write to a trigger-enabled SM */
+    uint8_t  running;           /* triggered and not yet expired               */
+    uint8_t  react;             /* slave application drops OP on expiry        */
+    uint64_t expire_events;
+} esc_wd_state_t;
+
 typedef struct {
     uint8_t   regs[ESC_REG_SPACE_SIZE];
 
@@ -219,6 +260,8 @@ typedef struct {
     coe_od_t      coe_od;      /* CoE object dictionary storage, this node's own */
     coe_session_t coe_session; /* in-flight segmented SDO transfer, if any */
     esc_dc_state_t dc;           /* Phase 6: Distributed Clock (esc_dc.c) */
+    esc_node_fault_t fault;      /* Phase 7: per-node fault injection (esc_fault.c) */
+    esc_wd_state_t   wd;         /* Phase 7: process data watchdog model */
 } esc_t;
 
 

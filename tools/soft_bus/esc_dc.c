@@ -103,20 +103,26 @@ void esc_dc_setup(esc_t *chain, int n, const esc_dc_cfg_t *cfg)
     g_n   = n;
     if (cfg->width != 32 && cfg->width != 64) { g_cfg.width = 0; return; }
 
-    for (int i = 0; i < n; i++) {
-        esc_t *e = &chain[i];
+    for (int i = 0; i < n; i++) esc_dc_node_reset(&chain[i], i);
+}
+
+/* Power-on DC state of one node (also used by restore_node, Phase 7). */
+void esc_dc_node_reset(esc_t *e, int i)
+{
+    if (!g_cfg.width) return;
+    {
         memset(&e->dc, 0, sizeof(e->dc));
 
         uint16_t feat = (uint16_t)(e->regs[0x0008] | (e->regs[0x0009] << 8));
         feat |= FEAT_DC_AVAILABLE;
-        if (cfg->width == 64) feat |= FEAT_DC_64BIT;
+        if (g_cfg.width == 64) feat |= FEAT_DC_64BIT;
         e->regs[0x0008] = (uint8_t)feat;
         e->regs[0x0009] = (uint8_t)(feat >> 8);
 
         /* Node 0 = reference clock candidate. Others spread -A..+A so the
          * time control loop of every node has real work to do. */
-        if (i == 0) e->dc.drift_ppb = cfg->ref_drift_ppb;
-        else        e->dc.drift_ppb = ((int64_t)(i % 5) - 2) * cfg->other_drift_ppb / 2;
+        if (i == 0) e->dc.drift_ppb = g_cfg.ref_drift_ppb;
+        else        e->dc.drift_ppb = ((int64_t)(i % 5) - 2) * g_cfg.other_drift_ppb / 2;
 
         /* Arbitrary, distinct power-on local times -> offset compensation
          * has something real to compensate. */

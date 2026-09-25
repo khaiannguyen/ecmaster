@@ -12,7 +12,12 @@
  *  - AL Control/Status (ESM state transitions) not implemented — that is
  *    Phase 3 scope (state machine).
  *  - Distributed Clocks (0x0900+) not implemented — Phase 4 scope.
- *  - SM watchdog stores a value but has no behavior yet — Phase 4 scope.
+ *  - SM watchdog: [RESOLVED, Giai doan 7] process data watchdog modelled
+ *    (0x0400/0x0420/0x0440/0x0442, trigger on complete writes to SMs with
+ *    control bit6) — see esc_wd_check(). PDI watchdog is not modelled.
+ *  - Error counters 0x0300..0x0313: [Giai doan 7] clear-on-write groups and
+ *    saturation modelled; they are only incremented by fault injection
+ *    (esc_fault.c), since a software bus has no physical layer errors.
  *  - No CoE SDO mailbox server: [RESOLVED, Giai doan 5] esc_coe.c now
  *    implements one on SM0/SM1 (see esc_coe.h for scope: expedited +
  *    segmented upload/download, Abort for unknown objects; no SDO Info,
@@ -116,6 +121,32 @@ static size_t append_pdo_category(uint16_t *out, size_t pos, size_t cap,
     return pos;
 }
 
+/* SII SyncManager category (type 41): 8 bytes per SM, layout as parsed by
+ * SOEM ecx_siiSM()/ecx_siiSMnext(): PhStart(2) Length(2) Control(1)
+ * Status(1) Activate(1) PDIControl(1). nSM = SizeInWords / 4. */
+static size_t append_sm_category(uint16_t *out, size_t pos, size_t cap,
+                                 uint16_t pdo_size_bytes)
+{
+    uint16_t sm3_start = (uint16_t)(SII_SM2_OFFSET +
+        ((pdo_size_bytes + SII_PD_SM_ALIGN - 1) / SII_PD_SM_ALIGN) * SII_PD_SM_ALIGN);
+    struct { uint16_t start, len; uint8_t ctrl, act; } sm[4] = {
+        { SII_SM0_OFFSET, SII_SM0_SIZE,   SII_SM0_CONTROL, 1 },
+        { SII_SM1_OFFSET, SII_SM1_SIZE,   SII_SM1_CONTROL, 1 },
+        { SII_SM2_OFFSET, pdo_size_bytes, SII_SM2_CONTROL, pdo_size_bytes ? 1 : 0 },
+        { sm3_start,      pdo_size_bytes, SII_SM3_CONTROL, pdo_size_bytes ? 1 : 0 },
+    };
+    if (pos + 2 + 16 > cap) return pos;
+    out[pos++] = SII_CAT_SYNCM;
+    out[pos++] = 16;                       /* 4 SM x 8 bytes = 16 words */
+    for (int i = 0; i < 4; i++) {
+        out[pos++] = sm[i].start;
+        out[pos++] = sm[i].len;
+        out[pos++] = (uint16_t)(sm[i].ctrl | (0u << 8));   /* control | status */
+        out[pos++] = (uint16_t)(sm[i].act  | (0u << 8));   /* activate | PDI ctrl */
+    }
+    return pos;
+}
+
 static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
 {
     size_t words = 0;
@@ -140,6 +171,10 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
                                  SII_CAT_TXPDO, 0x1A00, 3, pdo_size_bytes);
     words = append_pdo_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
                                  SII_CAT_RXPDO, 0x1600, 2, pdo_size_bytes);
+    /* After the PDO categories so the word-64 layout checked by T10 is
+     * unchanged; SOEM finds categories by type, not by position. */
+    words = append_sm_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
+                               pdo_size_bytes);
 
     if (words < ESC_SII_IMAGE_MAX_WORDS)
         esc->sii_image_buf[words++] = SII_CAT_END;
@@ -180,6 +215,18 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     wr_le16(esc->regs + REG_AL_CONTROL, ESM_INIT);
     wr_le16(esc->regs + REG_AL_STATUS,  ESM_INIT);
 
+    /* Watchdog reset values (Section II §2.10.1/§2.10.4): 100 us tick x
+     * 1000 = 100 ms. Status 0x0440 resets to 0 ("expired") until the first
+     * trigger. The slave-application reaction (OP -> SAFEOP+ERR 0x001B) is
+     * on by default, like a real SSC-based slave; soft_bus --no-sm-wd
+     * turns it off. */
+    wr_le16(esc->regs + REG_WD_DIVIDER, WD_DIVIDER_RESET);
+    wr_le16(esc->regs + REG_WD_TIME_PDI0, WD_TIME_RESET);
+    wr_le16(esc->regs + REG_WD_TIME_PROCDATA, WD_TIME_RESET);
+    memset(&esc->wd, 0, sizeof(esc->wd));
+    esc->wd.react = 1;
+    memset(&esc->fault, 0, sizeof(esc->fault));
+
     esc_build_sii(esc, pdo_size_bytes);
 
     coe_od_init(&esc->coe_od);
@@ -197,12 +244,19 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
  * ========================================================================== */
 void esc_chain_wire(esc_t *chain, int n)
 {
+    /* [Phase 7] A node that is powered off (drop_node) takes its links down:
+     * the neighbour's port facing it loses link and its loop closes, which
+     * is what makes the frame turn around early. With no node powered off
+     * this gives exactly the Phase 1 values. */
     for (int i = 0; i < n; i++) {
         uint16_t dl = DLSTAT_PDI_OPERATIONAL | DLSTAT_PDI_WD_OK;
+        int link0 = (i == 0) || !chain[i - 1].fault.powered_off;   /* node 0: master */
+        int link1 = (i < n - 1) && !chain[i + 1].fault.powered_off;
 
-        dl |= DLSTAT_LINK_PORT0 | DLSTAT_COMM_PORT0; /* port0: always linked */
+        if (link0) dl |= DLSTAT_LINK_PORT0 | DLSTAT_COMM_PORT0;
+        else       dl |= DLSTAT_LOOP_PORT0;
 
-        if (i < n - 1) {
+        if (link1) {
             dl |= DLSTAT_LINK_PORT1 | DLSTAT_COMM_PORT1; /* more nodes downstream */
         } else {
             /* LAST node: port1 not linked, loop CLOSED — this is the
@@ -248,6 +302,8 @@ static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint1
      * confirmed by reading ec_main.c, so a single "touches this range"
      * check is enough — no partial-read bookkeeping needed. */
     if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+        if (esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL)
+            esc->fault.sm1_consumed = 1;   /* a response was fetched (fault hooks) */
         esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
     }
 }
@@ -266,15 +322,148 @@ static void esc_phys_read_or(esc_t *esc, uint16_t phys_offset, uint8_t *data, ui
     }
 
     if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+        if (esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL)
+            esc->fault.sm1_consumed = 1;   /* a response was fetched (fault hooks) */
         esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
     }
+}
+
+static inline int range_hits(uint16_t off, uint16_t len, uint16_t lo, uint16_t hi)
+{
+    return off <= hi && (uint32_t)off + len > lo;   /* [off, off+len) meets [lo, hi] */
+}
+
+void esc_cnt_inc(esc_t *esc, uint16_t reg)
+{
+    if (esc->regs[reg] < 0xFF) esc->regs[reg]++;   /* all ESC counters saturate */
+}
+
+/* 1 if an active, ECAT-write SyncManager with watchdog trigger enable exists. */
+static int esc_has_wd_trigger_sm(const esc_t *esc)
+{
+    for (int k = 0; k < REG_SM_COUNT; k++) {
+        const uint8_t *sm = esc->regs + REG_SM_BASE + k * REG_SM_ENTRY_SIZE;
+        if ((sm[SM_OFF_ACTIVATE] & SM_ACT_ENABLE) && (sm[SM_OFF_CONTROL] & SM_CTRL_WD_TRIGGER)
+            && (sm[SM_OFF_CONTROL] & SM_CTRL_DIR_MASK) == SM_CTRL_DIR_WRITE
+            && rd_le16(sm + SM_OFF_LENGTH) > 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Watchdog trigger (Section I §13.1): "generated after the buffer was
+ * completely and successfully written" -> modelled as a write that covers
+ * the last byte of the SM buffer. */
+static void esc_wd_on_write(esc_t *esc, uint16_t off, uint16_t len)
+{
+    for (int k = 0; k < REG_SM_COUNT; k++) {
+        const uint8_t *sm = esc->regs + REG_SM_BASE + k * REG_SM_ENTRY_SIZE;
+        uint16_t start = rd_le16(sm + SM_OFF_PHYS_START);
+        uint16_t smlen = rd_le16(sm + SM_OFF_LENGTH);
+        if (!(sm[SM_OFF_ACTIVATE] & SM_ACT_ENABLE) || !(sm[SM_OFF_CONTROL] & SM_CTRL_WD_TRIGGER)
+            || (sm[SM_OFF_CONTROL] & SM_CTRL_DIR_MASK) != SM_CTRL_DIR_WRITE || smlen == 0)
+            continue;
+        uint16_t last = (uint16_t)(start + smlen - 1);
+        if (range_hits(off, len, last, last)) {
+            esc->wd.last_trigger_ns = esc->wd.now_ns;
+            esc->wd.running = 1;
+            esc->regs[REG_WD_STATUS_PD] |= 0x01;
+        }
+    }
+}
+
+int esc_wd_check(esc_t *esc, uint64_t now_ns)
+{
+    esc->wd.now_ns = now_ns;
+    uint16_t wd_time = rd_le16(esc->regs + REG_WD_TIME_PROCDATA);
+    if (wd_time == 0) {                       /* disabled -> "active or disabled" */
+        esc->regs[REG_WD_STATUS_PD] |= 0x01;
+        return 0;
+    }
+    if (esc->wd.running) {
+        uint64_t tick_ns = ((uint64_t)rd_le16(esc->regs + REG_WD_DIVIDER) + 2u) * 40u;
+        uint64_t timeout = tick_ns * wd_time;
+        if (now_ns - esc->wd.last_trigger_ns > timeout) {
+            esc->wd.running = 0;
+            esc->regs[REG_WD_STATUS_PD] &= (uint8_t)~0x01;
+            esc_cnt_inc(esc, REG_WD_COUNTER_PD);
+            esc->wd.expire_events++;
+        }
+    }
+    /* Slave application part (what an SSC-based slave does): in OP, an
+     * expired process data watchdog forces SAFEOP + ERR, code 0x001B. */
+    uint8_t state = esc->regs[REG_AL_STATUS] & 0x0F;
+    if (esc->wd.react && state == ESM_OP && !(esc->regs[REG_WD_STATUS_PD] & 0x01)
+        && esc_has_wd_trigger_sm(esc)) {
+        wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(ESM_SAFEOP | 0x10));
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_SYNCMANWATCHDOG);
+        esc->got_valid_outputs = 0;
+        return 1;
+    }
+    return 0;
 }
 
 static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data, uint16_t len)
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
+
+    /* Registers that are read-only for ECAT: SM status (+5) and SM PDI
+     * control (+7) of every SM, watchdog status 0x0440:0x0441. SOEM writes
+     * whole 8-byte SM entries (and 0x080D:0x080E for a mailbox repeat
+     * request), so without this the repeat-ack bit in 0x080F and the
+     * mailbox-full flag would be overwritten by the master. */
+    uint8_t ro_save[REG_SM_COUNT][2], wd_st_save[2], sm1_act_old;
+    for (int k = 0; k < REG_SM_COUNT; k++) {
+        ro_save[k][0] = esc->regs[REG_SM_BASE + k * REG_SM_ENTRY_SIZE + SM_OFF_STATUS];
+        ro_save[k][1] = esc->regs[REG_SM_BASE + k * REG_SM_ENTRY_SIZE + SM_OFF_PDI_CONTROL];
+    }
+    wd_st_save[0] = esc->regs[REG_WD_STATUS_PD];
+    wd_st_save[1] = esc->regs[REG_WD_STATUS_PD + 1];
+    sm1_act_old   = esc->regs[REG_SM_BASE + REG_SM_ENTRY_SIZE + SM_OFF_ACTIVATE];
+
     memcpy(esc->regs + phys_offset, data, len);
     esc_dc_after_write(esc, phys_offset, data, len);
+
+    for (int k = 0; k < REG_SM_COUNT; k++) {
+        esc->regs[REG_SM_BASE + k * REG_SM_ENTRY_SIZE + SM_OFF_STATUS]      = ro_save[k][0];
+        esc->regs[REG_SM_BASE + k * REG_SM_ENTRY_SIZE + SM_OFF_PDI_CONTROL] = ro_save[k][1];
+    }
+    esc->regs[REG_WD_STATUS_PD]     = wd_st_save[0];
+    esc->regs[REG_WD_STATUS_PD + 1] = wd_st_save[1];
+
+    /* Error counters are "w(clr)": the written value is ignored and a
+     * whole group is cleared (Section II §2.9.1/2.9.2/2.9.6, §2.10.6). */
+    if (range_hits(phys_offset, len, 0x0300, 0x030B)) {
+        memset(esc->regs + 0x0300, 0, 0x030C - 0x0300);
+        memset(esc->regs + 0x0314, 0, 4);
+        memset(esc->regs + 0x0320, 0, 8);
+    }
+    if (range_hits(phys_offset, len, REG_ERR_ECAT_PU, REG_ERR_ECAT_PU))
+        esc->regs[REG_ERR_ECAT_PU] = 0;
+    if (range_hits(phys_offset, len, REG_ERR_PDI, REG_ERR_PDI))
+        memset(esc->regs + REG_ERR_PDI, 0, 3);          /* counter + error code */
+    if (range_hits(phys_offset, len, 0x0310, 0x0313))
+        memset(esc->regs + 0x0310, 0, 4);
+    if (range_hits(phys_offset, len, 0x0442, 0x0444))
+        memset(esc->regs + 0x0442, 0, 3);
+
+    /* Mailbox repeat (ETG.1000.4 robust mailbox, SOEM ec_main.c): the master
+     * toggles SM1 activate bit1; the slave puts its last response back into
+     * SM1 (DPRAM still holds it) and mirrors the toggle into PDI control
+     * bit1 as the acknowledge. */
+    {
+        uint16_t act1 = REG_SM_BASE + REG_SM_ENTRY_SIZE + SM_OFF_ACTIVATE;       /* 0x080E */
+        uint16_t pdi1 = REG_SM_BASE + REG_SM_ENTRY_SIZE + SM_OFF_PDI_CONTROL;    /* 0x080F */
+        if (range_hits(phys_offset, len, act1, act1) &&
+            ((esc->regs[act1] ^ sm1_act_old) & SM_ACT_REPEAT_REQ)) {
+            esc->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
+            esc->regs[pdi1] = (uint8_t)((esc->regs[pdi1] & ~SM_PDI_REPEAT_ACK)
+                                        | (esc->regs[act1] & SM_PDI_REPEAT_ACK));
+            esc->fault.mbx_repeats_served++;
+        }
+    }
+
+    esc_wd_on_write(esc, phys_offset, len);
 
     /* Force the busy bit low right after writing control/status — models
      * "completes instantly", since this simulator has no real EEPROM delay. */
@@ -419,6 +608,15 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
+    /* [Phase 7] Requesting the state the slave is already in is not a
+     * transition: nothing changes, and an existing error indication stays
+     * until it is acknowledged. SOEM's ecx_recover_slave() writes INIT to a
+     * slave that has just powered up in INIT; the old code answered that
+     * with INIT+ERR 0x0011. */
+    if (requested == current && !error_ack) {
+        return;
+    }
+
     if (esc->force_reject_al && requested != current) {
         esc->force_reject_al = 0; /* one-shot */
         wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10));
@@ -502,6 +700,7 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
             break;
 
         case CMD_LRD: case CMD_LWR: case CMD_LRW: {
+            if (esc->fault.skip_logical) continue;   /* wkc_short injection */
             //fprintf(stderr, "L*-CMD: cmd=0x%02x log_addr=0x%08x dlen=%u\n", cmd, log_addr, dlen);
             fmmu_apply(esc, log_addr, data, dlen, cmd, wkc);
             continue; /* WKC + all reg access already done inside fmmu_apply */

@@ -2,17 +2,23 @@ CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = soft_bus
 TEST    = test_offline
+TESTF   = test_fault
+SRCS    = esc_core.c esc_coe.c esc_dc.c esc_fault.c
+HDRS    = esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h esc_fault.h
 
 all: $(TARGET)
 
-$(TARGET): soft_bus_main.c esc_core.c esc_coe.c esc_dc.c esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h
-	$(CC) $(CFLAGS) -o $@ soft_bus_main.c esc_core.c esc_coe.c esc_dc.c
+$(TARGET): soft_bus_main.c $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ soft_bus_main.c $(SRCS)
 
-$(TEST): test_offline.c esc_core.c esc_coe.c esc_dc.c esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h
-	$(CC) $(CFLAGS) -o $@ test_offline.c esc_core.c esc_coe.c esc_dc.c
+$(TEST): test_offline.c $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ test_offline.c $(SRCS)
 
-test: $(TEST)
-	./$(TEST)
+$(TESTF): test_fault.c $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ test_fault.c $(SRCS)
+
+test: $(TEST) $(TESTF)
+	./$(TEST) && ./$(TESTF)
 
 # Grants permission to run without sudo. Needs BOTH capabilities: NET_RAW to
 # open a raw socket, NET_ADMIN for promiscuous mode — lesson learned earlier
@@ -23,7 +29,7 @@ setcap: $(TARGET)
 
 clean:
 	rm -f l1_probe
-	rm -f $(TARGET) $(TEST)
+	rm -f $(TARGET) $(TEST) $(TESTF)
 
 .PHONY: all test setcap clean
 

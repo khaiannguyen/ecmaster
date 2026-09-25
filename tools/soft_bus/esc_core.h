@@ -39,4 +39,15 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
                       uint16_t adp, uint16_t ado,
                       uint8_t *data, uint16_t dlen, uint16_t *wkc);
 
+/* Saturating (0xFF) increment of one ESC counter register. */
+void esc_cnt_inc(esc_t *esc, uint16_t reg);
+
+/* Process data watchdog, evaluated lazily at frame arrival (now_ns): the
+ * master can only observe the ESC through frames, so checking "has the
+ * deadline passed?" when the next frame arrives is observationally the same
+ * as a free-running timer. Also stores now_ns as the time of any trigger
+ * caused by this frame. Returns 1 if the node just dropped OP -> SAFEOP+ERR
+ * with AL status code 0x001B. */
+int esc_wd_check(esc_t *esc, uint64_t now_ns);
+
 #endif /* ESC_CORE_H */
