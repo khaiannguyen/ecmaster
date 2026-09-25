@@ -7,3 +7,21 @@ tools/hw_ts_test/hw_ts_test
 tools/soft_bus/l2_probe
 apps/ecm_run/ecm_run
 apps/ecm_run/ecm_run_asan
+
+# build artifacts (Phase 4-6)
+apps/l4_test/l4_test
+apps/l6_test/l6_test
+apps/**/*_asan
+tests/dc/test_ecm_dc_unit
+tests/dc/test_dc_e2e
+tests/dc/*_asan
+# run logs / scratch (results are summarized in giai_doan_X_tong_hop.md)
+apps/l6_test/log_l6_*/
+apps/l4_test/log_*/
+mono_vs_raw.log
+ntp_freq.log
+*.rej
+*.orig
+libecmaster/telemetry/test_histogram_offline
+libecmaster/telemetry/test_ring_offline
+libecmaster/telemetry/test_turnaround_offline
