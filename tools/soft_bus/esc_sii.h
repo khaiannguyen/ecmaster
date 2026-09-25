@@ -71,10 +71,10 @@ static const uint16_t g_sii_image_default[] = {
     (uint16_t)SII_SM0_OFFSET, (uint16_t)SII_SM0_SIZE,
     /* word 26-27: SM1 offset/size (standard mailbox in) */
     (uint16_t)SII_SM1_OFFSET, (uint16_t)SII_SM1_SIZE,
-    /* word 28: mailbox protocol bitmask — CoE bit is CLEARED at build time in
-     * esc_build_sii(): no CoE SDO server is implemented yet, so leaving this
-     * bit set would make SOEM attempt (and time out on) a CoE PDO-mapping
-     * read before falling back to reading these SII categories directly. */
+    /* word 28: mailbox protocol bitmask — CoE bit is SET. [Giai doan 5:
+     * previously cleared here on purpose, back when no CoE SDO server
+     * existed; esc_coe.c now implements one on SM0/SM1, so this bit
+     * reflects that truthfully.] */
     SII_MBX_PROTOCOL_COE,
     /* word 29-31: reserved */
     0, 0, 0,

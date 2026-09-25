@@ -26,6 +26,7 @@ enum {
     CMD_FPRD = 0x04, CMD_FPWR = 0x05, CMD_FPRW = 0x06,
     CMD_BRD  = 0x07, CMD_BWR  = 0x08, CMD_BRW  = 0x09,
     CMD_LRD  = 0x0A, CMD_LWR  = 0x0B, CMD_LRW  = 0x0C,
+    CMD_ARMW = 0x0D, CMD_FRMW = 0x0E,
 };
 
 /* Processes one full Ethernet frame (may contain several chained
