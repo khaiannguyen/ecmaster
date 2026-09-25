@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "esc_dc_state.h"
 
 /* ==========================================================================
  * esc_types.h  — register map + esc_t struct, checked against the real
@@ -20,6 +21,12 @@
  * End marker). 256 words leaves generous headroom beyond current test sizes
  * (largest tested: --pdo-size 64 needs about 65 words). */
 #define ESC_SII_IMAGE_MAX_WORDS  256
+
+/* Size of the fixed CoE test blob (object 0x8001:00) used to force
+ * genuine multi-frame SDO segmentation -- see coe_od_t below. Must
+ * exceed one mailbox buffer's usable payload (SII_SM0_SIZE/SM1_SIZE =
+ * 128 byte, ~112 usable after the 16-byte SDO header). */
+#define COE_SEGTEST_BLOB_SIZE  200
 
 /* ---- ESC information (Section II §2.1) ---- */
 #define REG_TYPE              0x0000  /* 1 byte */
@@ -113,6 +120,17 @@
 #define SM_OFF_ACTIVATE        0x6
 #define SM_OFF_PDI_CONTROL     0x7
 
+/* SM index convention (standard EtherCAT, confirmed against esc_build_sii()'s
+ * own sm_index arguments: RxPDO(outputs)=SM2, TxPDO(inputs)=SM3):
+ *   SM0 = mailbox out (master -> slave), SM1 = mailbox in (slave -> master).
+ * SM1's Status byte (bit3 = "mailbox full") is the exact physical register
+ * SOEM's ecx_config_create_mbxstatus_mappings() maps an FMMU onto
+ * (ECT_REG_SM1STAT in SOEM's own ec_type.h) -- computed here, not
+ * independently guessed, from the same REG_SM_BASE/ENTRY_SIZE/OFF_STATUS
+ * this file already defines. */
+#define REG_SM1_STATUS  (REG_SM_BASE + 1 * REG_SM_ENTRY_SIZE + SM_OFF_STATUS) /* 0x080D */
+#define SM_STATUS_MAILBOX_FULL  0x08
+
 /* ---- Distributed Clock — not used at this stage, reserved for later ---- */
 #define REG_DC_RECV_TIME_PORT0 0x0900
 #define REG_DC_SYSTEM_TIME     0x0910
@@ -151,6 +169,38 @@
  * in what the master reads back over SII.
  * ========================================================================== */
 typedef struct {
+    uint32_t kp, ki, kd;   /* 0x8000:01/02/03 -- read/write test PID params,
+                            * exercises L4-02 (SDOwrite while OP, PDO not
+                            * interrupted). Not tied to any real control
+                            * loop -- pure protocol-level test storage. */
+    uint8_t  segtest_blob[COE_SEGTEST_BLOB_SIZE];
+                           /* 0x8001:00 -- fixed, read-only, incrementing byte
+                            * pattern (regenerated in coe_od_init()). Larger
+                            * than one mailbox buffer (SII_SM0_SIZE/SM1_SIZE
+                            * = 128 byte, ~112 usable) so a plain SDOread on
+                            * it can ONLY complete via genuine multi-frame
+                            * segmentation -- exercises L4-05. */
+} coe_od_t;
+
+/* One in-flight segmented SDO transfer per node -- CoE continuation
+ * frames (upload segment request / download segment data) carry NO
+ * Index/SubIndex of their own (see esc_coe.c for why), so which
+ * object/subindex/direction/offset they belong to must be remembered
+ * here between mailbox exchanges. Only one transfer at a time per
+ * node, matching a single master driving a single mailbox session per
+ * slave -- sufficient for this test rig, not a general multi-session
+ * CoE stack. */
+typedef struct {
+    uint8_t  active;
+    uint8_t  is_upload;     /* 1 = upload (slave->master) in progress */
+    uint16_t index;
+    uint8_t  subindex;
+    uint32_t total_size;
+    uint32_t done;          /* bytes sent (upload) or received (download) so far */
+    uint8_t  expected_toggle; /* next continuation frame's expected toggle bit (0x00/0x10) */
+} coe_session_t;
+
+typedef struct {
     uint8_t   regs[ESC_REG_SPACE_SIZE];
 
     uint16_t  station_address;   /* cache of regs[0x0010] */
@@ -165,7 +215,12 @@ typedef struct {
 
     uint16_t  sii_image_buf[ESC_SII_IMAGE_MAX_WORDS]; /* generated per node */
     size_t    sii_image_words;                        /* words actually used */
+
+    coe_od_t      coe_od;      /* CoE object dictionary storage, this node's own */
+    coe_session_t coe_session; /* in-flight segmented SDO transfer, if any */
+    esc_dc_state_t dc;           /* Phase 6: Distributed Clock (esc_dc.c) */
 } esc_t;
+
 
 /* Initializes everything INDEPENDENT of topology, including building this
  * node's own SII image from pdo_size_bytes. Does not touch the network —

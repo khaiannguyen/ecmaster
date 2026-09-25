@@ -5,11 +5,11 @@ TEST    = test_offline
 
 all: $(TARGET)
 
-$(TARGET): soft_bus_main.c esc_core.c esc_types.h esc_sii.h esc_core.h
-	$(CC) $(CFLAGS) -o $@ soft_bus_main.c esc_core.c
+$(TARGET): soft_bus_main.c esc_core.c esc_coe.c esc_dc.c esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h
+	$(CC) $(CFLAGS) -o $@ soft_bus_main.c esc_core.c esc_coe.c esc_dc.c
 
-$(TEST): test_offline.c esc_core.c esc_types.h esc_sii.h esc_core.h
-	$(CC) $(CFLAGS) -o $@ test_offline.c esc_core.c
+$(TEST): test_offline.c esc_core.c esc_coe.c esc_dc.c esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h
+	$(CC) $(CFLAGS) -o $@ test_offline.c esc_core.c esc_coe.c esc_dc.c
 
 test: $(TEST)
 	./$(TEST)

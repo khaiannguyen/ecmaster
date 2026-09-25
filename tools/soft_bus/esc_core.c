@@ -13,10 +13,10 @@
  *    Phase 3 scope (state machine).
  *  - Distributed Clocks (0x0900+) not implemented — Phase 4 scope.
  *  - SM watchdog stores a value but has no behavior yet — Phase 4 scope.
- *  - No CoE SDO mailbox server: the SII mailbox-protocol CoE bit is
- *    deliberately cleared in esc_build_sii() so SOEM skips straight to
- *    reading PDO mapping from SII categories instead of attempting (and
- *    timing out on) a CoE PDO-mapping read.
+ *  - No CoE SDO mailbox server: [RESOLVED, Giai doan 5] esc_coe.c now
+ *    implements one on SM0/SM1 (see esc_coe.h for scope: expedited +
+ *    segmented upload/download, Abort for unknown objects; no SDO Info,
+ *    no Emergency, no Complete Access).
  *  - Reserved register regions accept writes freely (a real ESC would
  *    reject/ignore them) — accepted trade-off, see project notes.
  * ========================================================================== */
@@ -29,6 +29,8 @@
 #include "esc_types.h"
 #include "esc_sii.h"
 #include "esc_core.h"
+#include "esc_coe.h"
+#include "esc_dc.h"
 
 /* ---- Little-endian helpers, independent of host endianness ---- */
 static inline uint16_t rd_le16(const uint8_t *p) {
@@ -122,8 +124,10 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
         esc->sii_image_buf[i] = g_sii_image_default[i];
     words = SII_IMAGE_DEFAULT_WORDS;
 
-    /* Clear the CoE bit — see file header comment. */
-    esc->sii_image_buf[28] = (uint16_t)(g_sii_image_default[28] & (uint16_t)~SII_MBX_PROTOCOL_COE);
+    /* CoE bit is left SET (as g_sii_image_default already has it) now that
+     * esc_coe.c implements a real CoE/SDO server on SM0/SM1 — previously
+     * cleared here on purpose (see esc_sii.h's word-28 comment, updated
+     * to match). */
 
     /* Pad reserved words up to the mandatory category start at word 64. */
     while (words < SII_CATEGORY_START_WORD && words < ESC_SII_IMAGE_MAX_WORDS)
@@ -178,6 +182,11 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
 
     esc_build_sii(esc, pdo_size_bytes);
 
+    coe_od_init(&esc->coe_od);
+    /* esc->coe_session is already all-zero (esc_t instances come from
+     * calloc() in soft_bus_main.c), so coe_session.active starts at 0
+     * without needing an explicit reset here. */
+
     /* DL Status is filled in by esc_chain_wire() — depends on position. */
 }
 
@@ -225,11 +234,22 @@ static void esc_sii_refresh_data(esc_t *esc)
 static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint16_t len)
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
+    esc_dc_before_read(esc, phys_offset, len);
 
     if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
         esc_sii_refresh_data(esc);
     }
     memcpy(data, esc->regs + phys_offset, len);
+
+    /* Reading (any part of) SM1's mailbox-in DPRAM clears "mailbox full" —
+     * mirrors real ESC hardware auto-clearing the flag once the master
+     * has fetched the response. Master always reads the WHOLE mbx_l=128
+     * byte SM1 buffer in one FPRD (ecx_mbxinhandler's ecx_FPRD call),
+     * confirmed by reading ec_main.c, so a single "touches this range"
+     * check is enough — no partial-read bookkeeping needed. */
+    if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+        esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
+    }
 }
 
 /* OR-accumulating read — REQUIRED for BRD/BRW per spec: multiple slaves OR
@@ -237,11 +257,16 @@ static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint1
 static void esc_phys_read_or(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint16_t len)
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
+    esc_dc_before_read(esc, phys_offset, len);
     if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
         esc_sii_refresh_data(esc);
     }
     for (uint16_t k = 0; k < len; k++) {
         data[k] |= esc->regs[phys_offset + k];
+    }
+
+    if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+        esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
     }
 }
 
@@ -249,6 +274,7 @@ static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
     memcpy(esc->regs + phys_offset, data, len);
+    esc_dc_after_write(esc, phys_offset, data, len);
 
     /* Force the busy bit low right after writing control/status — models
      * "completes instantly", since this simulator has no real EEPROM delay. */
@@ -271,6 +297,18 @@ static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data
         phys_offset + len > REG_DL_CONTROL_ALIAS_BYTE) {
         esc->alias_enabled =
             (esc->regs[REG_DL_CONTROL_ALIAS_BYTE] & DLCTRL_ALIAS_ENABLE_BIT) ? 1 : 0;
+    }
+
+    /* Giai doan 5: a write landing anywhere in SM0's mailbox-out DPRAM
+     * range is a fresh CoE/SDO request from the master. Processed
+     * synchronously right here, still inside this same FPWR/FPRW's
+     * datagram handling -- soft_bus has no separate slave-side polling
+     * loop, so there is no reason to defer it. The response is ready in
+     * SM1 for the master's OWN next cyclic poll (ecx_mbxhandler on the
+     * RT thread), matching real hardware's "at least one cycle later"
+     * timing without needing to simulate it. */
+    if (phys_offset < SII_SM0_OFFSET + SII_SM0_SIZE && phys_offset + len > SII_SM0_OFFSET) {
+        coe_on_mailbox_out_write(esc);
     }
 }
 
@@ -449,13 +487,27 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
         case CMD_BWR:  matched = 1; do_write = 1; break;
         case CMD_BRW:  matched = 1; do_read = 1; do_write = 1; break;
 
+        /* Read-multiple-write (Section I Table 5): the addressed node READS
+         * (+1), every other node WRITES the frame data (+1). Used by SOEM's
+         * DC datagram: FRMW 0x0910 on the reference clock. Note that nodes
+         * UPSTREAM of the addressed one receive whatever the master put in
+         * the data field (SOEM: the previous cycle's DCtime). */
+        case CMD_ARMW:
+            matched = 1;
+            if (local_adp == 0) do_read = 1; else do_write = 1;
+            break;
+        case CMD_FRMW:
+            matched = 1;
+            if (esc_addr_match(esc, adp)) do_read = 1; else do_write = 1;
+            break;
+
         case CMD_LRD: case CMD_LWR: case CMD_LRW: {
             //fprintf(stderr, "L*-CMD: cmd=0x%02x log_addr=0x%08x dlen=%u\n", cmd, log_addr, dlen);
             fmmu_apply(esc, log_addr, data, dlen, cmd, wkc);
             continue; /* WKC + all reg access already done inside fmmu_apply */
         }
         default:
-            break; /* NOP or unsupported command (ARMW/FRMW) — ignored on purpose */
+            break; /* NOP */
         }
 
         if (matched) {
@@ -500,7 +552,7 @@ void process_datagram(esc_t *chain, int n, uint8_t cmd,
 
         /* Auto-increment: INCREMENTS for the next node, ALWAYS, whether or
          * not this node matched (Section I Table 7: "High Addr. Out = Pos.+1"). */
-        if (cmd == CMD_APRD || cmd == CMD_APWR || cmd == CMD_APRW) {
+        if (cmd == CMD_APRD || cmd == CMD_APWR || cmd == CMD_APRW || cmd == CMD_ARMW) {
             local_adp = (uint16_t)(local_adp + 1);
         }
     }
