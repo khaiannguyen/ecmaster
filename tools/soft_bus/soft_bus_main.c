@@ -200,6 +200,7 @@ int main(int argc, char **argv)
     uint8_t buf[RX_BUF_SIZE];
     char ctl_line[256];
     size_t ctl_len = 0;
+    int link_down = 0;                 /* [Phase 7.3] ENETDOWN seen, see recvfrom() below */
     printf("soft_bus: DC=%s hop=%lld ns ref_drift=%+lld ppb other=+-%lld ppb\n",
            dc_cfg.width ? (dc_cfg.width == 64 ? "64-bit" : "32-bit") : "off",
            (long long)dc_cfg.hop_ns, (long long)dc_cfg.ref_drift_ppb,
@@ -245,11 +246,28 @@ int main(int argc, char **argv)
             }
         }
 
-        if (pfd[0].revents & POLLIN) {
+        if (pfd[0].revents & (POLLIN | POLLERR)) {
             ssize_t r = recvfrom(fd, buf, sizeof(buf), MSG_DONTWAIT, NULL, NULL);
             if (r < 0) {
+                /* [Phase 7.3, L5-03/04] `ip link set veth_s down` makes the
+                 * socket report ENETDOWN. A real ESC does not die when its
+                 * cable is pulled: it just stops seeing frames (and its
+                 * watchdog expires). Log the edge, wait, keep going. */
+                if (errno == ENETDOWN || errno == ENXIO) {
+                    if (!link_down) {
+                        link_down = 1;
+                        fprintf(stderr, "soft_bus: link down (%s), waiting for it to come back\n", strerror(errno));
+                    }
+                    struct timespec pause = { 0, 1000000 };      /* 1 ms, no busy loop */
+                    nanosleep(&pause, NULL);
+                    continue;
+                }
                 if (errno != EINTR && errno != EAGAIN) { perror("recvfrom"); break; }
             } else if ((size_t)r >= ETH_HDR_LEN + EC_HDR_LEN) {
+                if (link_down) {
+                    link_down = 0;
+                    fprintf(stderr, "soft_bus: link up again, frames arriving\n");
+                }
                 uint64_t t_rx = now_raw_ns();      /* as close to recvfrom() as possible */
                 int np = esc_fault_frame_begin(&g_fault, chain, n, buf, (size_t)r, t_rx);
                 esc_dc_frame_begin(chain, n, t_rx);

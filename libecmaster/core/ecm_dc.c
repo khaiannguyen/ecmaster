@@ -32,6 +32,7 @@ void ecm_dc_default_cfg(ecm_dc_cfg_t *cfg, int64_t cycle_ns, int64_t setpoint_ns
     cfg->lock_samples   = 100;
     cfg->lock_window_ns = cycle_ns / 100;
     cfg->unlock_ns      = cycle_ns / 20;
+    cfg->gate_ns        = 0;            /* Giai doan 7.4: reply-age gate off unless the caller sets it */
 }
 
 void ecm_dc_init(ecm_dc_t *dc, const ecm_dc_cfg_t *cfg)
@@ -84,6 +85,26 @@ int64_t ecm_dc_update(ecm_dc_t *dc, uint64_t dc_raw, uint64_t host_ns)
         dc->stale++;
         dc->adjust_ns = 0;
         return 0;
+    }
+    /* Giai doan 7.4: reply-age gate, see ecm_dc.h */
+    {
+        int64_t pred  = (int64_t)(host_ns - dc->prev_host_ns);
+        int64_t d_lo  = (int64_t)(uint32_t)(lo - dc->prev_lo);
+        int64_t k     = floor_div(pred - d_lo + TWO32 / 2, TWO32);
+        int64_t delta = d_lo + k * TWO32;
+        int64_t miss  = delta - pred;
+        if (miss < 0) miss = -miss;
+        dc->last_rejected = 0;
+        if (dc->cfg.gate_ns > 0 && miss > dc->cfg.gate_ns) {
+            if (++dc->reject_run < ECM_DC_GATE_RESYNC) {
+                dc->implausible++;
+                dc->last_rejected = 1;
+                dc->adjust_ns = 0;
+                return 0;
+            }
+            dc->gate_resyncs++;
+        }
+        dc->reject_run = 0;
     }
     unwrap(dc, lo, host_ns);
     dc->samples++;

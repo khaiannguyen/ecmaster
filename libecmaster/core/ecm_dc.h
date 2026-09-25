@@ -33,6 +33,14 @@ typedef struct {
     int64_t  lock_window_ns;  /* |e| inside -> counts toward lock (5 us)       */
     uint32_t lock_samples;    /* consecutive in-window samples to lock (100)   */
     int64_t  unlock_ns;       /* |e| above this while locked -> unlock (c/4)   */
+    int64_t  gate_ns;         /* Giai doan 7.4 reply-age gate: reject a sample
+                               * whose DC time moved more than this away from
+                               * the host clock; 0 = off (default). Only valid
+                               * if the caller accepts replies within less
+                               * than gate_ns of sending them and passes the
+                               * SEND time as host_ns (ecm_run: deadline-based
+                               * receive, gate = 1 cycle). l6_test keeps it off:
+                               * it waits up to EC_TIMEOUTRET (2 ms).          */
 } ecm_dc_cfg_t;
 
 typedef enum {
@@ -60,6 +68,24 @@ typedef struct {
 
     /* counters for telemetry (single writer: RT thread) */
     uint64_t samples, stale, wraps, clamps, locks, unlocks;
+
+    /* Giai doan 7.4 (L5-07): reply-age gate (cfg.gate_ns, off by default).
+     * A sample whose reference time advanced by more than gate_ns more or
+     * less than the host clock did
+     * (host time = when the frame was SENT) belongs to another frame. Why one
+     * cycle: a reply is only accepted within the receive budget (< cycle)
+     * after its send, so two genuine samples differ by less than that; an
+     * old reply taken through a reused SOEM index is >= ~5 ms old. Half a
+     * cycle gave false alarms in the non-RT sandbox, where soft_bus stamps
+     * the DC time when it gets around to processing the frame.
+     * belongs to another frame: an old reply taken for this one after
+     * SOEM reused its index. It is rejected (not used, prev kept) and
+     * last_rejected tells the caller to distrust the whole reply. After
+     * ECM_DC_GATE_RESYNC rejections in a row the sample is taken anyway
+     * (a real clock step, e.g. after a long outage, not a stray reply). */
+    uint64_t implausible, gate_resyncs;
+    uint32_t reject_run;
+    int      last_rejected;
 } ecm_dc_t;
 
 void ecm_dc_default_cfg(ecm_dc_cfg_t *cfg, int64_t cycle_ns, int64_t setpoint_ns);
@@ -78,5 +104,7 @@ int64_t ecm_dc_update(ecm_dc_t *dc, uint64_t dc_raw, uint64_t host_ns);
 /* Drift of the reference clock relative to the master clock, estimated from
  * the integrator (ppb, positive = reference runs faster). */
 int64_t ecm_dc_ref_drift_ppb(const ecm_dc_t *dc);
+
+#define ECM_DC_GATE_RESYNC 3
 
 #endif /* ECM_DC_H */

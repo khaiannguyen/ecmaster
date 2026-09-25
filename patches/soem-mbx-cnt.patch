@@ -1,0 +1,67 @@
+--- a/include/soem/ec_main.h	2026-09-25 16:25:19.260026759 +0700
++++ b/include/soem/ec_main.h	2026-09-25 16:26:16.062399164 +0700
+@@ -67,6 +67,9 @@
+ 
+ #define EC_MBXINENABLE (uint8 *)1
+ 
++/** ecmaster patch present: ec_slavet has mbxincnt / mbxindup (see above) */
++#define ECMASTER_SOEM_MBXCNT_PATCH 1
++
+ typedef struct
+ {
+    int listhead, listtail, listcount;
+@@ -251,6 +254,12 @@
+    int mbxhandlerstate;
+    /** mailbox handler robust mailbox protocol state */
+    int mbxrmpstate;
++   /** ecmaster patch (Giai doan 7.4, L5-12): mailbox counter (Cnt, 1..7) of the
++    *  last mailbox response accepted from this slave, 0 = none yet. A response
++    *  carrying the same non-zero Cnt is a duplicate (ETG.1000.4) and dropped. */
++   uint8 mbxincnt;
++   /** ecmaster patch: duplicated mailbox responses dropped */
++   int mbxindup;
+    /** mailbox handler RMP extended mbx in state */
+    uint16 mbxinstateex;
+    /** pointer to CoE mailbox in buffer */
+--- a/src/ec_main.c	2026-09-25 16:25:19.263444855 +0700
++++ b/src/ec_main.c	2026-09-25 16:25:34.441143564 +0700
+@@ -1293,8 +1293,30 @@
+                /* keep track of work limit */
+                if (++limitcnt >= limit) maxcnt = 0;
+                wkc = ecx_FPRD(&context->port, configadr, mbxro, mbxl, mbx, EC_TIMEOUTRET); /* get mailbox */
++               /* ecmaster patch (Giai doan 7.4, L5-12): a response with the
++                * same non-zero Cnt as the last accepted one is that response
++                * delivered twice (ETG.1000.4). Without this, the NEXT request
++                * takes it as its own answer and every later request gets the
++                * previous one's: with soft_bus mbx_dup, 50 of 100 SDO round
++                * trips came back silently wrong with rc 0. A repeat request
++                * re-posts a response the master never got, so its Cnt is new
++                * and it is accepted. */
++               int mbxdup = 0;
+                if (wkc > 0)
+                {
++                  uint8 mbxcnt = (uint8)((((ec_mbxheadert *)mbx)->mbxtype >> 4) & 0x07);
++                  if ((mbxcnt != 0) && (mbxcnt == slaveitem->mbxincnt))
++                  {
++                     mbxdup = 1;
++                     slaveitem->mbxindup++;
++                  }
++                  else
++                  {
++                     slaveitem->mbxincnt = mbxcnt;
++                  }
++               }
++               if ((wkc > 0) && !mbxdup)
++               {
+                   mbxh = (ec_mbxheadert *)mbx;
+                   if ((mbxh->mbxtype & 0x0f) == ECT_MBXT_ERR) /* Mailbox error response? */
+                   {
+@@ -1406,7 +1428,7 @@
+                      }
+                   }
+                }
+-               else
++               else if (!mbxdup)
+                {
+                   /* mailbox lost, initiate robust mailbox protocol */
+                   slaveitem->mbxrmpstate = 1;

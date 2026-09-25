@@ -196,6 +196,11 @@ typedef struct {
                             * = 128 byte, ~112 usable) so a plain SDOread on
                             * it can ONLY complete via genuine multi-frame
                             * segmentation -- exercises L4-05. */
+    uint8_t  resp_cnt;     /* [Phase 7.4] mailbox counter of the last response
+                            * (ETG.1000.4: 1..7, 0 reserved). A NEW response
+                            * gets the next value; a repeated or duplicated
+                            * one keeps it -- that is how a master tells them
+                            * apart (L5-12). */
 } coe_od_t;
 
 /* One in-flight segmented SDO transfer per node -- CoE continuation

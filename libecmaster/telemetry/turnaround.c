@@ -10,6 +10,10 @@ void tx_order_ring_init(tx_order_ring_t *r) {
 }
 
 int tx_order_ring_push(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g) {
+    return tx_order_ring_push_idx(r, tick, g, TX_ORDER_IDX_UNKNOWN);
+}
+
+int tx_order_ring_push_idx(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g, uint8_t ec_idx) {
     size_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
     size_t tail = atomic_load_explicit(&r->tail, memory_order_acquire);
 
@@ -21,6 +25,7 @@ int tx_order_ring_push(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g) {
     tx_order_sample_t *slot = &r->buf[head & (TX_ORDER_RING_CAPACITY - 1)];
     slot->tick = tick;
     slot->group_id = (uint8_t)g;
+    slot->ec_idx = ec_idx;
 
     atomic_store_explicit(&r->head, head + 1, memory_order_release);
     return 0;
@@ -44,6 +49,15 @@ void turnaround_init(turnaround_ctx_t *c) {
     for (size_t i = 0; i < RX_LOOKUP_CAPACITY; i++) {
         c->entries[i].tick = UINT64_MAX;  /* mark slot empty */
     }
+}
+
+void turnaround_resync(turnaround_ctx_t *c) {
+    for (size_t i = 0; i < RX_LOOKUP_CAPACITY; i++) {
+        c->entries[i].tick = UINT64_MAX;
+    }
+    c->next_slot = 0;
+    c->pending_tx_head = c->pending_tx_tail = 0;
+    c->pending_rx_head = c->pending_rx_tail = 0;
 }
 
 void turnaround_note_rx(turnaround_ctx_t *c, uint64_t tick, uint64_t rx_ts_ns) {
@@ -86,13 +100,63 @@ void turnaround_drain_tx_order(turnaround_ctx_t *c, tx_order_ring_t *ring) {
     }
 }
 
-void turnaround_on_tx_complete(turnaround_ctx_t *c, uint64_t tx_ts_ns) {
-    if (c->pending_tx_head == c->pending_tx_tail) {
-        c->stat_completion_no_pending++;
-        return;
+int turnaround_frame_idx(const uint8_t *eth, size_t len) {
+    if (len < 18) return -1;
+    if (eth[12] != 0x88 || eth[13] != 0xA4) return -1;
+    return eth[17];
+}
+
+/* Take the pending send that this event (TX completion or RX arrival)
+   belongs to. ec_idx < 0: the oldest, as before. Otherwise: first drop
+   sends that are too old to still be answered, then the first pending send
+   with that index; the sends before it never got theirs. Returns 0 (and
+   touches nothing) when no pending send carries the index. */
+static int fifo_take(tx_order_sample_t *q, size_t *tail, size_t head, int ec_idx,
+                     uint64_t *skipped, uint64_t *unmatched, tx_order_sample_t *out) {
+    if (*tail == head) return -1;
+    if (ec_idx < 0) {
+        *out = q[*tail % TX_ORDER_RING_CAPACITY];
+        (*tail)++;
+        return 1;
     }
-    tx_order_sample_t s = c->pending_tx[c->pending_tx_tail % TX_ORDER_RING_CAPACITY];
-    c->pending_tx_tail++;
+    uint64_t newest = q[(head - 1) % TX_ORDER_RING_CAPACITY].tick;
+    while (*tail != head) {
+        const tx_order_sample_t *e = &q[*tail % TX_ORDER_RING_CAPACITY];
+        if (newest - e->tick <= TURNAROUND_MAX_AGE_TICKS) break;
+        (*tail)++;
+        (*skipped)++;
+    }
+    for (size_t j = 0; j < TURNAROUND_LOOKAHEAD && *tail + j < head; j++) {
+        const tx_order_sample_t *e = &q[(*tail + j) % TX_ORDER_RING_CAPACITY];
+        if (e->ec_idx == (uint8_t)ec_idx) {
+            *skipped += j;
+            *tail += j + 1;
+            *out = *e;
+            return 1;
+        }
+    }
+    /* No send carries this index. If the oldest pending send's index is
+     * unknown (e.g. a mailbox frame SOEM sent internally), this event is
+     * most likely its own: pair positionally. */
+    if (*tail != head && q[*tail % TX_ORDER_RING_CAPACITY].ec_idx == TX_ORDER_IDX_UNKNOWN) {
+        *out = q[*tail % TX_ORDER_RING_CAPACITY];
+        (*tail)++;
+        return 1;
+    }
+    (*unmatched)++;
+    return 0;
+}
+
+void turnaround_on_tx_complete(turnaround_ctx_t *c, uint64_t tx_ts_ns) {
+    turnaround_on_tx_complete_idx(c, tx_ts_ns, -1);
+}
+
+void turnaround_on_tx_complete_idx(turnaround_ctx_t *c, uint64_t tx_ts_ns, int ec_idx) {
+    tx_order_sample_t s;
+    int r = fifo_take(c->pending_tx, &c->pending_tx_tail, c->pending_tx_head, ec_idx,
+                      &c->stat_tx_skipped, &c->stat_tx_unmatched, &s);
+    if (r < 0) { c->stat_completion_no_pending++; return; }
+    if (r == 0) return;
 
     if (s.group_id == GROUP_IO) {
         c->stat_tx_io_discarded++;
@@ -107,12 +171,15 @@ void turnaround_on_tx_complete(turnaround_ctx_t *c, uint64_t tx_ts_ns) {
 }
 
 void turnaround_on_rx_arrival(turnaround_ctx_t *c, uint64_t rx_ts_ns, ecm_hist_t *hist) {
-    if (c->pending_rx_head == c->pending_rx_tail) {
-        c->stat_rx_no_pending++;
-        return;
-    }
-    tx_order_sample_t s = c->pending_rx[c->pending_rx_tail % TX_ORDER_RING_CAPACITY];
-    c->pending_rx_tail++;
+    turnaround_on_rx_arrival_idx(c, rx_ts_ns, -1, hist);
+}
+
+void turnaround_on_rx_arrival_idx(turnaround_ctx_t *c, uint64_t rx_ts_ns, int ec_idx, ecm_hist_t *hist) {
+    tx_order_sample_t s;
+    int r = fifo_take(c->pending_rx, &c->pending_rx_tail, c->pending_rx_head, ec_idx,
+                      &c->stat_rx_skipped, &c->stat_rx_unmatched, &s);
+    if (r < 0) { c->stat_rx_no_pending++; return; }
+    if (r == 0) return;
 
     if (s.group_id == GROUP_IO) {
         c->stat_rx_io_discarded++;

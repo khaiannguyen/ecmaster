@@ -32,6 +32,7 @@
 #define _GNU_SOURCE
 #include <inttypes.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -251,6 +252,43 @@ static void test_l4_05(uint16_t slave)
 /* ==========================================================================
  * Bring-up, sequencing, teardown.
  * ========================================================================== */
+/* L5-12 (Giai doan 7.4): mailbox repeat request and duplicated responses.
+ * Round i writes 0x8000:01 = 0x10000+i and reads it back. Every 10 rounds
+ * soft_bus is told (control FIFO) to post the next response of node 0
+ * twice (mbx_dup) and, 5 rounds later, to lose the frame carrying the next
+ * one (mbx_repeat -> SOEM's repeat request). A read that returns another
+ * round's value took a response twice; the master must never do that. */
+static void test_l5_12(uint16_t slave, int rounds, const char *ctl)
+{
+    int fd = ctl ? open(ctl, O_WRONLY | O_NONBLOCK) : -1;
+    if (ctl && fd < 0) { perror("open ctl fifo"); }
+    int ok = 0, wrong = 0, err = 0, dup_inj = 0, rep_inj = 0, first_bad = -1;
+    for (int i = 1; i <= rounds; i++) {
+        if (fd >= 0 && i % 10 == 5) { if (write(fd, "mbx_dup 0\n", 10) == 10) dup_inj++; }
+        if (fd >= 0 && i % 10 == 0) { if (write(fd, "mbx_repeat 0\n", 13) == 13) rep_inj++; }
+        uint32_t v = 0x10000u + (uint32_t)i;
+        uint8_t wbuf[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
+        int wrc = ecm_mailbox_sdo_write(g_mbx, slave, 0x8000, 1, false, wbuf, 4, 500000);
+        uint8_t rbuf[4] = { 0 };
+        int rsize = sizeof(rbuf);
+        int rrc = ecm_mailbox_sdo_read(g_mbx, slave, 0x8000, 1, false, rbuf, &rsize, 500000);
+        uint32_t got = (uint32_t)rbuf[0] | ((uint32_t)rbuf[1] << 8) | ((uint32_t)rbuf[2] << 16) | ((uint32_t)rbuf[3] << 24);
+        if (wrc != 0 || rrc != 0) { err++; if (first_bad < 0) first_bad = i; }
+        else if (got != v) {
+            wrong++;
+            if (first_bad < 0) first_bad = i;
+            if (wrong <= 5) printf("  round %d: read 0x%x, expected 0x%x (a response of round %d)\n",
+                                   i, got, v, (int)(got - 0x10000u));
+        } else ok++;
+    }
+    if (fd >= 0) close(fd);
+    char detail[200];
+    snprintf(detail, sizeof(detail), "rounds=%d ok=%d WRONG_VALUE=%d errors=%d (injected: dup=%d repeat=%d; first bad round %d)",
+             rounds, ok, wrong, err, dup_inj, rep_inj, first_bad);
+    report("L5-12 no response processed twice", wrong == 0, detail);
+    report("L5-12 every round completes", err == 0, detail);
+}
+
 static int request_all_state(int target, int timeout_us)
 {
     ctx.slavelist[0].state = target;
@@ -263,6 +301,8 @@ int main(int argc, char **argv)
     const char *ifname = NULL;
     int n = 8;
     uint32_t expected_vendor_id = 0x00000499u; /* SII_VENDOR_ID placeholder default */
+    int l512_rounds = 0;               /* Giai doan 7.4: --l512 N */
+    const char *ctl = NULL;            /* soft_bus control FIFO for --l512 */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -271,6 +311,10 @@ int main(int argc, char **argv)
             n = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--expected-vendor") == 0 && i + 1 < argc) {
             expected_vendor_id = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (strcmp(argv[i], "--l512") == 0 && i + 1 < argc) {
+            l512_rounds = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--ctl") == 0 && i + 1 < argc) {
+            ctl = argv[++i];
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
             return 2;
@@ -278,7 +322,7 @@ int main(int argc, char **argv)
     }
     if (!ifname) {
         fprintf(stderr, "Usage: %s --iface <veth_m> [--n <slaves>] "
-                        "[--expected-vendor 0xHEX]\n", argv[0]);
+                        "[--expected-vendor 0xHEX] [--l512 ROUNDS [--ctl SOFT_BUS_FIFO]]\n", argv[0]);
         return 2;
     }
 
@@ -361,6 +405,19 @@ int main(int argc, char **argv)
     test_l4_03(1);
     test_l4_04(1);
     test_l4_05(1);
+    if (l512_rounds > 0) {
+        printf("\n=== L5-12 (mailbox repeat / duplicate), %d rounds%s ===\n", l512_rounds,
+               ctl ? "" : " -- no --ctl: nothing injected");
+#ifdef ECMASTER_SOEM_MBXCNT_PATCH
+        printf("SOEM mailbox Cnt patch: present\n");
+#else
+        printf("SOEM mailbox Cnt patch: ABSENT (stock SOEM: duplicated responses are processed twice)\n");
+#endif
+        test_l5_12(1, l512_rounds, ctl);
+#ifdef ECMASTER_SOEM_MBXCNT_PATCH
+        printf("SOEM dropped %d duplicated mailbox response(s) from slave 1\n", ctx.slavelist[1].mbxindup);
+#endif
+    }
 
 stop_cyclic:
     g_cyclic_stop = 1;

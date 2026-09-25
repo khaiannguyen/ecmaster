@@ -69,6 +69,12 @@ static esc_fault_txq_slot_t *txq_put(esc_fault_bus_t *f, const uint8_t *buf, siz
         s->due_ns = due_ns;
         s->seq = f->seq++;
         memcpy(s->buf, buf, len);
+        /* [Phase 7.5] Like a real ESC (port 0 of the first slave), mark the
+         * returning frame: set bit 1 ("locally administered") of the first
+         * byte of the source MAC. SOEM reads it (rxsa) for redundancy
+         * routing, and a capture on the master side can tell requests from
+         * replies (tools/golden). */
+        if (len >= 12) s->buf[6] |= 0x02;
         return s;
     }
     f->q_overflow++;
