@@ -22,6 +22,7 @@
 #include "esc_core.h"
 #include "esc_dc.h"
 #include "esc_fault.h"
+#include "esc_coe.h"
 
 static int g_pass = 0, g_fail = 0;
 
@@ -514,6 +515,33 @@ static void t_mailbox(void)
     rig_free(r);
 }
 
+
+/* [Phase 7.4] mailbox Cnt on real CoE responses (esc_coe.c): a NEW
+ * response steps 1..7, a duplicated one (mbx_dup) keeps it (L5-12). */
+static void t_mbx_cnt(void)
+{
+    printf("\n[F11] mailbox counter (Cnt) in CoE responses (L5-12)\n");
+    rig_t *r = rig_new(1, 0, 1, -1);
+    esc_t *e = &r->c[0];
+    uint8_t *req = e->regs + SII_SM0_OFFSET, *resp = e->regs + SII_SM1_OFFSET;
+    int cnt[9];
+    for (int k = 0; k < 9; k++) {
+        memset(req, 0, 16);
+        req[0] = 0x0A; req[5] = 0x03;                  /* length 10, CoE */
+        req[6] = 0x00; req[7] = 0x20;                  /* CoE SDO request (service 2) */
+        req[8] = 0x40;                                 /* upload request */
+        req[9] = 0x18; req[10] = 0x10; req[11] = 0x01; /* 0x1018:01 */
+        coe_on_mailbox_out_write(e);
+        cnt[k] = (resp[5] >> 4) & 7;
+    }
+    check("first response Cnt = 1", cnt[0], 1);
+    check("second response Cnt = 2", cnt[1], 2);
+    check("7th response Cnt = 7", cnt[6], 7);
+    check("8th wraps to 1 (0 is reserved)", cnt[7], 1);
+    check("responses are still CoE type", resp[5] & 0x0F, 3);
+    rig_free(r);
+}
+
 static void t_same_state(void)
 {
     printf("\n[F10] AL Control request for the current state is not an error\n");
@@ -564,6 +592,7 @@ int main(void)
     t_stale();
     t_drop_restore();
     t_mailbox();
+    t_mbx_cnt();
     t_same_state();
     t_parser();
     printf("\n=========================================================\n");

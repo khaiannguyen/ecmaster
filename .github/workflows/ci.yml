@@ -1,24 +1,120 @@
+# ecmaster CI (Giai doan 7.5)
+#
+#  offline   unit tests that need neither SOEM nor a network, incl. ASan/UBSan,
+#            and ThreadSanitizer on every lock-free queue (tests/tsan)
+#  golden    fixed ecm_run scenario against soft_bus over veth, captured with
+#            tshark; its datagram structure must match tools/golden/golden_ecm_run.txt,
+#            and a negative control (two datagrams swapped) must NOT match
+#  l5-smoke  a subset of the L5 fault-injection cases. GitHub runners are
+#            shared and not RT, so this job reports but does not block
+#            (continue-on-error); the reference results come from the Jetson.
+#
+# SOEM: v2.0.0, EC_MAXGROUP=4 (ecm_run uses group 2), plus
+# patches/soem-mbx-cnt.patch (L5-12, see docs/fault_policy.md §11).
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+env:
+  SOEM_DIR: /tmp/SOEM
+  SOEM_TAG: v2.0.0
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  offline:
+    name: Offline unit tests (x86, ASan/UBSan)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Cài công cụ build
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: soft_bus (SII, ESM, DC, fault injection)
+        run: make -C tools/soft_bus test
+      - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
+        run: make -C libecmaster/telemetry run
+      - name: libecmaster/core (ecm_dc reply-age gate)
+        run: make -C libecmaster/core test test_asan
+      - name: libecmaster/diag
+        run: make -C libecmaster/diag test test_asan
+      - name: libecmaster/policy (bus state machine, recovery planner, freshness)
+        run: make -C libecmaster/policy test test_asan
+      - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
+        run: tests/tsan/run_tsan.sh 1000000
+
+  golden:
+    name: Golden pcap (soft_bus over veth)
+    needs: offline
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools and tshark
         run: |
-          sudo apt update
-          sudo apt install -y build-essential cmake git
-      - name: Build SOEM 2.0
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git tshark python3
+      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt patch)
         run: |
-          git clone https://github.com/OpenEtherCATsociety/SOEM /tmp/SOEM
-          cd /tmp/SOEM
-          git checkout v2.0.0
-          mkdir build && cd build
-          cmake ..
-          make
+          git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
+          patch -d "$SOEM_DIR" -p1 < patches/soem-mbx-cnt.patch
+          cmake -S "$SOEM_DIR" -B "$SOEM_DIR/build" -DEC_MAXGROUP=4
+          cmake --build "$SOEM_DIR/build" -j
+      - name: Build soft_bus and ecm_run
+        run: |
+          make -C tools/soft_bus
+          make -C apps/ecm_run SOEM_DIR="$SOEM_DIR"
+      - name: veth pair
+        run: |
+          sudo ip link add veth_m type veth peer name veth_s
+          sudo ip link set veth_m up
+          sudo ip link set veth_s up
+      - name: Golden structure check
+        run: sudo -E tools/golden/check_golden.sh
+      - name: Negative control (SM watchdog writes swapped must be detected)
+        run: sudo -E tools/golden/negative_control.sh
+      - name: Keep the capture on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-capture
+          path: |
+            /tmp/golden_now.pcap
+            /tmp/golden_now_*.txt*
+            /tmp/ecm_run_golden.log
+
+  l5-smoke:
+    name: L5 fault injection smoke (non-RT runner, non-blocking)
+    needs: offline
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git
+      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt patch)
+        run: |
+          git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
+          patch -d "$SOEM_DIR" -p1 < patches/soem-mbx-cnt.patch
+          cmake -S "$SOEM_DIR" -B "$SOEM_DIR/build" -DEC_MAXGROUP=4
+          cmake --build "$SOEM_DIR/build" -j
+      - name: Build
+        run: |
+          make -C tools/soft_bus
+          for d in apps/ecm_run apps/ecm_diag apps/l4_test; do make -C "$d" SOEM_DIR="$SOEM_DIR"; done
+      - name: veth pair
+        run: |
+          sudo ip link add veth_m type veth peer name veth_s
+          sudo ip link set veth_m up
+          sudo ip link set veth_s up
+      - name: 7.2 diagnostics (L5-06, L5-11)
+        working-directory: apps/ecm_diag
+        run: sudo -E SB_ARGS=--no-sm-wd ./run_l5_diag.sh --no-tx-ts
+      - name: 7.3 fault policy (L5-01, L5-02, L5-05 + negative controls)
+        working-directory: apps/ecm_run
+        run: sudo -E SB_ARGS=--no-sm-wd ECM_ARGS=--no-tx-ts OVR_MAX=50 CASES="l501 l502 l502neg l505 l505neg" ./run_l5_policy.sh
+      - name: 7.4 late/stale/mailbox (L5-09, L5-12 + negative control)
+        working-directory: apps/ecm_run
+        run: sudo -E SB_ARGS=--no-sm-wd CASES="l509 l509neg l512" ./run_l5_io.sh

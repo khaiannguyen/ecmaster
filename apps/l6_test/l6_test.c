@@ -515,8 +515,9 @@ int main(int argc, char **argv)
            "mean e=%+.2f us max|e|=%.1f us\n",
            st.wraps_seen, g_dc.wraps,
            st.wrap_n ? (double)st.wrap_sum_e / st.wrap_n / 1000.0 : 0.0, st.wrap_emax / 1000.0);
-    printf("  ecm_dc: locks=%" PRIu64 " unlocks=%" PRIu64 " clamps=%" PRIu64 " stale=%" PRIu64 "\n",
-           g_dc.locks, g_dc.unlocks, g_dc.clamps, g_dc.stale);
+    printf("  ecm_dc: locks=%" PRIu64 " unlocks=%" PRIu64 " clamps=%" PRIu64 " stale=%" PRIu64
+           " reply_age_rejected=%" PRIu64 " gate_resyncs=%" PRIu64 "\n",
+           g_dc.locks, g_dc.unlocks, g_dc.clamps, g_dc.stale, g_dc.implausible, g_dc.gate_resyncs);
 
     CHECK(op_ok, "OP reached");
     uint64_t expect_wraps = (uint64_t)((run_s - 1.0) / 4.294967296);

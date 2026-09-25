@@ -179,7 +179,7 @@ static void coe_send_abort(uint8_t *resp, uint32_t abort_code)
     wr_le16(resp + OFF_MBX_LENGTH, 0x000a);
     wr_le16(resp + 2 /* address */, 0x0000);
     resp[4] = 0x00; /* priority */
-    resp[OFF_MBX_TYPE] = MBXTYPE_COE; /* counter left 0 -- unchecked by SOEM on this path */
+    resp[OFF_MBX_TYPE] = MBXTYPE_COE; /* Cnt set in coe_on_mailbox_out_write() */
     wr_le16(resp + OFF_CANOPEN, (uint16_t)(COES_SDORES << 12));
     resp[OFF_COMMAND] = SDO_ABORT;
     wr_le16(resp + OFF_INDEX, 0x0000);
@@ -392,6 +392,12 @@ void coe_on_mailbox_out_write(esc_t *esc)
          * above -- as well as anything else unrecognized. */
         coe_send_abort(resp, ABORT_CMD_SPECIFIER_INVALID);
     }
+
+    /* [Phase 7.4] Cnt (bits 4..6 of the type byte), 1..7 cyclic, one step
+     * per NEW response. Repeat requests and the mbx_dup injection re-post
+     * the same bytes, so they carry the same Cnt as the original. */
+    esc->coe_od.resp_cnt = (uint8_t)(esc->coe_od.resp_cnt % 7u + 1u);
+    resp[OFF_MBX_TYPE] = (uint8_t)((resp[OFF_MBX_TYPE] & 0x0Fu) | (esc->coe_od.resp_cnt << 4));
 
     esc->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
 }

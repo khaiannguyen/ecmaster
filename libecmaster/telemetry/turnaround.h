@@ -19,8 +19,12 @@ typedef uint8_t ecm_group_id_t;   /* holds GROUP_MOTION (1) or GROUP_IO (2) */
 typedef struct {
     uint64_t tick;
     uint8_t  group_id;   /* ecm_group_id_t */
-    uint8_t  _pad[7];
+    uint8_t  ec_idx;     /* Giai doan 7.4: EtherCAT frame index of this send,
+                            TX_ORDER_IDX_UNKNOWN if the caller could not tell */
+    uint8_t  _pad[6];
 } tx_order_sample_t;
+
+#define TX_ORDER_IDX_UNKNOWN 0xFFu
 
 _Static_assert(sizeof(tx_order_sample_t) == 16, "tx_order_sample_t must be exactly 16 bytes");
 
@@ -35,7 +39,8 @@ typedef struct {
 
 void tx_order_ring_init(tx_order_ring_t *r);
 /* Called from the RT thread, right after each sendto(). NEVER blocks. */
-int  tx_order_ring_push(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g);
+int  tx_order_ring_push(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g);   /* idx unknown */
+int  tx_order_ring_push_idx(tx_order_ring_t *r, uint64_t tick, ecm_group_id_t g, uint8_t ec_idx);
 /* Called from the telemetry thread. */
 int  tx_order_ring_pop(tx_order_ring_t *r, tx_order_sample_t *out);
 
@@ -105,6 +110,18 @@ typedef struct {
                                              stat_completion_no_pending should equal the number of
                                              tx_order_ring pushes actually drained on the TX side. */
     uint64_t stat_rx_io_discarded;       /* same, for the RX/passive-socket side. */
+
+    /* Giai doan 7.4 (L5-07/08): matching by EtherCAT index. Before, the RX
+       side paired arrivals with sends purely by position, so ONE send whose
+       reply never came (NOFRAME, mute) or ONE extra arrival (duplicate,
+       late reply) shifted every later pair for the rest of the run. */
+    uint64_t stat_tx_skipped;            /* sends whose TX completion never came
+                                             (send failed, e.g. link down) */
+    uint64_t stat_rx_skipped;            /* sends whose reply never came (lost
+                                             frame) -- evicted, not paired */
+    uint64_t stat_rx_unmatched;          /* arrivals matching no pending send:
+                                             duplicate, very late, or foreign */
+    uint64_t stat_tx_unmatched;
 } turnaround_ctx_t;
 
 /* Above this, a "turnaround" is not physically plausible for this rig
@@ -113,6 +130,13 @@ typedef struct {
 #define TURNAROUND_SANITY_MAX_NS 1000000   /* 1ms */
 
 void turnaround_init(turnaround_ctx_t *c);
+
+/* Giai doan 7.3: forget everything in flight (both FIFOs, the RX lookup)
+   but keep the stat_* counters. Called by the telemetry thread after an
+   "exclusion window" (frames sent by another thread, or LOST/RECOVER, see
+   docs/fault_policy.md §5.3), when send order no longer equals the order
+   in the FIFOs. */
+void turnaround_resync(turnaround_ctx_t *c);
 
 /* Call once per tick as a DIAGNOSTIC cross-check only (compares the RT
    thread's own clock_gettime() estimate against the real passive-socket
@@ -145,3 +169,22 @@ void turnaround_on_tx_complete(turnaround_ctx_t *c, uint64_t tx_ts_ns);
    (rx_ts_ns - tx_ts_ns) into 'hist'. GROUP_IO arrivals are popped and
    discarded. */
 void turnaround_on_rx_arrival(turnaround_ctx_t *c, uint64_t rx_ts_ns, ecm_hist_t *hist);
+
+/* Giai doan 7.4: same, but paired by the EtherCAT index of the frame
+   (byte 17 of the Ethernet frame: 14 Ethernet + 2 EtherCAT header + cmd).
+   ec_idx < 0 = unknown -> positional, as the functions above.
+   A pending send is paired with the first arrival carrying its index;
+   sends older than TURNAROUND_MAX_AGE_TICKS behind the newest send are
+   given up (stat_*_skipped); an arrival matching nothing is counted
+   (stat_*_unmatched) and leaves the FIFO untouched. */
+#define TURNAROUND_LOOKAHEAD      32
+#define TURNAROUND_MAX_AGE_TICKS  12  /* < the ~14-tick SOEM index reuse period, and
+                                         >> the caller's poll period (ecm_run: 2 ms)
+                                         + the receive budget: first version had 8
+                                         with a 10 ms poll and gave up on sends
+                                         whose completion was simply not read yet */
+void turnaround_on_tx_complete_idx(turnaround_ctx_t *c, uint64_t tx_ts_ns, int ec_idx);
+void turnaround_on_rx_arrival_idx(turnaround_ctx_t *c, uint64_t rx_ts_ns, int ec_idx, ecm_hist_t *hist);
+
+/* EtherCAT index of a raw Ethernet frame, or -1 if it is not EtherCAT. */
+int turnaround_frame_idx(const uint8_t *eth, size_t len);

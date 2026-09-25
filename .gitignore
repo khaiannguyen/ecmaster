@@ -27,3 +27,16 @@ libecmaster/telemetry/test_ring_offline
 libecmaster/telemetry/test_turnaround_offline
 tools/rt_tail/log_rt_tail_*/
 tools/soft_bus/test_fault
+libecmaster/diag/test_diag_offline
+libecmaster/diag/test_diag_offline_asan
+apps/ecm_diag/ecm_diag
+apps/ecm_diag/log_l5_diag_*/
+libecmaster/policy/test_policy_offline
+libecmaster/policy/test_policy_offline_asan
+apps/ecm_run/log_l5_policy_*/
+apps/ecm_run/log_l5_io_*/
+libecmaster/core/test_dc_offline
+libecmaster/core/test_dc_offline_asan
+*.bak-*
+soak_*.log
+tools/soft_bus/log_l1_*/

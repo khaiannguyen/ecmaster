@@ -13,13 +13,15 @@ TELEMETRY_INC = -I$(TELEMETRY_DIR) -I../..
 MAILBOX_DIR = ../../libecmaster/mailbox
 MAILBOX_SRC = $(MAILBOX_DIR)/ecm_mailbox.c
 DC_SRC = ../../libecmaster/core/ecm_dc.c
+DIAG_SRC = ../../libecmaster/diag/ecm_diag.c ../../libecmaster/diag/ecm_diag_soem.c
+POLICY_SRC = ../../libecmaster/policy/ecm_policy.c
 
 all: $(TARGET)
 
-$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC)
+$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC)
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
 	@echo "Using SOEM lib: $(SOEM_LIB)"
-	$(CC) $(CFLAGS) -o $@ $^ $(SOEM_INC) $(TELEMETRY_INC) $(SOEM_LIB) -lpthread -lrt -lm
+	$(CC) $(CFLAGS) -o $@ $^ $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
 setcap: $(TARGET)
 	sudo setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep ./$(TARGET)

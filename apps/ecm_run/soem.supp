@@ -1,0 +1,13 @@
+# valgrind suppressions for SOEM itself (not ecm_run code).
+#
+# SOEM v2.0.0 oshw/linux/nicdrv.c ecx_setupnic(): the struct sockaddr_ll
+# passed to bind() is not memset, so its padding bytes are uninitialised.
+# The kernel ignores them; harmless, once at startup. Found by
+# run_l5_policy.sh VALGRIND=1 (Giai doan 7.3).
+{
+   soem_setupnic_bind_sockaddr_ll_padding
+   Memcheck:Param
+   socketcall.bind(my_addr.sa_data)
+   fun:bind
+   fun:ecx_setupnic
+}
