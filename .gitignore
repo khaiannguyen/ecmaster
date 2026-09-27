@@ -40,3 +40,4 @@ libecmaster/core/test_dc_offline_asan
 *.bak-*
 soak_*.log
 tools/soft_bus/log_l1_*/
+tools/xcheck/igh_x01b
