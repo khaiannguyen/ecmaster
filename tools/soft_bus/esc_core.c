@@ -104,9 +104,15 @@ static size_t append_pdo_category(uint16_t *out, size_t pos, size_t cap,
     body[b++] = 0; /* Synchronization (DC-related, unused here) */
     body[b++] = 0; /* Name index */
     body[b++] = 0; body[b++] = 0; /* Object flags */
+    /* Real entry indices (X-01b): index 0x0000 means a padding gap in CoE, so
+     * a master that registers process data by index:subindex (IgH) could not
+     * address them. Convention: inputs 0x6000, outputs 0x7000, subindex 1..n.
+     * SOEM only uses the bit lengths, so it is unaffected. */
+    uint16_t entry_index = (cat_type == SII_CAT_TXPDO) ? 0x6000 : 0x7000;
     for (int i = 0; i < n_entries; i++) {
-        body[b++] = 0; body[b++] = 0;          /* Entry index (unused here) */
-        body[b++] = 0;                          /* SubIndex */
+        body[b++] = (uint8_t)(entry_index & 0xFF);
+        body[b++] = (uint8_t)(entry_index >> 8);
+        body[b++] = (uint8_t)(i + 1);           /* SubIndex 1..n */
         body[b++] = 0;                          /* Name index */
         body[b++] = 0x05;                       /* DataType = UNSIGNED8 */
         body[b++] = (uint8_t)(chunks[i] * 8);   /* BitLen */
