@@ -73,6 +73,8 @@ int main(int argc, char **argv)
     int app_seq_offset = -1;
     int sm_wd_react = 1;
 
+    int sii_poke_word[8], sii_poke_val[8], n_poke = 0;   /* --sii-poke W=V (negative controls) */
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
             ifname = argv[++i];
@@ -97,6 +99,15 @@ int main(int argc, char **argv)
             app_seq_offset = atoi(argv[++i]);          /* byte offset in TxPDO */
         } else if (strcmp(argv[i], "--no-sm-wd") == 0) {
             sm_wd_react = 0;
+        } else if (strcmp(argv[i], "--sii-poke") == 0 && i + 1 < argc) {
+            int w, v;
+            if (n_poke >= 8 || sscanf(argv[++i], "%i=%i", &w, &v) != 2 || w < 0 || v < 0 || v > 0xFFFF) {
+                fprintf(stderr, "--sii-poke expects WORD=VALUE (max 8), e.g. 0x0A=0x0002\n");
+                return 1;
+            }
+            sii_poke_word[n_poke] = w;
+            sii_poke_val[n_poke]  = v;
+            n_poke++;
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
             return 1;
@@ -105,7 +116,8 @@ int main(int argc, char **argv)
     if (!ifname || n <= 0) {
         fprintf(stderr, "Usage: %s --iface <veth_s> --n <node_count> [--pdo-size <bytes>]\n"
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
-                "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n",
+                "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
+                "       [--sii-poke WORD=VALUE ...]\n",
                 argv[0]);
         return 1;
     }
@@ -124,6 +136,19 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < n; i++) {
         esc_init(&chain[i], (uint8_t)i, (uint16_t)pdo_size);
+    }
+    /* --sii-poke: overwrite SII words on every node, AFTER esc_init built the
+     * image. Negative controls (X-01a) and later ENI identity tests (E-03). */
+    for (int p = 0; p < n_poke; p++) {
+        if ((size_t)sii_poke_word[p] >= chain[0].sii_image_words) {
+            fprintf(stderr, "--sii-poke word 0x%X beyond SII image (%zu words)\n",
+                    (unsigned)sii_poke_word[p], chain[0].sii_image_words);
+            return 1;
+        }
+        for (int i = 0; i < n; i++)
+            chain[i].sii_image_buf[sii_poke_word[p]] = (uint16_t)sii_poke_val[p];
+        printf("soft_bus: SII poke word 0x%02X = 0x%04X on all %d node(s)\n",
+               (unsigned)sii_poke_word[p], (unsigned)sii_poke_val[p], n);
     }
     esc_chain_wire(chain, n);
     esc_dc_setup(chain, n, &dc_cfg);   /* after esc_init: ORs DC bits into 0x0008 */

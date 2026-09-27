@@ -13,6 +13,8 @@ $(TARGET): soft_bus_main.c $(SRCS) $(HDRS)
 
 $(TEST): test_offline.c $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -o $@ test_offline.c $(SRCS)
+sii_dump: sii_dump.c esc_core.c esc_coe.c esc_dc.c esc_fault.c
+	gcc -O2 -Wall -Wextra -o sii_dump sii_dump.c esc_core.c esc_coe.c esc_dc.c esc_fault.c
 
 $(TESTF): test_fault.c $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -o $@ test_fault.c $(SRCS)
