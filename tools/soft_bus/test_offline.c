@@ -244,28 +244,68 @@ static void test_readwrite_data_direction(void)
     free(c);
 }
 
+/* Issue one SII command the way IgH/SOEM do: a single write covering
+ * 0x0502..0x0507 (control/status + word address), like FPWR 0x0502 len 6. */
+static void sii_cmd(esc_t *c, uint8_t *buf, uint8_t cmd, uint16_t word_addr)
+{
+    uint8_t d[6] = {0};
+    d[0] = 0x80;              /* low byte: 2 address octets (IgH writes 0x80) */
+    d[1] = cmd;               /* 0x0503: command bits [10:8] */
+    wr16(d + 2, word_addr);
+    size_t flen = build_frame(buf, CMD_BWR, 0x0000, REG_SII_CONTROL_STATUS, d, 6);
+    process_frame(c, 1, buf, flen);
+}
+
+static uint8_t sii_status_hi(esc_t *c, uint8_t *buf)
+{
+    size_t flen = build_frame(buf, CMD_BRD, 0x0000, REG_SII_CONTROL_STATUS, NULL, 2);
+    process_frame(c, 1, buf, flen);
+    return dg_data(buf)[1];   /* 0x0503 */
+}
+
 static void test_sii_read(void)
 {
-    printf("\n[T8] Reading the SII EEPROM (Section II §2.11)\n");
+    printf("\n[T8] SII EEPROM interface (Section II 2.11.3, Section I 11.2.3)\n");
+    printf("     (X-01a: IgH polls 0x0503 & 0x81 -- command bits must self-clear)\n");
     uint8_t buf[1600];
     esc_t *c = make_chain(1, 4);
+    size_t flen;
 
-    uint8_t addr[2]; wr16(addr, 8);
-    size_t flen = build_frame(buf, CMD_BWR, 0x0000, REG_SII_ADDRESS, addr, 2);
-    process_frame(c, 1, buf, flen);
-
-    flen = build_frame(buf, CMD_BRD, 0x0000, REG_SII_DATA, NULL, 2);
+    /* 1. read command latches data AND self-clears busy + command bits */
+    sii_cmd(c, buf, SII_CMD_READ, 8);
+    check_hex("0x0503 & 0x87 == 0 after read (busy+cmd self-clear)",
+              sii_status_hi(c, buf) & 0x87, 0);
+    flen = build_frame(buf, CMD_BRD, 0x0000, REG_SII_DATA, NULL, 4);
     process_frame(c, 1, buf, flen);
     check_hex("SII word 8 = Vendor ID (low)", rd16(dg_data(buf)),
               (unsigned)(SII_VENDOR_ID & 0xFFFF));
+    check_hex("SII word 9 = Vendor ID (high), 4-byte data register",
+              rd16(dg_data(buf) + 2), (unsigned)((SII_VENDOR_ID >> 16) & 0xFFFF));
 
-    wr16(addr, 10);
-    flen = build_frame(buf, CMD_BWR, 0x0000, REG_SII_ADDRESS, addr, 2);
-    process_frame(c, 1, buf, flen);
+    sii_cmd(c, buf, SII_CMD_READ, 10);
     flen = build_frame(buf, CMD_BRD, 0x0000, REG_SII_DATA, NULL, 2);
     process_frame(c, 1, buf, flen);
     check_hex("SII word 10 = Product Code (low)", rd16(dg_data(buf)),
               (unsigned)(SII_PRODUCT_CODE & 0xFFFF));
+
+    /* 2. negative control: an address write WITHOUT a command must not
+     *    refresh the data register (old soft_bus did; a real ESC does not) */
+    uint8_t a[2]; wr16(a, 8);
+    flen = build_frame(buf, CMD_BWR, 0x0000, REG_SII_ADDRESS, a, 2);
+    process_frame(c, 1, buf, flen);
+    flen = build_frame(buf, CMD_BRD, 0x0000, REG_SII_DATA, NULL, 2);
+    process_frame(c, 1, buf, flen);
+    check_hex("address write alone does not refresh 0x0508 (still word 10)",
+              rd16(dg_data(buf)), (unsigned)(SII_PRODUCT_CODE & 0xFFFF));
+
+    /* 3. write command is not supported -> error bit 13; cmd 000 clears it */
+    sii_cmd(c, buf, SII_CMD_WRITE, 8);
+    uint8_t hi = sii_status_hi(c, buf);
+    check_hex("write cmd -> error bit 13 set", hi & SII_ERR_ACK_CMD, SII_ERR_ACK_CMD);
+    check_hex("write cmd -> busy + cmd bits clear", hi & 0x87, 0);
+    sii_cmd(c, buf, SII_CMD_NOP, 0);
+    check_hex("cmd 000 clears error bits", sii_status_hi(c, buf) & SII_ERR_MASK, 0);
+
     free(c);
 }
 
@@ -304,44 +344,69 @@ static void test_fmmu_logical(void)
     free(c);
 }
 
+/* Word index of the FIRST category of `type` (its Type word), or -1.
+ * Walks the list exactly like a master does, so the tests no longer depend
+ * on hard-coded word positions. */
+static int find_cat(const esc_t *e, uint16_t type)
+{
+    size_t w = SII_CATEGORY_START_WORD;
+    while (w + 1 < e->sii_image_words && e->sii_image_buf[w] != SII_CAT_END) {
+        if (e->sii_image_buf[w] == type) return (int)w;
+        w += 2 + e->sii_image_buf[w + 1];
+    }
+    return -1;
+}
+
 static void test_sii_pdo_category(void)
 {
-    printf("\n[T10] SII PDO category — reflects pdo_size_bytes (verified against SOEM src)\n");
-    printf("      (this is the fix for L1-05/L1-06: Obits/Ibits used to read 0)\n");
+    printf("\n[T10] SII categories — reflect pdo_size_bytes (verified against SOEM src)\n");
+    printf("      (L1-05/L1-06 fix; X-01a: SyncM must precede the PDOs for IgH)\n");
 
     /* Categories must start exactly at word 64 (SOEM ec_type.h ECT_SII_START) */
     esc_t *c4 = make_chain(1, 4);
+    const uint16_t *s = c4[0].sii_image_buf;
     check("Category start word == 64", SII_CATEGORY_START_WORD, 0x0040);
-    check_hex("word[64] = TxPDO category type (50)",
-              c4[0].sii_image_buf[64], SII_CAT_TXPDO);
+
+    int sm = find_cat(&c4[0], SII_CAT_SYNCM);
+    int tx = find_cat(&c4[0], SII_CAT_TXPDO);
+    int rx = find_cat(&c4[0], SII_CAT_RXPDO);
+
+    /* X-01a regression: IgH parses categories in order and rejects a PDO
+     * whose SM index is not known yet ("Invalid SM index 3 for PDO 0x1A00"). */
+    check("SyncM (41) is the FIRST category (word 64)", sm, SII_CATEGORY_START_WORD);
+    check("SyncM precedes TxPDO and RxPDO", (sm >= 0 && sm < tx && sm < rx), 1);
+
     /* 1 entry (4 bytes = 32 bits fits in one entry) -> size = 4+4*1 = 8 words */
-    check("word[65] = TxPDO category size (words)", c4[0].sii_image_buf[65], 8);
-    check("word[74] = RxPDO category type (51)", c4[0].sii_image_buf[74], SII_CAT_RXPDO);
-    check("word[75] = RxPDO category size (words)", c4[0].sii_image_buf[75], 8);
-    /* [Phase 7] SyncManager category (41) follows the PDO categories:
-     * 4 SMs x 4 words. SM2 = outputs at 0x1100 with watchdog trigger. */
-    size_t smc = 74 + 2 + 8;
-    check("SyncManager category type (41) after PDO categories",
-          c4[0].sii_image_buf[smc], SII_CAT_SYNCM);
-    check("SyncManager category size (words) = 16", c4[0].sii_image_buf[smc + 1], 16);
-    check_hex("SM2 start = 0x1100", c4[0].sii_image_buf[smc + 2 + 2 * 4], SII_SM2_OFFSET);
-    check("SM2 length = pdo_size", c4[0].sii_image_buf[smc + 2 + 2 * 4 + 1], 4);
-    check_hex("SM2 control 0x64 (write, WD trigger), activate 1",
-              c4[0].sii_image_buf[smc + 2 + 2 * 4 + 2] | (c4[0].sii_image_buf[smc + 2 + 2 * 4 + 3] << 8),
-              0x0164);
-    check_hex("SM3 start = 0x1108 (after SM2, 8-byte aligned)",
-              c4[0].sii_image_buf[smc + 2 + 3 * 4], 0x1108);
+    check_hex("TxPDO category type (50) present", tx >= 0 ? s[tx] : 0, SII_CAT_TXPDO);
+    check("TxPDO category size (words)", tx >= 0 ? s[tx + 1] : -1, 8);
+    check("RxPDO category type (51) present", rx >= 0 ? s[rx] : 0, SII_CAT_RXPDO);
+    check("RxPDO category size (words)", rx >= 0 ? s[rx + 1] : -1, 8);
+
+    /* SyncM: 4 SMs x 4 words. SM2 = outputs at 0x1100 with watchdog trigger. */
+    check("SyncManager category size (words) = 16", sm >= 0 ? s[sm + 1] : -1, 16);
+    if (sm >= 0) {
+        check_hex("SM2 start = 0x1100", s[sm + 2 + 2 * 4], SII_SM2_OFFSET);
+        check("SM2 length = pdo_size", s[sm + 2 + 2 * 4 + 1], 4);
+        check_hex("SM2 control 0x64 (write, WD trigger), activate 1",
+                  s[sm + 2 + 2 * 4 + 2] | (s[sm + 2 + 2 * 4 + 3] << 8), 0x0164);
+        check_hex("SM3 start = 0x1108 (after SM2, 8-byte aligned)",
+                  s[sm + 2 + 3 * 4], 0x1108);
+    }
+    /* RxPDO is the last category -> End marker right after its body */
     check_hex("End marker present after all categories",
-              c4[0].sii_image_buf[smc + 2 + 16], SII_CAT_END);
+              rx >= 0 ? s[rx + 2 + s[rx + 1]] : 0, SII_CAT_END);
     free(c4);
 
     /* pdo_size=64 needs 3 entries per direction (31+31+2 bytes) ->
      * size = 4 + 4*3 = 16 words each. This is exactly the case
      * run_l1_tests.sh CASE D relies on to force SOEM to split the frame. */
     esc_t *c64 = make_chain(1, 64);
-    check("pdo_size=64: TxPDO size (words), 3 entries", c64[0].sii_image_buf[65], 16);
-    check_hex("pdo_size=64: RxPDO category type still correct",
-              c64[0].sii_image_buf[64 + 2 + 16], SII_CAT_RXPDO);
+    int tx64 = find_cat(&c64[0], SII_CAT_TXPDO);
+    int rx64 = find_cat(&c64[0], SII_CAT_RXPDO);
+    check("pdo_size=64: TxPDO size (words), 3 entries",
+          tx64 >= 0 ? c64[0].sii_image_buf[tx64 + 1] : -1, 16);
+    check("pdo_size=64: RxPDO follows TxPDO directly",
+          rx64, tx64 >= 0 ? tx64 + 2 + 16 : -2);
     free(c64);
 
     /* Phase 5 added a CoE/SDO server (esc_coe.c), so the SII now

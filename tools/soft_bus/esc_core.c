@@ -164,17 +164,18 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
     while (words < SII_CATEGORY_START_WORD && words < ESC_SII_IMAGE_MAX_WORDS)
         esc->sii_image_buf[words++] = 0x0000;
 
-    /* Symmetric in/out size: one --pdo-size CLI value covers both
-     * directions. TxPDO (0x1A00) = slave->master (Input, SM3);
-     * RxPDO (0x1600) = master->slave (Output, SM2). */
+    /* SyncM (41) must precede the PDO categories: IgH parses categories in
+     * order and rejects a PDO whose SM index is not yet known (X-01a,
+     * "Invalid SM index 3 for PDO 0x1A00"). ESI-generated SII images use the
+     * order General, FMMU, SyncM, TxPDO, RxPDO. SOEM looks categories up by
+     * type, so it is unaffected. */
+    words = append_sm_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
+                               pdo_size_bytes);
+    /* Symmetric in/out size: ... (keep existing comment) */
     words = append_pdo_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
                                  SII_CAT_TXPDO, 0x1A00, 3, pdo_size_bytes);
     words = append_pdo_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
                                  SII_CAT_RXPDO, 0x1600, 2, pdo_size_bytes);
-    /* After the PDO categories so the word-64 layout checked by T10 is
-     * unchanged; SOEM finds categories by type, not by position. */
-    words = append_sm_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
-                               pdo_size_bytes);
 
     if (words < ESC_SII_IMAGE_MAX_WORDS)
         esc->sii_image_buf[words++] = SII_CAT_END;
@@ -290,9 +291,9 @@ static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint1
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
     esc_dc_before_read(esc, phys_offset, len);
 
-    if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
-        esc_sii_refresh_data(esc);
-    }
+    //if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
+    //    esc_sii_refresh_data(esc);
+    //}
     memcpy(data, esc->regs + phys_offset, len);
 
     /* Reading (any part of) SM1's mailbox-in DPRAM clears "mailbox full" —
@@ -314,9 +315,9 @@ static void esc_phys_read_or(esc_t *esc, uint16_t phys_offset, uint8_t *data, ui
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
     esc_dc_before_read(esc, phys_offset, len);
-    if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
-        esc_sii_refresh_data(esc);
-    }
+    //if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
+    //    esc_sii_refresh_data(esc);
+    //}
     for (uint16_t k = 0; k < len; k++) {
         data[k] |= esc->regs[phys_offset + k];
     }
@@ -465,11 +466,34 @@ static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data
 
     esc_wd_on_write(esc, phys_offset, len);
 
-    /* Force the busy bit low right after writing control/status — models
-     * "completes instantly", since this simulator has no real EEPROM delay. */
-    if (phys_offset <= REG_SII_CONTROL_STATUS + 1 &&
-        phys_offset + len > REG_SII_CONTROL_STATUS + 1) {
-        esc->regs[REG_SII_CONTROL_STATUS + 1] &= (uint8_t)~SII_BUSY_BIT_MASK;
+    /* SII EEPROM command, modelled on Beckhoff ESC datasheet Sec. II 2.11.3
+     * and Sec. I 11.2.3: the command in 0x0502[10:8] is executed when the
+     * master writes it; on completion Busy (bit 15) AND the command bits
+     * [10:8] self-clear, write-enable (bit 0) self-clears, and writing 000
+     * to [10:8] clears the error bits [14:13]. No EEPROM delay is modelled,
+     * so the command completes before the next frame can poll the status.
+     * IgH polls (0x0503 & 0x81) for read and (& 0x82) for write, so leaving
+     * the command bits set looks like "still busy" forever (X-01a finding).
+     * SOEM only checks bit 15, which is why this went unnoticed. */
+    if (range_hits(phys_offset, len, REG_SII_CONTROL_STATUS + 1,
+                   REG_SII_CONTROL_STATUS + 1)) {
+        uint8_t *hi = &esc->regs[REG_SII_CONTROL_STATUS + 1];
+        uint8_t cmd = *hi & SII_CMD_MASK;
+
+        if (cmd == SII_CMD_NOP) {
+            *hi &= (uint8_t)~SII_ERR_MASK;                 /* 000 clears errors */
+        } else if (cmd == SII_CMD_READ || cmd == SII_CMD_RELOAD) {
+            *hi &= (uint8_t)~SII_ERR_MASK;
+            esc_sii_refresh_data(esc);                     /* latch 4 bytes now */
+            esc->sii_cmd_reads++;
+        } else {
+            /* write (010) or invalid: SII is read-only in soft_bus.
+             * Report it like a missing EEPROM acknowledge instead of
+             * silently pretending the write succeeded. */
+            *hi |= SII_ERR_ACK_CMD;
+        }
+        *hi &= (uint8_t)~(SII_BUSY_BIT_MASK | SII_CMD_MASK);  /* self-clear */
+        esc->regs[REG_SII_CONTROL_STATUS] &= (uint8_t)~SII_WRITE_ENABLE;
     }
 
     if (phys_offset <= REG_STATION_ADDR &&

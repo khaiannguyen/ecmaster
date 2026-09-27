@@ -158,32 +158,27 @@ static int coe_write_object(esc_t *esc, uint16_t index, uint8_t subindex, uint32
     }
 }
 
-/* ==========================================================================
- * Response builders. Every one sets the full 6-byte mailbox header +
- * CoE header itself -- no shared helper, so each is readable on its own
- * next to the exact SOEM parsing logic it was written against.
- * ========================================================================== */
-
-static void coe_send_abort(uint8_t *resp, uint32_t abort_code)
+/* Abort SDO Transfer (ETG.1000.6 / CiA 301): CoE service = SDO REQUEST (2),
+ * command 0x80, Index/SubIndex ECHO the request, 4-byte abort code.
+ *
+ * X-01a (GD8): the Phase 5 version sent service = SDO RESPONSE (3) with
+ * Index = 0. IgH rejects that ("unknown response"): it only recognises an
+ * abort by service == 2. The Index = 0 trick existed only because SOEM's
+ * ecx_SDOread() takes the "data" branch when service == SDORES AND Index
+ * matches (ec_coe.c:176-178); with the correct service SOEM always reaches
+ * its ECT_SDO_ABORT branch, whatever the Index. So the old comment's
+ * "SOEM quirk" was really a soft_bus bug masked by a second one. */
+static void coe_send_abort(uint8_t *resp, uint16_t index, uint8_t subindex,
+                           uint32_t abort_code)
 {
-    /* Index/SubIndex deliberately left at 0, NOT echoing the request.
-     * Confirmed by reading ecx_SDOread()/ecx_SDOwrite() directly: both
-     * only reach their "if (Command == ECT_SDO_ABORT) ecx_SDOerror(...)"
-     * path from the ELSE branch of a check that requires Index (and,
-     * for SDOwrite, SubIndex) to NOT match the request -- if we echoed
-     * them back (as ETG.1000 literally specifies), this exact SOEM
-     * version would instead misparse our abort as a malformed "normal"
-     * response and report a different, less specific error. Matching
-     * what this master actually does, not what the spec says it should
-     * do -- see project chat log for the full derivation. */
     wr_le16(resp + OFF_MBX_LENGTH, 0x000a);
     wr_le16(resp + 2 /* address */, 0x0000);
     resp[4] = 0x00; /* priority */
     resp[OFF_MBX_TYPE] = MBXTYPE_COE; /* Cnt set in coe_on_mailbox_out_write() */
-    wr_le16(resp + OFF_CANOPEN, (uint16_t)(COES_SDORES << 12));
+    wr_le16(resp + OFF_CANOPEN, (uint16_t)(COES_SDOREQ << 12));
     resp[OFF_COMMAND] = SDO_ABORT;
-    wr_le16(resp + OFF_INDEX, 0x0000);
-    resp[OFF_SUBINDEX] = 0x00;
+    wr_le16(resp + OFF_INDEX, index);
+    resp[OFF_SUBINDEX] = subindex;
     wr_le32(resp + OFF_DATA_INIT, abort_code);
 }
 
@@ -197,7 +192,7 @@ static void coe_send_upload_expedited(uint8_t *resp, uint16_t index, uint8_t sub
     resp[4] = 0x00;
     resp[OFF_MBX_TYPE] = MBXTYPE_COE;
     wr_le16(resp + OFF_CANOPEN, (uint16_t)(COES_SDORES << 12));
-    resp[OFF_COMMAND] = (uint8_t)(0x23u | (uint8_t)(n << 2)); /* scs=1,e=1,s=1 + n */
+        resp[OFF_COMMAND] = (uint8_t)(0x43u | (uint8_t)(n << 2)); /* scs=2 (0x40), e=1, s=1 + n  (CiA 301; was 0x23 = download request, X-01a) */
     wr_le16(resp + OFF_INDEX, index);
     resp[OFF_SUBINDEX] = subindex;
     memset(resp + OFF_DATA_INIT, 0, 4);
@@ -223,7 +218,7 @@ static void coe_start_upload_normal(esc_t *esc, uint8_t *resp, uint16_t index, u
     resp[4] = 0x00;
     resp[OFF_MBX_TYPE] = MBXTYPE_COE;
     wr_le16(resp + OFF_CANOPEN, (uint16_t)(COES_SDORES << 12));
-    resp[OFF_COMMAND] = 0x21; /* scs=1 (0x20), e=0, s=1 (size indicated) */
+    resp[OFF_COMMAND] = 0x41; /* scs=2 (0x40), e=0, s=1 size indicated  (CiA 301; was 0x21, X-01a) */
     wr_le16(resp + OFF_INDEX, index);
     resp[OFF_SUBINDEX] = subindex;
     wr_le32(resp + OFF_DATA_INIT, total_len);            /* ldata[0] = total size */
@@ -248,7 +243,7 @@ static void coe_handle_upload_segment(esc_t *esc, uint8_t *resp, uint8_t command
     uint8_t toggle = (uint8_t)(command & 0x10u);
 
     if (!s->active || !s->is_upload || toggle != s->expected_toggle) {
-        coe_send_abort(resp, ABORT_CMD_SPECIFIER_INVALID);
+        coe_send_abort(resp, esc->coe_session.index, esc->coe_session.subindex, ABORT_CMD_SPECIFIER_INVALID);
         s->active = 0;
         return;
     }
@@ -261,7 +256,7 @@ static void coe_handle_upload_segment(esc_t *esc, uint8_t *resp, uint8_t command
          * transfer -- shouldn't happen (nothing else in soft_bus
          * mutates the OD asynchronously), but fail closed rather than
          * read out of bounds if it ever does. */
-        coe_send_abort(resp, ABORT_OBJECT_DOES_NOT_EXIST);
+        coe_send_abort(resp, esc->coe_session.index, esc->coe_session.subindex, ABORT_OBJECT_DOES_NOT_EXIST);
         s->active = 0;
         return;
     }
@@ -323,7 +318,7 @@ static void coe_handle_download_expedited(esc_t *esc, uint8_t *resp, uint16_t in
     }
 
     if (!coe_write_object(esc, index, subindex, value)) {
-        coe_send_abort(resp, ABORT_OBJECT_DOES_NOT_EXIST);
+        coe_send_abort(resp, index, subindex, ABORT_OBJECT_DOES_NOT_EXIST);
         return;
     }
 
@@ -358,17 +353,20 @@ void coe_on_mailbox_out_write(esc_t *esc)
     }
 
     uint8_t command = req[OFF_COMMAND];
+    /* Echoed in any abort sent from this dispatcher (CiA 301 / ETG.1000.6). */
+    uint16_t req_index    = rd_le16(req + OFF_INDEX);
+    uint8_t  req_subindex = req[OFF_SUBINDEX];
 
     if (command == SDO_UP_REQ_CA || command == SDO_DOWN_INIT_CA) {
         /* Complete Access not implemented -- see esc_coe.h scope note. */
-        coe_send_abort(resp, ABORT_UNSUPPORTED_ACCESS);
+        coe_send_abort(resp, req_index, req_subindex, ABORT_UNSUPPORTED_ACCESS);
     } else if (command == SDO_UP_REQ) {
         uint16_t index    = rd_le16(req + OFF_INDEX);
         uint8_t  subindex = req[OFF_SUBINDEX];
         uint8_t  scratch[COE_SEGTEST_BLOB_SIZE];
         uint32_t len;
         if (!coe_lookup_readable(esc, index, subindex, scratch, &len)) {
-            coe_send_abort(resp, ABORT_OBJECT_DOES_NOT_EXIST);
+            coe_send_abort(resp, esc->coe_session.index, esc->coe_session.subindex, ABORT_OBJECT_DOES_NOT_EXIST);
         } else if (len <= 4) {
             coe_send_upload_expedited(resp, index, subindex, scratch, (uint8_t)len);
         } else {
@@ -384,13 +382,13 @@ void coe_on_mailbox_out_write(esc_t *esc)
         /* No writable object in this OD exceeds 4 bytes (see
          * coe_write_object()), so a normal/segmented download always
          * means "wrong length for this object" here. */
-        coe_send_abort(resp, ABORT_LENGTH_TOO_HIGH);
+        coe_send_abort(resp, req_index, req_subindex, ABORT_LENGTH_TOO_HIGH); 
     } else {
         /* Covers, among others, a stray download-segment-continuation
          * command ((command & 0xE0) == 0) arriving with no matching
          * session -- which never legitimately happens given the note
          * above -- as well as anything else unrecognized. */
-        coe_send_abort(resp, ABORT_CMD_SPECIFIER_INVALID);
+        coe_send_abort(resp, req_index, req_subindex, ABORT_CMD_SPECIFIER_INVALID);
     }
 
     /* [Phase 7.4] Cnt (bits 4..6 of the type byte), 1..7 cyclic, one step

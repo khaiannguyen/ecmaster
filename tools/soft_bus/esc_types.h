@@ -104,6 +104,18 @@
 #define REG_SII_END              0x050F
 #define SII_BUSY_BIT_MASK        0x80    /* bit15 -> high byte of 0x0502 */
 
+/* 0x0502 low byte */
+#define SII_WRITE_ENABLE   0x01   /* bit 0, self-clearing */
+/* 0x0503 (high byte of 0x0502) */
+#define SII_CMD_MASK       0x07   /* bits [10:8] */
+#define SII_CMD_NOP        0x00
+#define SII_CMD_READ       0x01
+#define SII_CMD_WRITE      0x02
+#define SII_CMD_RELOAD     0x04
+#define SII_ERR_ACK_CMD    0x20   /* bit 13: missing ack / invalid command */
+#define SII_ERR_WRITE_EN   0x40   /* bit 14: write without write enable */
+#define SII_ERR_MASK       (SII_ERR_ACK_CMD | SII_ERR_WRITE_EN)
+
 /* ---- FMMU (Table 1: 16 entries x 16 byte, 0x0600:0x06FF) ---- */
 #define REG_FMMU_BASE          0x0600
 #define REG_FMMU_ENTRY_SIZE    16
@@ -267,6 +279,7 @@ typedef struct {
     esc_dc_state_t dc;           /* Phase 6: Distributed Clock (esc_dc.c) */
     esc_node_fault_t fault;      /* Phase 7: per-node fault injection (esc_fault.c) */
     esc_wd_state_t   wd;         /* Phase 7: process data watchdog model */
+    uint32_t  sii_cmd_reads;
 } esc_t;
 
 
