@@ -38,37 +38,46 @@ Kết luận ở đây **thay thế** giả định trong `giai_doan_8_ke_hoach.
 
 Dùng `add_eni` nghĩa là **mỗi platform phải build lại `ecm_run`** với ENI của nó. Code không đổi, nhưng binary thì khác, và tag `master-v1.0` không còn là một binary duy nhất. Không nhận cách này.
 
-## 5. Thiết kế đề xuất cho `ecm_run --eni`
+## 5. Thiết kế đã hiện thực (GĐ8 8.4, 28/9)
 
-Không vá SOEM. Dùng lại cấu trúc sẵn có của SOEM và hook PO2SO đã có từ GĐ7.3.
+Không vá SOEM, không gán `context->ENI`.
 
 ```
 TwinCAT ENI (.xml)
-   │  tools/eni/eni2cfg.py   (reuse eniconv.py's parsing rules, extended)
+   │  tools/eni/eni2cfg.py        (build/offline, Python)
    ▼
-config/eni/<name>.enicfg     (simple line-based text, versioned in git)
-   │  libecmaster/config/ecm_eni.c   (loader, non-RT, at startup)
+config/eni/<name>.enicfg          (line-based text, commit cùng ENI; có sha256 của ENI nguồn)
+   │  libecmaster/config/ecm_eni.c        (loader + kiểm tra, không phụ thuộc SOEM)
+   │  libecmaster/config/ecm_eni_soem.c   (glue SOEM)
    ▼
-ecm_eni_t  { all slaves: pos, vendor, product, rev, Isize/Osize from ProcessData;
-             CoE InitCmds with full transition mask }
+ecm_run --eni config/eni/<name>.enicfg
 ```
 
-- **Không gán `context->ENI`.** SOEM bỏ qua đường ENI của nó; `libecmaster` tự chạy InitCmds:
-  - IP (INIT→PREOP): chạy sau khi slave lên PREOP, trước `ecx_config_map_group`.
-  - PS: chạy trong hook PO2SO (GĐ7.3 đã có hook PO2SO khôi phục watchdog + DC; thêm vào đó).
-  - **Mọi SDO thất bại → hủy cấu hình, không lên SAFEOP.**
-- **Kiểm danh tính trước khi cấu hình (E-03):** so `slavecount` sau khi scan và (vendor, product, rev) theo **từng vị trí** với danh sách **đầy đủ** slave của ENI. Lệch bất kỳ → từ chối, báo rõ vị trí và giá trị kỳ vọng/thực tế.
-- **Kiểm layout sau map (thay E-02):** Isize/Osize từng slave sau `config_map_group` phải bằng giá trị tính từ `ProcessData` của ENI. Lệch → từ chối OP. Đây là chỗ bắt được lỗi PDO assign bị bỏ qua (mục 3.3).
-- `eni2cfg.py` đọc thêm so với `eniconv.py`: danh sách đầy đủ slave (kể cả không có CoE InitCmd), `ProcessData` → kích thước I/O. Mục cyclic/DC/register InitCmds: bỏ qua có chủ đích (SOEM + `libecmaster` tự làm), ghi rõ trong README.
+**eni2cfg.py đọc:** mọi `Config/Slave` (kể cả slave không có CoE InitCmd) → vị trí (từ AutoIncAddr), vendor/product/revision, `check_rev` (có InitCmd "check revision number"), địa chỉ trạm, `ProcessData/{Send,Recv}/BitLength` (đối chiếu với tổng BitLen các PDO có `Sm`), khối `DC` (ReferenceClock, CycleTime0/1, ShiftTime) và AssignActivate (lấy từ InitCmd PS ghi 0x0980 — khối `DC` của ENI TwinCAT không chứa nó), `Mailbox/CoE/InitCmds` (bỏ `Disabled`), `Cyclic/CycleTime`. Lỗi nhất quán (vị trí không liên tục, địa chỉ trùng, >1 ref clock, BitLength ≠ tổng PDO) → exit 1.
+**Bỏ qua có chủ đích:** register InitCmds (SM/FMMU/AL/địa chỉ/DC do SOEM + libecmaster làm), địa chỉ logic và offset process image (SOEM tự dựng IOmap), khung cyclic.
 
-## 6. Test E-series (bản sửa)
+**Thứ tự trong ecm_run (chế độ ENI):**
+1. Nạp `.enicfg`; `--n` không nhập → lấy từ ENI, nhập khác → lỗi. CoE InitCmd có transition ngoài IP/PS hoặc CompleteAccess → từ chối.
+2. `ecx_config_init` → **kiểm danh tính (E-03)**: số slave + vendor/product từng vị trí, revision nếu `check_rev`. Lệch → dừng, in từng vị trí (kỳ vọng / thực tế). Không còn "tiếp tục với số slave tìm thấy".
+3. Chờ PRE-OP → chạy CoE InitCmd **IP**.
+4. Gắn hook `PO2SOconfig` → CoE InitCmd **PS** chạy bên trong `ecx_config_map_group`, trước khi SOEM đọc PDO assign (cùng điểm SOEM gọi `ecx_mbxENIinitcmds`). SOEM bỏ qua giá trị trả về của hook → lỗi được đếm, kiểm ngay sau map: ≥1 lỗi → dừng trước SAFE-OP, log abort code (`ecx_elist2string`).
+5. **Kiểm layout**: `Obits/Ibits` từng slave = ENI.
+6. DC: ENI không có DC slave → như `--no-dc`. Có DC: ref clock phải là slave 1, `CycleTime0` = motion cycle, AssignActivate 0x0300, `CycleTime1` = 0 — không thì từ chối. **SYNC0 bật theo cờ DC của ENI** (có thể gồm slave GROUP_IO; SYNC0 độc lập chu kỳ frame), shift = `ShiftTime`. Đo trễ/offset/start time vẫn là `ecx_configdc` + DC(a) GĐ6 (ENI TwinCAT để 0x0990 = 0 cho runtime).
+7. Recovery GĐ7.3 (`reconfig_po2so_hook`, `dc_restore_slave`): chạy lại PS InitCmds và khôi phục SYNC0 theo cùng quy tắc ENI.
 
-| ID | Hành động | Kỳ vọng |
+Không `--eni`: hành vi không đổi (golden 547/547).
+
+**Địa chỉ trạm:** TwinCAT ghi `PhysAddr` thập phân (1001 = 0x03E9), SOEM đặt 0x1001… `ecm_run` giữ địa chỉ SOEM; địa chỉ ENI chỉ để tham khảo khi so pcap.
+
+## 6. Test E-series (kết quả 28/9, soft_bus 8 node, `sudo chrt -f 79 taskset -c 2`)
+
+| ID | Hành động | Kết quả |
 |---|---|---|
-| E-01 | ENI 1 node 1 PDO, có InitCmd ghi 0x1C12/0x1C13 | Lên OP; tshark thấy đúng SDO download ở PS |
-| E-02 | Isize/Osize sau map so với ENI | Khớp; đối chứng âm: `soft_bus` từ chối SDO 0x1C12 → **không** lên SAFEOP (SOEM thuần sẽ lên OP) |
-| E-03 | ENI N=8, bus 7 node / sai product / sai revision | Từ chối, báo đúng vị trí |
-| E-04 | InitCmd trỏ tới object không tồn tại (abort) | Hủy cấu hình, log abort code |
-| E-05 | Golden cho chế độ ENI | Thêm vào CI, có đối chứng âm |
-
-Đối chứng âm cho mục 3.2/3.3 (chứng minh lý do không dùng đường ENI của SOEM): build `eni_test` với cùng ENI, cho `soft_bus` trả Abort ở 0x1C12 → ghi lại việc SOEM vẫn tiếp tục. Chạy trên cặp veth riêng, không chạy lúc đang soak.
+| E-01 | `eni_8node_dc_sdo` | OP; `CoE download 0x8000:01 ok`; 8/8 SYNC0; A/B 30 s với/không ENI giống hệt (motion 30001/0 noframe, io 3751/0) |
+| E-02 | Layout Obits/Ibits so ENI | Đạt trong E-01 (kiểm tự động mỗi lần chạy); layout logic TwinCAT (in/out chồng, LRW WKC 3/slave) khác SOEM (in sau out) — có chủ đích |
+| E-03a | Bus 7 node, ENI 8 | Từ chối: `slave count: ENI 8, bus 7` |
+| E-03b | `soft_bus --sii-poke 0x0A=0x0002` | Từ chối, 8 vị trí `found 0x499 0x2 0x1` |
+| E-03c | `soft_bus --sii-poke 0x0C=0x0002` | Từ chối, lệch revision (ENI `check_rev 1`) |
+| E-03d | ENI không kiểm revision | Chỉ kiểm offline (`test_eni_offline`); `ecm_run` yêu cầu motion_slaves < n nên không chạy bus 1 node |
+| E-04 | CoE InitCmd tới 0x8002 (`.enicfg` sửa tay) | `FAILED … 06020000` → `refusing SAFE-OP` (SOEM thuần sẽ bỏ qua) |
+| E-05 | Golden chế độ ENI | xem `tools/golden/` |

@@ -4,7 +4,10 @@
 #            and ThreadSanitizer on every lock-free queue (tests/tsan)
 #  golden    fixed ecm_run scenario against soft_bus over veth, captured with
 #            tshark; its datagram structure must match tools/golden/golden_ecm_run.txt,
-#            and a negative control (two datagrams swapped) must NOT match
+#            and a negative control (two datagrams swapped) must NOT match;
+#            the same scenario in ENI mode (GD8 8.4, E-05) must match
+#            tools/golden/golden_ecm_run_eni.txt, and an ENI without the
+#            Startup SDO must NOT match it
 #  l5-smoke  a subset of the L5 fault-injection cases. GitHub runners are
 #            shared and not RT, so this job reports but does not block
 #            (continue-on-error); the reference results come from the Jetson.
@@ -41,8 +44,11 @@ jobs:
         run: make -C libecmaster/diag test test_asan
       - name: libecmaster/policy (bus state machine, recovery planner, freshness)
         run: make -C libecmaster/policy test test_asan
+      - name: libecmaster/config (ENI loader, identity/layout checks, GD8 8.4)
+        run: make -C libecmaster/config test
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
         run: tests/tsan/run_tsan.sh 1000000
+
 
   golden:
     name: Golden pcap (soft_bus over veth)
@@ -73,6 +79,13 @@ jobs:
         run: sudo -E tools/golden/check_golden.sh
       - name: Negative control (SM watchdog writes swapped must be detected)
         run: sudo -E tools/golden/negative_control.sh
+      - name: Golden structure check, ENI mode (E-05)
+        run: sudo -E env ENI=config/eni/eni_8node_dc_sdo.enicfg tools/golden/check_golden.sh
+      - name: Negative control, ENI mode (ENI without the Startup SDO must be detected)
+        run: >
+          sudo -E env ENI=config/eni/eni_8node_dc.enicfg
+          GOLDEN=tools/golden/golden_ecm_run_eni.txt EXPECT_DIFF=1
+          tools/golden/check_golden.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4

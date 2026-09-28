@@ -10,6 +10,8 @@
 # enumerate -> PREOP -> SM watchdog -> DC -> SAFEOP -> OP -> 2 s cyclic
 # (with 1 s diagnostics) -> INIT.
 # Env: SOFT_BUS ECM_RUN IF_M IF_S ECM_RUN_BIN_NOTE
+#      ENI=config/eni/X.enicfg  run the same scenario in ENI mode (GD8 8.4,
+#      E-05): ecm_run --eni, identity/layout checks, CoE InitCmds, ENI DC
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -17,6 +19,12 @@ SOFT_BUS=${SOFT_BUS:-$HERE/../soft_bus/soft_bus}
 ECM_RUN=${ECM_RUN:-$HERE/../../apps/ecm_run/ecm_run}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 PCAP=${1:-$(mktemp /tmp/golden_XXXXXX.pcap)}
+ENI=${ENI:-}
+ENI_ARGS=()
+if [ -n "$ENI" ]; then
+    [ -f "$ENI" ] || { echo "ENI file $ENI not found" >&2; exit 2; }
+    ENI_ARGS=(--eni "$ENI")
+fi
 command -v tshark >/dev/null || { echo "tshark not installed" >&2; exit 2; }
 rm -f "$PCAP"
 
@@ -28,7 +36,7 @@ TSP=$!
 for _ in $(seq 50); do [ -s "$PCAP" ] && break; sleep 0.1; done
 sleep 1
 "$ECM_RUN" --iface "$IF_M" --n 8 --motion-slaves 4 --duration-sec 2 --no-tx-ts \
-    --diag-file /tmp/ecm_diag_golden.txt >/tmp/ecm_run_golden.log 2>&1
+    --diag-file /tmp/ecm_diag_golden.txt "${ENI_ARGS[@]}" >/tmp/ecm_run_golden.log 2>&1
 RC=$?
 sleep 0.5
 kill -INT $TSP; wait $TSP 2>/dev/null

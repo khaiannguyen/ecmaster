@@ -9,13 +9,20 @@
 #                                       commit the new file with it)
 #   sudo EXPECT_DIFF=1 ./check_golden.sh   negative control: exit 1 if the
 #                                       structure did NOT change
-# Env: ECM_RUN SOFT_BUS IF_M IF_S (passed to capture_ecm_run.sh), GOLDEN,
+# Env: ECM_RUN SOFT_BUS IF_M IF_S ENI (passed to capture_ecm_run.sh), GOLDEN,
 #      ATTEMPTS (default 2)
+#   ENI=config/eni/eni_8node_dc_sdo.enicfg ./check_golden.sh
+#                                       ENI mode (GD8 E-05); golden defaults to
+#                                       golden_ecm_run_eni.txt
 # Lines starting with '#' (counts) are not compared.
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-GOLDEN=${GOLDEN:-$HERE/golden_ecm_run.txt}
+if [ -n "${ENI:-}" ]; then
+    GOLDEN=${GOLDEN:-$HERE/golden_ecm_run_eni.txt}
+else
+    GOLDEN=${GOLDEN:-$HERE/golden_ecm_run.txt}
+fi
 OUT=$(mktemp /tmp/golden_now_XXXXXX.txt)
 PCAP=${PCAP:-/tmp/golden_now.pcap}
 ATTEMPTS=${ATTEMPTS:-2}
