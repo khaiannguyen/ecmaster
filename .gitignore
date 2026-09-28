@@ -41,3 +41,6 @@ libecmaster/core/test_dc_offline_asan
 soak_*.log
 tools/soft_bus/log_l1_*/
 tools/xcheck/igh_x01b
+tools/xcheck/igh_x01b
+tools/soft_bus/sii_dump
+tools/soft_bus/log_l1_*/
