@@ -153,6 +153,21 @@ static size_t append_sm_category(uint16_t *out, size_t pos, size_t cap,
     return pos;
 }
 
+/* ETG.2010: SII word 7 low byte = CRC-8 over bytes 0..13 (words 0..6),
+ * polynomial x^8+x^2+x+1 (0x07), initial value 0xFF, no reflection. A real
+ * ESC checks it when loading the EEPROM (0x0502 bit 11 on mismatch). */
+static uint8_t sii_config_crc8(const uint16_t *w)
+{
+    uint8_t crc = 0xFF;
+    for (int i = 0; i < 14; i++) {
+        uint8_t byte = (uint8_t)((i & 1) ? (w[i / 2] >> 8) : (w[i / 2] & 0xFF));
+        crc ^= byte;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+    }
+    return crc;
+}
+
 static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
 {
     size_t words = 0;
@@ -160,6 +175,7 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
     for (size_t i = 0; i < SII_IMAGE_DEFAULT_WORDS && i < ESC_SII_IMAGE_MAX_WORDS; i++)
         esc->sii_image_buf[i] = g_sii_image_default[i];
     words = SII_IMAGE_DEFAULT_WORDS;
+    esc->sii_image_buf[7] = sii_config_crc8(esc->sii_image_buf);   /* checksum, high byte 0 */
 
     /* CoE bit is left SET (as g_sii_image_default already has it) now that
      * esc_coe.c implements a real CoE/SDO server on SM0/SM1 — previously

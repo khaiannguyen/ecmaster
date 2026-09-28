@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  softbus_esi.xml - EtherCAT Slave Information for the soft_bus simulator
+  (ecmaster project, GD8 step 8.2).
+
+  Describes exactly what soft_bus puts in its SII image (tools/soft_bus/
+  esc_sii.h + esc_build_sii() in esc_core.c), default pdo_size 4:
+    Vendor 0x00000499 (internal test placeholder, NOT an ETG-assigned ID),
+    Product 0x00000001, Revision 0x00000001
+    SM0 mailbox out 0x1000/128 ctrl 0x26, SM1 mailbox in 0x1080/128 ctrl 0x22
+    SM2 outputs 0x1100/4 ctrl 0x64 (WD trigger), SM3 inputs 0x1108/4 ctrl 0x20
+    RxPDO 0x1600 (SM2): 0x7000:01 32 bit   TxPDO 0x1A00 (SM3): 0x6000:01 32 bit
+    Mailbox: CoE only; expedited + segmented upload, expedited download;
+             no SDO Info, no Complete Access, no PDO assign/config objects
+    DC: SYNC0 (AssignActivate 0x0300)
+  Checked against the soft_bus SII image with tools/esi/esi_check.py.
+
+  ConfigData = SII words 0..6 (the configuring tool computes the word-7 CRC).
+  Word 0 low byte 0x80 = PDI SPI, as for the LAN9252 in Platform 1. The other
+  config words are 0 because soft_bus has no PDI; BEFORE this file is used to
+  write a real LAN9252 EEPROM (GD 2.5), words 0-6 must be re-derived from the
+  LAN9252 datasheet (ESC config 0x0141, PDI config 0x0150-0x0153, SYNC/latch
+  config 0x0151) - see ke_hoach_ethercat_v2.md section 1.2.
+-->
+<EtherCATInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xsi:noNamespaceSchemaLocation="EtherCATInfo.xsd" Version="1.6">
+  <Vendor>
+    <Id>#x00000499</Id>
+    <Name>ecmaster test (soft_bus)</Name>
+  </Vendor>
+  <Descriptions>
+    <Groups>
+      <Group>
+        <Type>SoftBus</Type>
+        <Name LcId="1033">soft_bus test slaves</Name>
+      </Group>
+    </Groups>
+    <Devices>
+      <Device Physics="YY">
+        <Type ProductCode="#x00000001" RevisionNo="#x00000001">SOFTBUS-PD4</Type>
+        <Name LcId="1033">soft_bus ESC, 4 byte out / 4 byte in</Name>
+        <GroupType>SoftBus</GroupType>
+        <Fmmu>Outputs</Fmmu>
+        <Fmmu>Inputs</Fmmu>
+        <Fmmu>MBoxState</Fmmu>
+        <Sm DefaultSize="128" StartAddress="#x1000" ControlByte="#x26" Enable="1">MBoxOut</Sm>
+        <Sm DefaultSize="128" StartAddress="#x1080" ControlByte="#x22" Enable="1">MBoxIn</Sm>
+        <Sm DefaultSize="4" StartAddress="#x1100" ControlByte="#x64" Enable="1">Outputs</Sm>
+        <Sm DefaultSize="4" StartAddress="#x1108" ControlByte="#x20" Enable="1">Inputs</Sm>
+        <RxPdo Fixed="1" Mandatory="1" Sm="2">
+          <Index>#x1600</Index>
+          <Name>Outputs</Name>
+          <Entry>
+            <Index>#x7000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>32</BitLen>
+            <Name>Output 0</Name>
+            <DataType>UDINT</DataType>
+          </Entry>
+        </RxPdo>
+        <TxPdo Fixed="1" Mandatory="1" Sm="3">
+          <Index>#x1A00</Index>
+          <Name>Inputs</Name>
+          <Entry>
+            <Index>#x6000</Index>
+            <SubIndex>1</SubIndex>
+            <BitLen>32</BitLen>
+            <Name>Input 0</Name>
+            <DataType>UDINT</DataType>
+          </Entry>
+        </TxPdo>
+        <Mailbox DataLinkLayer="true">
+          <CoE SdoInfo="false" PdoAssign="false" PdoConfig="false" CompleteAccess="false" SegmentedSdo="true"/>
+        </Mailbox>
+        <Dc>
+          <OpMode>
+            <Name>DC</Name>
+            <Desc>DC-Synchron (SYNC0)</Desc>
+            <AssignActivate>#x0300</AssignActivate>
+            <CycleTimeSync0 Factor="1">0</CycleTimeSync0>
+            <ShiftTimeSync0>0</ShiftTimeSync0>
+          </OpMode>
+          <OpMode>
+            <Name>FreeRun</Name>
+            <Desc>FreeRun / SM-Synchron</Desc>
+            <AssignActivate>#x0000</AssignActivate>
+          </OpMode>
+        </Dc>
+        <Eeprom>
+          <ByteSize>2048</ByteSize>
+          <ConfigData>8000000000000000000000000000</ConfigData>
+        </Eeprom>
+      </Device>
+    </Devices>
+  </Descriptions>
+</EtherCATInfo>

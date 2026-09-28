@@ -416,6 +416,11 @@ static void test_sii_pdo_category(void)
     check("Mailbox protocol word: CoE bit set (CoE server present)",
           c1[0].sii_image_buf[28] & SII_MBX_PROTOCOL_COE, SII_MBX_PROTOCOL_COE);
     free(c1);
+
+    esc_t *cc = make_chain(1, 4);
+    check_hex("SII word 7 = CRC-8 of config words 0..6 (ETG.2010)", 
+          cc[0].sii_image_buf[7], 0x00E9);
+    free(cc);
 }
 
 /* Small local helper: build+process one AL Control request through the
