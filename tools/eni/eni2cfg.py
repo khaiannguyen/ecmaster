@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""eni2cfg.py -- GD8 8.4: convert an ENI (EtherCATConfig XML, e.g. exported by
+TwinCAT) into the line-based .enicfg that libecmaster loads at runtime.
+
+Why not SOEM's eniconv.py / add_eni(): see docs/eni.md. In short, SOEM's
+path is build-time (one binary per ENI), keeps only slaves that have CoE
+InitCmds, silently skips a slave whose identity does not match, and swallows
+SDO failures. ecm_run needs the FULL slave list (for the identity/topology
+check, E-03), the expected I/O sizes (layout check), DC settings, and every
+CoE InitCmd with its transitions -- and it runs them itself.
+
+What is read, per Config/Slave:
+  Info/{VendorId, ProductCode, RevisionNo, PhysAddr, AutoIncAddr, Name}
+  InitCmds: presence of "check revision number" (-> check_rev 1);
+            the PS write of 0x0980 (-> DC AssignActivate)
+  ProcessData/{Send,Recv}/BitLength (-> osize/isize), cross-checked against
+            the sum of RxPdo/TxPdo entry BitLen assigned to an SM
+  DC/{ReferenceClock, CycleTime0, CycleTime1, ShiftTime}
+  Mailbox/CoE/InitCmds/InitCmd (Disabled=1 skipped)
+And Config/Cyclic/CycleTime.
+
+Deliberately NOT used: register InitCmds (SOEM + libecmaster configure SM,
+FMMU, AL state and DC themselves), logical addresses / process image offsets
+(SOEM builds its own IOmap), cyclic frame layout. docs/eni.md explains why.
+
+Output format (one record per line, '#' comments, fields space separated,
+numbers in hex with 0x prefix except counts/times in decimal):
+
+  enicfg 1
+  source <file name> sha256 <hex>
+  cycle_us <n>
+  slaves <n>
+  slave <pos> name <quoted> vendor 0x.. product 0x.. rev 0x.. check_rev 0|1
+        addr 0x.. osize_bits <n> isize_bits <n>
+        dc 0|1 refclock 0|1 sync0_ns <n> sync1_ns <n> shift_ns <n> assign 0x....
+  coe <pos> trans <IP,PS,..> ccs <1|2> index 0x.... sub 0x.. ca 0|1 timeout_ms <n> data <hex|->
+
+(the slave record is one physical line; wrapped here for reading)
+
+Usage:
+  eni2cfg.py config/eni/eni_8node_dc_sdo.xml [-o out.enicfg]
+Exit code 0 on success, 1 on any inconsistency found in the ENI.
+"""
+import hashlib
+import os
+import sys
+import xml.etree.ElementTree as ET
+
+REG_DC_ACTIVATION = 0x0980
+TRANSITIONS = {"IP", "PI", "PS", "SP", "SO", "OS", "SI", "OI", "IB", "BI", "II", "PP", "SS", "OO"}
+
+
+def num(text, default=None):
+    """ENI numbers: decimal, '#x..' or '0x..'."""
+    if text is None:
+        return default
+    t = text.strip()
+    if t.startswith(("#x", "#X")):
+        return int(t[2:], 16)
+    return int(t, 0)
+
+
+def fail(msg):
+    raise ValueError(msg)
+
+
+def slave_position(info, index_in_file):
+    """SOEM position (1-based) from AutoIncAddr, same rule as eniconv.py:
+    position = 1 - AutoIncAddr (16-bit). Falls back to file order."""
+    aia = info.findtext("AutoIncAddr")
+    if aia is None:
+        return index_in_file + 1
+    return (1 - num(aia)) & 0xFFFF
+
+
+def pdo_bits(pd, tag):
+    """Sum of entry BitLen over PDOs of kind tag that are assigned to an SM."""
+    total = 0
+    for pdo in pd.findall(tag):
+        if pdo.get("Sm") is None:
+            continue  # not assigned -> not in the process image
+        for e in pdo.findall("Entry"):
+            total += num(e.findtext("BitLen"), 0)
+    return total
+
+
+def parse_slave(s, idx):
+    info = s.find("Info")
+    if info is None:
+        fail(f"slave #{idx}: no Info")
+    rec = {
+        "pos": slave_position(info, idx),
+        "name": (info.findtext("Name") or "").strip(),
+        "vendor": num(info.findtext("VendorId"), 0),
+        "product": num(info.findtext("ProductCode"), 0),
+        "rev": num(info.findtext("RevisionNo"), 0),
+        "addr": num(info.findtext("PhysAddr"), 0),
+    }
+
+    inits = s.find("InitCmds")
+    rec["check_rev"] = 0
+    rec["assign"] = 0
+    if inits is not None:
+        for ic in inits.findall("InitCmd"):
+            comment = (ic.findtext("Comment") or "").lower()
+            if "check revision" in comment:
+                rec["check_rev"] = 1
+            trans = {t.text for t in ic.findall("Transition")}
+            if num(ic.findtext("Ado"), -1) == REG_DC_ACTIVATION and "PS" in trans:
+                data = bytes.fromhex(ic.findtext("Data") or "")
+                if len(data) >= 2:
+                    rec["assign"] = data[0] | data[1] << 8
+
+    pd = s.find("ProcessData")
+    osize = isize = 0
+    if pd is not None:
+        send, recv = pd.find("Send"), pd.find("Recv")
+        osize = num(send.findtext("BitLength"), 0) if send is not None else 0
+        isize = num(recv.findtext("BitLength"), 0) if recv is not None else 0
+        rx, tx = pdo_bits(pd, "RxPdo"), pdo_bits(pd, "TxPdo")
+        if rx != osize:
+            fail(f"slave {rec['pos']}: Send BitLength {osize} != RxPdo entries {rx}")
+        if tx != isize:
+            fail(f"slave {rec['pos']}: Recv BitLength {isize} != TxPdo entries {tx}")
+    rec["osize"], rec["isize"] = osize, isize
+
+    dc = s.find("DC")
+    if dc is not None:
+        rec["dc"] = 1
+        rec["refclock"] = 1 if (dc.findtext("ReferenceClock") or "").strip().lower() == "true" else 0
+        rec["sync0"] = num(dc.findtext("CycleTime0"), 0)
+        rec["sync1"] = num(dc.findtext("CycleTime1"), 0)
+        rec["shift"] = num(dc.findtext("ShiftTime"), 0)
+        if rec["assign"] == 0:
+            fail(f"slave {rec['pos']}: DC block but no PS write of 0x0980 (AssignActivate)")
+    else:
+        rec.update(dc=0, refclock=0, sync0=0, sync1=0, shift=0)
+        if rec["assign"] != 0:
+            fail(f"slave {rec['pos']}: 0x0980 written but no DC block")
+
+    coe = []
+    mbx_coe = s.find("Mailbox/CoE/InitCmds")
+    if mbx_coe is not None:
+        for ic in mbx_coe.findall("InitCmd"):
+            if (ic.findtext("Disabled") or "").strip() in ("1", "true"):
+                continue
+            trans = [t.text.strip() for t in ic.findall("Transition")]
+            bad = [t for t in trans if t not in TRANSITIONS]
+            if not trans or bad:
+                fail(f"slave {rec['pos']}: CoE InitCmd with transitions {trans}")
+            ccs = num(ic.findtext("Ccs"), 0)
+            if ccs not in (1, 2):
+                fail(f"slave {rec['pos']}: CoE InitCmd ccs {ccs} (only 1=download, 2=upload)")
+            data = (ic.findtext("Data") or "").strip()
+            if data:
+                bytes.fromhex(data)  # validates
+            ca = (ic.get("CompleteAccess") or ic.findtext("CompleteAccess") or "0").strip()
+            coe.append({
+                "trans": ",".join(trans),
+                "ccs": ccs,
+                "index": num(ic.findtext("Index")),
+                "sub": num(ic.findtext("SubIndex"), 0),
+                "ca": 1 if ca in ("1", "true") else 0,
+                "timeout": num(ic.findtext("Timeout"), 0),
+                "data": data.lower() or "-",
+            })
+    rec["coe"] = coe
+    return rec
+
+
+def convert(path):
+    raw = open(path, "rb").read()
+    root = ET.fromstring(raw)
+    cfg = root.find("Config")
+    if cfg is None:
+        fail("no Config element (not an EtherCATConfig file?)")
+    slaves = [parse_slave(s, i) for i, s in enumerate(cfg.findall("Slave"))]
+    if not slaves:
+        fail("no slaves")
+
+    positions = [r["pos"] for r in slaves]
+    if sorted(positions) != list(range(1, len(slaves) + 1)):
+        fail(f"slave positions not 1..{len(slaves)}: {positions}")
+    slaves.sort(key=lambda r: r["pos"])
+
+    addrs = [r["addr"] for r in slaves]
+    if len(set(addrs)) != len(addrs):
+        fail(f"duplicate station addresses {addrs}")
+    refs = [r["pos"] for r in slaves if r["refclock"]]
+    if len(refs) > 1:
+        fail(f"more than one reference clock: {refs}")
+    if any(r["dc"] for r in slaves) and not refs:
+        fail("DC slaves but no reference clock")
+
+    cycle_us = num(cfg.findtext("Cyclic/CycleTime"), 0)
+
+    out = [
+        "# generated by tools/eni/eni2cfg.py -- do not edit, regenerate from the ENI",
+        "enicfg 1",
+        f"source {os.path.basename(path)} sha256 {hashlib.sha256(raw).hexdigest()}",
+        f"cycle_us {cycle_us}",
+        f"slaves {len(slaves)}",
+    ]
+    for r in slaves:
+        name = r["name"].replace('"', "'")
+        out.append(
+            f'slave {r["pos"]} name "{name}" vendor 0x{r["vendor"]:X} product 0x{r["product"]:X} '
+            f'rev 0x{r["rev"]:X} check_rev {r["check_rev"]} addr 0x{r["addr"]:04X} '
+            f'osize_bits {r["osize"]} isize_bits {r["isize"]} '
+            f'dc {r["dc"]} refclock {r["refclock"]} sync0_ns {r["sync0"]} sync1_ns {r["sync1"]} '
+            f'shift_ns {r["shift"]} assign 0x{r["assign"]:04X}'
+        )
+    for r in slaves:
+        for c in r["coe"]:
+            out.append(
+                f'coe {r["pos"]} trans {c["trans"]} ccs {c["ccs"]} index 0x{c["index"]:04X} '
+                f'sub 0x{c["sub"]:02X} ca {c["ca"]} timeout_ms {c["timeout"]} data {c["data"]}'
+            )
+    return "\n".join(out) + "\n"
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 2
+    src = args[0]
+    dst = None
+    if "-o" in args:
+        dst = args[args.index("-o") + 1]
+    try:
+        text = convert(src)
+    except (ValueError, ET.ParseError) as e:
+        print(f"eni2cfg: {src}: {e}", file=sys.stderr)
+        return 1
+    if dst:
+        with open(dst, "w") as f:
+            f.write(text)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

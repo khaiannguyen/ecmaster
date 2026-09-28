@@ -146,7 +146,9 @@
 #include "libecmaster/telemetry/histogram.h"
 #include "libecmaster/mailbox/ecm_mailbox.h"
 #include "libecmaster/core/ecm_dc.h"
-#include "libecmaster/diag/ecm_diag.h"       /* Giai doan 7.2 */
+#include "libecmaster/diag/ecm_diag.h"     
+#include "libecmaster/config/ecm_eni.h"
+#include "libecmaster/config/ecm_eni_soem.h"
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -201,6 +203,10 @@ static struct {
     uint64_t wrap_n; int64_t wrap_sum_e, wrap_emax;
     uint64_t settle_ticks;
 } g_dcstat;
+
+static const char *g_eni_path;
+static ecm_eni_t   g_eni;         /* large; file scope, never on the stack */
+static int         g_eni_on;
 
 /* Opened in main(), BEFORE any thread is created -- see the Giai doan 4
  * post-mortem note in giai_doan_4_ke_hoach.md §5.2: opening this inside
@@ -1103,7 +1109,9 @@ static uint64_t le64(const uint8_t *p)
 static void dc_restore_slave(int s)
 {
     ec_slavet *sl = &ctx.slavelist[s];
-    if (!g_dc_enabled || sl->group != GROUP_MOTION || !sl->hasdc) return;
+    /* Giai doan 8.4: with --eni, SYNC0 slaves are the ENI's DC slaves */
+    int had_sync0 = g_eni_on ? g_eni.slave[s - 1].dc : (sl->group == GROUP_MOTION);
+    if (!g_dc_enabled || !had_sync0 || !sl->hasdc) return;
     ec_slavet *rf = &ctx.slavelist[g_dc_ref];
 
     int32_t dly = (int32_t)htoel((uint32_t)sl->pdelay);
@@ -1131,7 +1139,8 @@ static void dc_restore_slave(int s)
     int64_t delta = (int64_t)(t_ref - t_sl) + (sl->pdelay - rf->pdelay);
     int64_t new_off = (int64_t)htoell((uint64_t)(old_off + delta));
     ecx_FPWR(&ctx.port, sl->configadr, ECT_REG_DCSYSOFFSET, sizeof(new_off), &new_off, EC_TIMEOUTRET);
-    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)g_dc_cyc_ns, 0);
+    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)g_dc_cyc_ns,
+                g_eni_on ? g_eni.slave[s - 1].shift_ns : 0);
     fprintf(stderr, "ecm_run: [RECOVERY] slave %d: DC restored (delay %d ns, offset step %+lld ns), SYNC0 re-armed\n",
             s, sl->pdelay, (long long)delta);
 }
@@ -1141,10 +1150,11 @@ static void dc_restore_slave(int s)
  * the duration of one reconfiguration. */
 static int reconfig_po2so_hook(ecx_contextt *c, uint16 slave)
 {
-    (void)c;
     int f = write_sm_watchdog(slave);
+    /* Giai doan 8.4: a power-cycled slave lost the ENI's PS CoE writes too */
+    int eni_ok = g_eni_on ? ecm_eni_soem_po2so(c, slave) : 1;
     dc_restore_slave(slave);
-    return f == 0;
+    return f == 0 && eni_ok;
 }
 
 /* Path B: address + full reconfiguration of one slave (1-based), leaves it
@@ -1378,14 +1388,36 @@ int main(int argc, char **argv)
             g_fresh_off = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--fresh-stale") == 0 && i + 1 < argc) {
             g_fresh_stale = (uint32_t)atol(argv[++i]);
+        } else if (strcmp(argv[i], "--eni") == 0 && i + 1 < argc) {   /* Giai doan 8.4 */
+            g_eni_path = argv[++i];
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
             return 1;
         }
     }
+    if (g_eni_path) {
+        char err[512];
+        if (ecm_eni_load(g_eni_path, &g_eni, err, sizeof(err)) != 0) {
+            fprintf(stderr, "ecm_run: --eni: %s\n", err);
+            return 1;
+        }
+        if (ecm_eni_soem_supported(&g_eni) != 0) {
+            fprintf(stderr, "ecm_run: --eni: ENI uses features ecm_run cannot execute, refusing\n");
+            return 1;
+        }
+        if (n <= 0) {
+            n = g_eni.nslaves;
+        } else if (n != g_eni.nslaves) {
+            fprintf(stderr, "ecm_run: --n %d but ENI %s describes %d slaves\n", n, g_eni.source, g_eni.nslaves);
+            return 1;
+        }
+        g_eni_on = 1;
+        fprintf(stderr, "ecm_run: ENI %s (from %s): %d slaves, %d CoE InitCmd(s), cycle %u us, DC ref %d\n",
+                g_eni_path, g_eni.source, g_eni.nslaves, g_eni.ncoe, g_eni.cycle_us, ecm_eni_refclock(&g_eni));
+    }
     if (!ifname || n <= 0 || motion_slaves <= 0 || motion_slaves >= n) {
         fprintf(stderr,
-            "Usage: %s --iface <veth_m> --n <total_slaves> --motion-slaves <count> "
+            "Usage: %s --iface <veth_m> --n <total_slaves> --motion-slaves <count> [--eni FILE.enicfg] "
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
@@ -1428,7 +1460,13 @@ int main(int argc, char **argv)
         ecx_close(&ctx);
         return 1;
     }
-    if (wc < n) {
+    if (g_eni_on) {
+        if (ecm_eni_soem_check_identity(&ctx, &g_eni) != 0) {
+            fprintf(stderr, "ecm_run: bus does not match the ENI, refusing to configure\n");
+            ecx_close(&ctx);
+            return 1;
+        }
+    } else if (wc < n) {
         fprintf(stderr, "Warning: found %d slave(s), expected %d -- continuing with what was found.\n", wc, n);
         n = wc;
         if (motion_slaves >= n) motion_slaves = n - 1;
@@ -1439,8 +1477,36 @@ int main(int argc, char **argv)
         ctx.slavelist[s].group = (s <= motion_slaves) ? GROUP_MOTION : GROUP_IO;
     }
 
+    if (g_eni_on) {
+        /* IP InitCmds need the mailbox, i.e. PRE-OP (ecx_config_init requested it) */
+        if (ecx_statecheck(&ctx, 0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE) != EC_STATE_PRE_OP) {
+            fprintf(stderr, "ecm_run: --eni: bus not in PRE-OP before InitCmds\n");
+            ecx_close(&ctx); return 1;
+        }
+        if (ecm_eni_soem_run_transition(&ctx, &g_eni, ECM_ENI_T_IP, 0) != 0) {
+            fprintf(stderr, "ecm_run: --eni: IP InitCmd failed, refusing\n");
+            ecx_close(&ctx); return 1;
+        }
+        ecm_eni_soem_arm_po2so(&ctx, &g_eni);    /* PS InitCmds run inside map_group */
+    }
+
     int motion_iomap_size = ecx_config_map_group(&ctx, IOmap_motion, GROUP_MOTION);
     int io_iomap_size     = ecx_config_map_group(&ctx, IOmap_io,     GROUP_IO);
+
+    if (g_eni_on) {
+        for (int s = 1; s <= ctx.slavecount; s++)
+            ctx.slavelist[s].PO2SOconfig = NULL;   /* recovery installs its own */
+        if (ecm_eni_soem_po2so_failures() != 0) {
+            fprintf(stderr, "ecm_run: --eni: %d PS InitCmd(s) failed, refusing SAFE-OP\n",
+                    ecm_eni_soem_po2so_failures());
+            ecx_close(&ctx); return 1;
+        }
+        if (ecm_eni_soem_check_layout(&ctx, &g_eni) != 0) {
+            fprintf(stderr, "ecm_run: --eni: mapped process data differs from the ENI, refusing\n");
+            ecx_close(&ctx); return 1;
+        }
+    }
+
     fprintf(stderr, "ecm_run: GROUP_MOTION (%d slave, %d byte IOmap), GROUP_IO (%d slave, %d byte IOmap)\n",
             motion_slaves, motion_iomap_size, n - motion_slaves, io_iomap_size);
 
@@ -1551,6 +1617,27 @@ int main(int argc, char **argv)
      * they go here with the SM watchdog writes: before any thread exists
      * (Giai doan 5 lesson: a blocking frame from another thread while the
      * RT loop runs desyncs g_tx_order), and in PREOP, before SAFEOP. ---- */
+    if (g_eni_on && !no_dc) {
+        int ref = ecm_eni_refclock(&g_eni);
+        if (ref == 0) {
+            fprintf(stderr, "ecm_run: ENI has no DC slave -> DC off\n");
+            no_dc = 1;
+        } else if (ref != 1) {
+            fprintf(stderr, "ecm_run: ENI reference clock is slave %d; ecm_run needs slave 1\n", ref);
+            ecx_close(&ctx); return 1;
+        } else {
+            for (int i = 0; i < g_eni.nslaves; i++) {
+                const ecm_eni_slave_t *e = &g_eni.slave[i];
+                if (e->dc && (e->sync0_ns != (uint32_t)(motion_cycle_us * 1000L) ||
+                              e->assign != 0x0300 || e->sync1_ns != 0)) {
+                    fprintf(stderr, "ecm_run: ENI slave %d DC (sync0 %u ns, sync1 %u, assign 0x%04X) "
+                            "not supported with motion cycle %ld us (need sync0 = cycle, SYNC0 only, 0x0300)\n",
+                            i + 1, e->sync0_ns, e->sync1_ns, e->assign, motion_cycle_us);
+                    ecx_close(&ctx); return 1;
+                }
+            }
+        }
+    }
     if (!no_dc) {
         ecx_configdc(&ctx);
         uint16_t ref = ctx.grouplist[GROUP_MOTION].DCnext;
@@ -1568,11 +1655,17 @@ int main(int argc, char **argv)
             int64_t cyc = motion_cycle_us * 1000L;
             int sync0_n = 0;
             for (int s = 1; s <= ctx.slavecount; s++) {
+                /* Giai doan 8.4: with --eni the ENI decides which slaves get
+                 * SYNC0 (and their shift); otherwise GROUP_MOTION as before. */
+                int want_sync0 = g_eni_on
+                    ? (g_eni.slave[s - 1].dc && ctx.slavelist[s].hasdc)
+                    : (ctx.slavelist[s].group == GROUP_MOTION && ctx.slavelist[s].hasdc);
+                int32 shift = g_eni_on ? g_eni.slave[s - 1].shift_ns : 0;
                 fprintf(stderr, "ecm_run: dc slave %d hasdc=%d pdelay=%d ns%s\n", s,
                         ctx.slavelist[s].hasdc, ctx.slavelist[s].pdelay,
-                        ctx.slavelist[s].group == GROUP_MOTION ? " SYNC0" : "");
-                if (ctx.slavelist[s].group == GROUP_MOTION && ctx.slavelist[s].hasdc) {
-                    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)cyc, 0);
+                        want_sync0 ? " SYNC0" : "");
+                if (want_sync0) {
+                    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)cyc, shift);
                     sync0_n++;
                 }
             }
