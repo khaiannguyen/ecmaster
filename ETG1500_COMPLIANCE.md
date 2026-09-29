@@ -3,14 +3,18 @@
 > **This is a self-assessment, NOT a certification.** Not verified against the ETG EtherCAT
 > Conformance Test Tool. Source: ETG.1500 D(R) 1.0.2, ethercat.org.
 
-> This project does **not** implement item 1201 (Slave-to-Slave Communication) meaning the project does not fully qualify for either class in the strict
-> either class in the strict sense of the spec; it reaches "most of Class B plus part of Class A", consistent with the self-assessment approach.
+> This project does **not** implement item 1201 (Slave-to-Slave Communication), so it does not fully
+> qualify for either class in the strict sense of the spec; it reaches "most of Class B plus part of
+> Class A", consistent with the self-assessment approach. Since GD8 8.4 (ENI import) item 503 Complete
+> Access also becomes a Class B `shall` and is not implemented yet (see 503).
+>
+> Last update: GD8 (29/9/2026) -- ENI import, ESI, TwinCAT/IgH cross-checks, ETF launch time.
 
 ## Basic Features
 
 | ID | Feature | Class A | Class B | SOEM 2.0 available | Project implements | Notes |
 |---|---|---|---|---|---|---|
-| 101 | Service Commands | shall (if ENI import) | shall (if ENI import) | ✅ | ✅ | Via `ecx_*` API |
+| 101 | Service Commands | shall (if ENI import) | shall (if ENI import) | ✅ | ✅ | Via `ecx_*` API. Mandatory since GD8 8.4 (ENI import). All DL commands are available through SOEM; the golden capture (CI) pins the sequence the master actually uses. ESI/SII flag `UseLrdLwr` (slaves without LRW) not evaluated yet |
 | 102 | IRQ field in datagram | should | should | ✅ | ⏳ | Not prioritized yet, easy to add later |
 | 103 | Slaves with Device Emulation | shall | shall | ✅ | ✅ | Handled via AL Status per slave |
 | 104 | EtherCAT State Machine (ESM) | shall | shall | ✅ | ✅ | Phase 3 |
@@ -32,11 +36,11 @@
 | ID | Feature | Class A | Class B | SOEM 2.0 available | Project implements | Notes |
 |---|---|---|---|---|---|---|
 | 301 | Online scanning | at least 1 of 2 | at least 1 of 2 | ✅ | ✅ | Verified via `slaveinfo` |
-| — | Reading ENI | (the other option for 301) | (the other option for 301) | ✅ | ✅ | Phase 8, TwinCAT export |
-| 302 | Compare network config at boot-up | shall | shall | ⏳ | ✅ | VendorID/ProductCode comparison — Phase 7 diagnostics |
+| — | Reading ENI | (the other option for 301) | (the other option for 301) | ❌ (SOEM has no ENI reader) | ✅ | GD8 8.4: TwinCAT 4024 ENI → `eni2cfg.py` → `.enicfg` → `libecmaster/config` (`ecm_run --eni`). E-01…E-05: OP + CoE InitCmd on the wire, A/B identical with/without ENI, wrong identity/revision rejected, SDO abort → SAFE-OP refused, golden ENI in CI. Online scan still runs to cross-check |
+| 302 | Compare network config at boot-up | shall | shall | ⏳ | ✅ | ENI mode (GD8 8.4): slave count, VendorID, ProductCode, RevisionNo (per ENI `check_rev`) and process data layout compared before SAFE-OP, mismatch = start refused (E-03a/b/c). Online mode: Phase 7 diagnostics. SerialNo, IdentificationAdo and topology are not compared |
 | 303 | Explicit Device Identification | should | should | ⏳ | ❌ | Not needed, no Hot Connect |
 | 304 | Station Alias Addressing | may | may | ✅ | ❌ | Not needed |
-| 305 | Access to EEPROM | Read shall / Write may | Read shall / Write may | ✅ | ✅ | Already used in practice (PDI_SELECT on LAN9252) |
+| 305 | Access to EEPROM | Read shall / Write may | Read shall / Write may | ✅ | ✅ | Already used in practice (PDI_SELECT on LAN9252). GD8 8.1: SII read by this master and by IgH is byte-identical (X-01a, N=1/8/32) |
 
 ## Mailbox Support
 
@@ -53,7 +57,7 @@
 |---|---|---|---|---|---|---|
 | 501 | SDO Up/Download | shall | shall | ✅ | ✅ | L4 test series |
 | 502 | Segmented Transfer | shall | should | ✅ | ✅ | Handled by SOEM automatically for >4 bytes |
-| 503 | Complete Access | shall | should (shall if ENI) | ✅ | ⏳ | Used as needed, not yet prioritized |
+| 503 | Complete Access | shall | should (**shall if ENI import**) | ✅ (`ecx_SDOread/write` CA flag) | ❌ | **Gap since GD8 8.4**: ENI import is supported, so this is a Class B `shall`. Today `eni2cfg.py` keeps the `CompleteAccess` flag and the loader refuses the start with an explicit `complete access not supported` (no silent wrong download). Needed: execute CA InitCmds via `ecx_SDOwrite(..., CA=TRUE)` and test it (soft_bus has no CA / segmented download yet). Planned GD9 |
 | 504 | SDO Info service | shall | should | ✅ | ✅ | **Exact code path read in `ec_coe.c` GET_OD_REQ** |
 | 505 | Emergency Message | shall | shall | ✅ | ✅ | |
 | 506 | PDO transmission with CoE | may | may | ✅ | ❌ | Spec itself states "no relevant use case known" |
@@ -91,7 +95,7 @@
 
 | Feature Pack | Category | Project implements | Notes |
 |---|---|---|---|
-| FP Cable Redundancy — Basic Functions | M | 🤔 | Phase 11 if time permits, SOEM already supports it |
+| FP Cable Redundancy — Basic Functions | M | 🤔 | GD8 8.6 (optional) not done — **not verified**. SOEM supports it (`ecx_init_redundant`); the SO_TXTIME patch leaves the secondary port on plain `send()` |
 | FP Cable Redundancy — Diagnosis Functions | M | 🤔 | Bundled with the above |
 | FP Cable Redundancy — Redundancy with Hot Connect | O | ❌ | Not implemented, depends on 1201 which is also skipped |
 | FP Cable Redundancy — Redundancy with DC | O | ❌ | Optional, not prioritized |
@@ -104,6 +108,15 @@
 | FP Device Replacement | — | ❌ | Spec states "to be defined" |
 | FP Mailbox Gateway | — | ❌ | Spec states "to be defined" |
 
+## Related evidence (not ETG.1500 feature IDs)
+
+| Topic | Result | Where |
+|---|---|---|
+| ESI for the soft_bus simulator | Validates against the ESI XML schema 1.17 (`tools/esi/check_xsd.sh`, CI, with negative control); accepted by TwinCAT 4024.78; `esi_check.py` SII ↔ ESI cross-check | GD8 8.2, 8.3 |
+| Cross-check with IgH EtherCAT Master 1.6.13 | IgH brings the same bus (N=8) to OP for 600 s with 0 WKC errors, DC bus shift + SYNC0 | GD8 8.1 (X-01a/b/c) |
+| Cross-check with TwinCAT 3 as master | TwinCAT drives soft_bus over a real cable: OP, OP→PREOP, CoE online read/write, device scan | GD8 8.3 (X-02s) |
+| Launch time (TSN, SO_TXTIME + ETF offload on i226) | `ecm_run --link etf`: motion frame launched by the NIC at the cycle target, offset ~314 ns, spread ~30 ns; R-02 A/B vs af_packet: no WKC loss at N=8/32, DC error p99 halved at N=8. Not an ETG requirement; a master-side implementation choice for 201/1101 | GD8 8.5, `docs/i226.md` |
+
 ## Self-assessment conclusion
 
-The project meets most of **Class B** (every Class B `shall` item is implemented, except 1201), plus a substantial part of **Class A** (including DC, which Class A requires at a higher bar than Class B in some respects). No claim of fully meeting either class is made, due to the deliberate omission of 1201 (Slave-to-Slave) — a scoping decision, not a technical shortcoming.
+The project meets most of **Class B** (every Class B `shall` item is implemented, except 1201 and — since ENI import made it mandatory — 503 Complete Access), plus a substantial part of **Class A** (including DC, which Class A requires at a higher bar than Class B in some respects). No claim of fully meeting either class is made, due to the deliberate omission of 1201 (Slave-to-Slave) — a scoping decision, not a technical shortcoming.
