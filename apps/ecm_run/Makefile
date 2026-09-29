@@ -19,10 +19,10 @@ ENI_SRC = ../../libecmaster/config/ecm_eni.c ../../libecmaster/config/ecm_eni_so
 
 all: $(TARGET)
 
-$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC)
+$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(SOEM_LIB)
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
 	@echo "Using SOEM lib: $(SOEM_LIB)"
-	$(CC) $(CFLAGS) -o $@ $^ $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
 setcap: $(TARGET)
 	sudo setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep ./$(TARGET)
