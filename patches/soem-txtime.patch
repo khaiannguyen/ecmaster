@@ -1,5 +1,5 @@
 diff --git a/oshw/linux/nicdrv.c b/oshw/linux/nicdrv.c
-index 190d903..31cb69c 100644
+index 190d903..8fb2ffc 100644
 --- a/oshw/linux/nicdrv.c
 +++ b/oshw/linux/nicdrv.c
 @@ -46,6 +46,17 @@
@@ -31,7 +31,7 @@ index 190d903..31cb69c 100644
        port->stack.sock = &(port->sockhandle);
        port->stack.txbuf = &(port->txbuf);
        port->stack.txbuflength = &(port->txbuflength);
-@@ -261,6 +276,117 @@ void ecx_setbufstat(ecx_portt *port, uint8 idx, int bufstat)
+@@ -261,6 +276,149 @@ void ecx_setbufstat(ecx_portt *port, uint8 idx, int bufstat)
        port->redport->rxbufstat[idx] = bufstat;
  }
  
@@ -74,6 +74,9 @@ index 190d903..31cb69c 100644
 +   port->txtime_ns_per_byte = ns_per_byte;
 +   port->txtime_late = 0;
 +   port->txtime_send_err = 0;
++   port->txtime_bypass = 0;
++   port->txtime_etf_prio = so_priority;
++   port->txtime_cur_prio = so_priority;   /* set by the setsockopt above */
 +   port->txtime_enabled = 1;
 +   pthread_mutex_unlock(&(port->tx_mutex));
 +   return 1;
@@ -87,6 +90,24 @@ index 190d903..31cb69c 100644
 +   pthread_mutex_unlock(&(port->tx_mutex));
 +}
 +
++/* v2: SO_PRIORITY selects the mqprio traffic class (etf prio -> ETF queue,
++ * 0 -> a plain queue). Called with tx_mutex held; changes it only if needed. */
++static int ecx_txtime_prio(ecx_portt *port, int sock, int prio)
++{
++   if (port->txtime_cur_prio == prio)
++      return 0;
++   if (setsockopt(sock, SOL_SOCKET, SO_PRIORITY, &prio, sizeof(prio)) < 0)
++      return -1;
++   port->txtime_cur_prio = prio;
++   return 0;
++}
++
++/* v2: only the frame scheduled with ecx_txtime_set_next(), still at least
++ * asap_ns ahead, goes through ETF with SCM_TXTIME. Every other frame (config,
++ * mailbox, IO group, diag, or a scheduled frame already too late) leaves NOW
++ * on SO_PRIORITY 0, a queue without ETF: it needs no launch time and must not
++ * wait asap_ns (R-02: that wait cost the IO group its receive budget at N=32).
++ * Requires mqprio with ETF on the etf class only; a root ETF drops these. */
 +static int ecx_send_txtime(ecx_portt *port, int sock, const void *buf, int len)
 +{
 +   char cbuf[CMSG_SPACE(sizeof(uint64_t))];
@@ -102,12 +123,23 @@ index 190d903..31cb69c 100644
 +   t = port->txtime_next;
 +   port->txtime_next = 0;
 +   if (t != 0 && t < now + port->txtime_asap_ns)
-+      port->txtime_late++;                   /* scheduled too late: send asap */
-+   if (t == 0 || t < now + port->txtime_asap_ns)
-+      t = now + port->txtime_asap_ns;
++   {
++      port->txtime_late++;                   /* too late for ETF: send now */
++      t = 0;
++   }
++   if (t == 0)
++   {
++      rval = ecx_txtime_prio(port, sock, 0) < 0 ? -1 : (int)send(sock, buf, (size_t)len, 0);
++      if (rval == -1)
++         port->txtime_send_err++;
++      else
++         port->txtime_bypass++;
++      pthread_mutex_unlock(&(port->tx_mutex));
++      return rval;
++   }
 +   /* ETF drops a frame whose txtime is below one already dequeued: keep the
-+    * launch times of this socket strictly increasing, spaced by the wire time
-+    * of the previous frame (+ preamble, FCS, inter-frame gap = 24 bytes). */
++    * launch times of the ETF frames strictly increasing, spaced by the wire
++    * time of the previous one (+ preamble, FCS, inter-frame gap = 24 bytes). */
 +   if (port->txtime_last_len > 0)
 +   {
 +      min_t = port->txtime_last +
@@ -131,7 +163,7 @@ index 190d903..31cb69c 100644
 +   cm->cmsg_len = CMSG_LEN(sizeof(uint64_t));
 +   memcpy(CMSG_DATA(cm), &txtime, sizeof(txtime));
 +
-+   rval = (int)sendmsg(sock, &msg, 0);
++   rval = ecx_txtime_prio(port, sock, port->txtime_etf_prio) < 0 ? -1 : (int)sendmsg(sock, &msg, 0);
 +   if (rval == -1)
 +   {
 +      port->txtime_send_err++;
@@ -149,7 +181,7 @@ index 190d903..31cb69c 100644
  /** Transmit buffer over socket (non blocking).
   * @param[in] port        = port context struct
   * @param[in] idx         = index in tx buffer array
-@@ -282,7 +408,10 @@ int ecx_outframe(ecx_portt *port, uint8 idx, int stacknumber)
+@@ -282,7 +440,10 @@ int ecx_outframe(ecx_portt *port, uint8 idx, int stacknumber)
     }
     lp = (*stack->txbuflength)[idx];
     (*stack->rxbufstat)[idx] = EC_BUF_TX;
@@ -162,7 +194,7 @@ index 190d903..31cb69c 100644
     {
        (*stack->rxbufstat)[idx] = EC_BUF_EMPTY;
 diff --git a/oshw/linux/nicdrv.h b/oshw/linux/nicdrv.h
-index 010d8ef..7062703 100644
+index 010d8ef..dd318c6 100644
 --- a/oshw/linux/nicdrv.h
 +++ b/oshw/linux/nicdrv.h
 @@ -17,6 +17,7 @@ extern "C" {
@@ -173,7 +205,7 @@ index 010d8ef..7062703 100644
  
  /** pointer structure to Tx and Rx stacks */
  typedef struct
-@@ -86,6 +87,16 @@ typedef struct
+@@ -86,6 +87,19 @@ typedef struct
     pthread_mutex_t getindex_mutex;
     pthread_mutex_t tx_mutex;
     pthread_mutex_t rx_mutex;
@@ -187,10 +219,13 @@ index 010d8ef..7062703 100644
 +   uint32_t txtime_ns_per_byte;/* wire time per byte: 8 at 1 Gbit/s, 80 at 100 Mbit/s */
 +   uint32_t txtime_late;       /* scheduled time already too close: sent at now + asap */
 +   uint32_t txtime_send_err;   /* sendmsg() failures (ETF drop -> ENOBUFS) */
++   uint32_t txtime_bypass;     /* v2: frames sent now on SO_PRIORITY 0 (no ETF) */
++   int txtime_etf_prio;        /* v2: SO_PRIORITY that mqprio maps to the ETF queue */
++   int txtime_cur_prio;        /* v2: SO_PRIORITY currently set on the socket */
  } ecx_portt;
  
  extern const uint16 priMAC[3];
-@@ -96,6 +107,12 @@ int ecx_setupnic(ecx_portt *port, const char *ifname, int secondary);
+@@ -96,6 +110,12 @@ int ecx_setupnic(ecx_portt *port, const char *ifname, int secondary);
  int ecx_closenic(ecx_portt *port);
  void ecx_setbufstat(ecx_portt *port, uint8 idx, int bufstat);
  uint8 ecx_getindex(ecx_portt *port);

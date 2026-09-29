@@ -293,7 +293,8 @@ static uint64_t g_foreign_replies[3];           /* [group]: reply header != what
  * `next` (CLOCK_MONOTONIC) stays the tick's target. With --link etf the RT
  * thread wakes g_etf_lead_us earlier and gives the motion frame
  * SCM_TXTIME = next + (TAI - MONO); the NIC launches it at `next` (ETF
- * offload). Every other frame gets now_tai + asap inside SOEM. lead < ETF
+ * offload). Every other frame leaves at once on SO_PRIORITY 0, a queue
+ * without ETF (SOEM v2, needs mqprio; a root ETF drops them). lead < ETF
  * delta: the sender dequeues the frame itself, no qdisc hrtimer involved. */
 #ifndef SO_EE_ORIGIN_TXTIME
 #define SO_EE_ORIGIN_TXTIME 6
@@ -1566,8 +1567,9 @@ int main(int argc, char **argv)
      * every frame without a valid txtime is dropped, config included. */
     if (g_link_etf) {
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
-        if (g_etf_lead_us <= 0 || g_etf_lead_us >= motion_cycle_us / 2 || g_etf_asap_us <= 0) {
-            fprintf(stderr, "ecm_run: --link etf: need 0 < lead < cycle/2 and asap > 0 (lead %ld, asap %ld us)\n",
+        if (g_etf_lead_us <= 0 || g_etf_lead_us >= motion_cycle_us / 2 || g_etf_asap_us <= 0
+            || g_etf_asap_us >= g_etf_lead_us) {   /* 8.5 v2: asap < lead */
+            fprintf(stderr, "ecm_run: --link etf: need 0 < asap < lead < cycle/2 (lead %ld, asap %ld us)\n",
                     g_etf_lead_us, g_etf_asap_us);
             ecx_close(&ctx); return 1;
         }
@@ -1959,8 +1961,12 @@ int main(int argc, char **argv)
         /* Giai doan 7.3 §2: every receive in this tick ends by the deadline,
          * computed from the tick's TARGET time (not t_wake), so a late wake
          * shortens the budget instead of pushing the next tick. */
-        g_tick_deadline_ns = ts_to_ns(&next) - (uint64_t)lead_ns
-                           + (uint64_t)(motion_cycle_us * 1000L) - RX_GUARD_NS;   /* 8.5: from the wake target */
+        /* 8.5 v2: with --link etf the motion frame leaves at `next`, and the
+         * next tick's motion frame only has to be SENT by next + cycle - asap
+         * (the lead only covers the sleep), so the receives may run until
+         * next + cycle - asap - guard. af_packet: next + cycle - guard. */
+        g_tick_deadline_ns = ts_to_ns(&next) + (uint64_t)(motion_cycle_us * 1000L)
+                           - (uint64_t)(g_link_etf ? g_etf_asap_us * 1000L : 0) - RX_GUARD_NS;
         ecm_bus_tick(&g_bus);
         quar_expire(tick);                          /* Giai doan 7.4 */
         ecm_event_t bus_ev;
@@ -2202,9 +2208,9 @@ int main(int argc, char **argv)
     /* ---- Giai doan 8.5: link backend ---- */
     if (g_link_etf) {
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
-        fprintf(stderr, "  [LINK] etf: lead=%ld us asap=%ld us; SOEM: late(sent asap)=%u send_err=%u; "
+        fprintf(stderr, "  [LINK] etf: lead=%ld us asap=%ld us; SOEM: late(sent now)=%u bypass(no ETF)=%u send_err=%u; "
                 "ETF drops (error queue): missed=%lu invalid=%lu other=%lu; TAI steps=%" PRIu64 " (max %.1f us)\n",
-                g_etf_lead_us, g_etf_asap_us, ctx.port.txtime_late, ctx.port.txtime_send_err,
+                g_etf_lead_us, g_etf_asap_us, ctx.port.txtime_late, ctx.port.txtime_bypass, ctx.port.txtime_send_err,
                 atomic_load(&g_etf_missed), atomic_load(&g_etf_invalid), atomic_load(&g_etf_other),
                 g_tai_steps, g_tai_step_max / 1000.0);
 #endif
