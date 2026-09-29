@@ -45,3 +45,6 @@ tools/xcheck/igh_x01b
 tools/soft_bus/sii_dump
 tools/soft_bus/log_l1_*/
 libecmaster/config/test_eni_offline
+tools/etf/clock_check
+tools/etf/txtime_probe
+tools/etf/soem_txtime_smoke

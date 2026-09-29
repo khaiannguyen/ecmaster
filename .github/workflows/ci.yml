@@ -11,9 +11,17 @@
 #  l5-smoke  a subset of the L5 fault-injection cases. GitHub runners are
 #            shared and not RT, so this job reports but does not block
 #            (continue-on-error); the reference results come from the Jetson.
+#  etf-soft  GD8 8.5: `ecm_run --link etf` on a multi-queue veth pair with
+#            mqprio + ETF in SOFTWARE mode (tools/etf/run_etf_veth.sh): smoke
+#            (motion frames through ETF, all others bypass it, no ETF drop) and
+#            the L5 subset with --link etf. Functional only -- veth has no
+#            launch-time offload; launch accuracy is measured on the i226
+#            (R-02, docs i226.md). Non-blocking like l5-smoke.
 #
 # SOEM: v2.0.0, EC_MAXGROUP=4 (ecm_run uses group 2), plus
-# patches/soem-mbx-cnt.patch (L5-12, see docs/fault_policy.md §11).
+# patches/soem-mbx-cnt.patch (L5-12, see docs/fault_policy.md §11) and
+# patches/soem-txtime.patch (GD8 8.5, SO_TXTIME; off unless --link etf, so the
+# golden capture must not change).
 name: CI
 
 on:
@@ -33,7 +41,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        run: sudo apt-get update && sudo apt-get install -y build-essential libxml2-utils curl
+      - name: ESI against the ESI XML schema (GD8 8.2, schema 1.17 + negative control)
+        run: tools/esi/check_xsd.sh
       - name: soft_bus (SII, ESM, DC, fault injection)
         run: make -C tools/soft_bus test
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
@@ -60,10 +70,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git tshark python3
-      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt patch)
+      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt + txtime patches)
         run: |
           git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
           patch -d "$SOEM_DIR" -p1 < patches/soem-mbx-cnt.patch
+          patch -d "$SOEM_DIR" -p1 < patches/soem-txtime.patch
           cmake -S "$SOEM_DIR" -B "$SOEM_DIR/build" -DEC_MAXGROUP=4
           cmake --build "$SOEM_DIR/build" -j
       - name: Build soft_bus and ecm_run
@@ -107,10 +118,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git
-      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt patch)
+      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt + txtime patches)
         run: |
           git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
           patch -d "$SOEM_DIR" -p1 < patches/soem-mbx-cnt.patch
+          patch -d "$SOEM_DIR" -p1 < patches/soem-txtime.patch
           cmake -S "$SOEM_DIR" -B "$SOEM_DIR/build" -DEC_MAXGROUP=4
           cmake --build "$SOEM_DIR/build" -j
       - name: Build
@@ -131,3 +143,33 @@ jobs:
       - name: 7.4 late/stale/mailbox (L5-09, L5-12 + negative control)
         working-directory: apps/ecm_run
         run: sudo -E SB_ARGS=--no-sm-wd CASES="l509 l509neg l512" ./run_l5_io.sh
+
+  etf-soft:
+    name: ETF software mode, --link etf (veth + mqprio, non-blocking)
+    needs: offline
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git
+      - name: Qdisc modules (mqprio, etf)
+        run: |
+          sudo modprobe sch_mqprio && sudo modprobe sch_etf || {
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe sch_mqprio && sudo modprobe sch_etf; }
+      - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt + txtime patches)
+        run: |
+          git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
+          patch -d "$SOEM_DIR" -p1 < patches/soem-mbx-cnt.patch
+          patch -d "$SOEM_DIR" -p1 < patches/soem-txtime.patch
+          cmake -S "$SOEM_DIR" -B "$SOEM_DIR/build" -DEC_MAXGROUP=4
+          cmake --build "$SOEM_DIR/build" -j
+      - name: Build
+        run: |
+          make -C tools/soft_bus
+          for d in apps/ecm_run apps/l4_test; do make -C "$d" SOEM_DIR="$SOEM_DIR"; done
+      - name: --link etf smoke + L5 subset (own veth pair vethe_m/vethe_s)
+        run: sudo -E tools/etf/run_etf_veth.sh all
