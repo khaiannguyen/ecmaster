@@ -184,6 +184,21 @@ int main(int argc, char **argv)
         perror("bind"); close(fd); free(chain); return 1;
     }
 
+    /* Real NICs filter multicast in hardware. TwinCAT sends EtherCAT frames
+     * to 01:01:05:01:00:00, which the i226 drops unless the interface is
+     * promiscuous (X-02s, GD8 8.3: rx_packets stood still until tshark
+     * happened to switch promisc on). SOEM does the same in nicdrv.c. A
+     * socket membership (not `ip link ... promisc on`) is released
+     * automatically when soft_bus exits. veth never filtered, so this was
+     * invisible on the veth rig. */
+    struct packet_mreq mr;
+    memset(&mr, 0, sizeof(mr));
+    mr.mr_ifindex = ifindex;
+    mr.mr_type    = PACKET_MR_PROMISC;
+    if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0) {
+        perror("PACKET_ADD_MEMBERSHIP (promiscuous)"); close(fd); free(chain); return 1;
+    }
+
     /* sigaction WITHOUT SA_RESTART: glibc signal() restarts recvfrom(), so
      * SIGINT never broke the blocking read and soft_bus had to be SIGKILLed
      * (losing the final dc_total report). Now recvfrom() returns EINTR and

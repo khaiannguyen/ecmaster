@@ -105,6 +105,14 @@ static int coe_lookup_readable(const esc_t *esc, uint16_t index, uint8_t subinde
 {
     uint32_t v;
     switch (index) {
+    case 0x1000: /* Device Type -- mandatory in CiA 301. TwinCAT reads it first
+                  * when a slave has no SDO Info and stops on an abort
+                  * ("Object 0x1000 could not be read", X-02s GD8 8.3).
+                  * 0 = no standard device profile. */
+        if (subindex != 0) return 0;
+        wr_le32(out, 0); *out_len = 4;
+        return 1;
+
     case 0x1018: /* Identity */
         if (subindex == 0) { out[0] = 4; *out_len = 1; return 1; } /* number of subindexes */
         switch (subindex) {
@@ -366,7 +374,9 @@ void coe_on_mailbox_out_write(esc_t *esc)
         uint8_t  scratch[COE_SEGTEST_BLOB_SIZE];
         uint32_t len;
         if (!coe_lookup_readable(esc, index, subindex, scratch, &len)) {
-            coe_send_abort(resp, esc->coe_session.index, esc->coe_session.subindex, ABORT_OBJECT_DOES_NOT_EXIST);
+            /* Echo the REQUEST's index/subindex (was coe_session's, i.e. the
+             * last segmented transfer's -- missed by the X-01a fix). */
+            coe_send_abort(resp, index, subindex, ABORT_OBJECT_DOES_NOT_EXIST);
         } else if (len <= 4) {
             coe_send_upload_expedited(resp, index, subindex, scratch, (uint8_t)len);
         } else {

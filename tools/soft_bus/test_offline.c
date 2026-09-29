@@ -103,8 +103,8 @@ static void test_poweron_values(void)
     check("0x0005 SM supported",   c[0].regs[REG_SM_SUPPORTED], 4);
     check("0x0006 RAM size (KB)",  c[0].regs[REG_RAM_SIZE], 4);
     check_hex("0x0007 Port descriptor", c[0].regs[REG_PORT_DESCRIPTOR], ESC_PORTDESC_2ETH);
-    check_hex("0x0008 ESC features (bit0=byte-wise FMMU)",
-              rd16(c[0].regs + REG_ESC_FEATURES), ESC_FEATURE_FMMU_BYTEWISE);
+    check_hex("0x0008 ESC features (bit0=0: bit-oriented FMMU)",
+              rd16(c[0].regs + REG_ESC_FEATURES), 0x0000);
     check_hex("0x0130 AL Status = INIT (not 0)",
               rd16(c[0].regs + REG_AL_STATUS), ESM_INIT);
     check_hex("0x0010 Station addr not yet configured", rd16(c[0].regs + REG_STATION_ADDR), 0x0000);
@@ -543,6 +543,113 @@ static void test_esm_invalid_direct_jump(void)
     free(c);
 }
 
+/* ---- add to tools/soft_bus/test_offline.c, before main(), and call
+ *      test_esm_op_to_preop(); from main() after test_esm_invalid_direct_jump(); ---- */
+static void test_esm_op_to_preop(void)
+{
+    printf("\n[T15] ESM: OP -> PREOP directly (ETG.1000.6; TwinCAT uses it, X-02s)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_PREOP);
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);
+    c[0].got_valid_outputs = 1;              /* as after one LRW with outputs */
+    req_al_state(c, 1, buf, 0x1001, ESM_OP);
+    check_hex("reached OP", rd16(c[0].regs + REG_AL_STATUS), ESM_OP);
+
+    req_al_state(c, 1, buf, 0x1001, ESM_PREOP);
+    check_hex("OP -> PREOP accepted, no error bit", rd16(c[0].regs + REG_AL_STATUS), ESM_PREOP);
+    check_hex("AL status code = NOERROR", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_NOERROR);
+
+    /* negative control: a real invalid jump is still rejected */
+    req_al_state(c, 1, buf, 0x1001, ESM_OP);
+    check_hex("PREOP -> OP still rejected (+ERR)", rd16(c[0].regs + REG_AL_STATUS), (ESM_PREOP | 0x10));
+    check_hex("AL status code = INVALIDALCONTROL", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_INVALIDALCONTROL);
+
+    free(c);
+}
+
+static void test_fmmu_bit_mbox_state(void)
+{
+    printf("\n[T16] Bit FMMU: TwinCAT MBoxState (0x080D.0 -> 1 logical bit per slave)\n");
+    uint8_t buf[1600];
+    const int N = 3;
+    esc_t *c = make_chain(N, 4);
+    const uint32_t LOG = 0x09000000u;
+
+    for (int i = 0; i < N; i++) {
+        uint8_t *f = c[i].regs + REG_FMMU_BASE + 2 * REG_FMMU_ENTRY_SIZE;   /* FMMU2 */
+        wr32(f + FMMU_OFF_LOG_START, LOG);
+        wr16(f + FMMU_OFF_LENGTH, 1);
+        f[FMMU_OFF_LOG_START_BIT]  = (uint8_t)i;      /* slave i -> logical bit i */
+        f[FMMU_OFF_LOG_STOP_BIT]   = (uint8_t)i;
+        wr16(f + FMMU_OFF_PHYS_START, REG_SM1_STATUS);
+        f[FMMU_OFF_PHYS_START_BIT] = 0;               /* "interrupt write" */
+        f[FMMU_OFF_TYPE]     = 0x01;                  /* read */
+        f[FMMU_OFF_ACTIVATE] = 0x01;
+    }
+    /* slaves 0 and 2 have a response waiting */
+    c[0].regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
+    c[2].regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
+
+    uint8_t d[1] = {0xF0};                            /* bits the ESCs must not touch */
+    size_t flen = build_frame(buf, CMD_LRD, (uint16_t)(LOG & 0xFFFF), (uint16_t)(LOG >> 16), d, 1);
+    process_frame(c, N, buf, flen);
+    check("LRD MBoxState -> WKC (one per slave)", dg_wkc(buf, 1), N);
+    check_hex("MBoxState byte = F0 | bit0 | bit2", buf[14 + 2 + 10], 0xF5);
+
+    /* bit0 follows bit3 and is cleared together with it by reading SM1 */
+    uint8_t rd[1] = {0};
+    flen = build_frame(buf, CMD_APRD, 0x0000, REG_SM1_STATUS, rd, 1);
+    process_frame(c, N, buf, flen);
+    check_hex("APRD 0x080D slave 0 = full | irq write", buf[14 + 2 + 10] & 0x09, 0x09);
+
+    uint8_t mbx[128] = {0};
+    flen = build_frame(buf, CMD_APRD, 0x0000, SII_SM1_OFFSET, mbx, 128);
+    process_frame(c, N, buf, flen);
+    flen = build_frame(buf, CMD_LRD, (uint16_t)(LOG & 0xFFFF), (uint16_t)(LOG >> 16), d, 1);
+    process_frame(c, N, buf, flen);
+    check_hex("after SM1 read: slave 0 bit cleared, slave 2 still set", buf[14 + 2 + 10], 0xF4);
+
+    free(c);
+}
+
+static void test_esm_same_state_ack(void)
+{
+    printf("\n[T17] ESM: same state + ack bit (TwinCAT Scan writes 0x0011 in INIT)\n");
+    uint8_t buf[1600];
+    esc_t *c = make_chain(1, 4);
+
+    uint8_t addr_payload[2];
+    wr16(addr_payload, 0x1001);
+    size_t flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(c, 1, buf, flen);
+
+    /* 1. already INIT, no error, INIT + ack -> no error (was INIT+ERR 0x0011) */
+    req_al_state(c, 1, buf, 0x1001, (uint16_t)(ESM_INIT | 0x10));
+    check_hex("INIT + ack in INIT -> AL status INIT, no ERR", rd16(c[0].regs + REG_AL_STATUS), ESM_INIT);
+    check_hex("AL status code = NOERROR", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_NOERROR);
+
+    /* 2. an error exists: same state WITHOUT ack keeps it, WITH ack clears it */
+    req_al_state(c, 1, buf, 0x1001, ESM_SAFEOP);                 /* INIT->SAFEOP: invalid */
+    check_hex("INIT -> SAFEOP rejected (+ERR)", rd16(c[0].regs + REG_AL_STATUS), (ESM_INIT | 0x10));
+    req_al_state(c, 1, buf, 0x1001, ESM_INIT);
+    check_hex("INIT without ack keeps ERR", rd16(c[0].regs + REG_AL_STATUS), (ESM_INIT | 0x10));
+    req_al_state(c, 1, buf, 0x1001, (uint16_t)(ESM_INIT | 0x10));
+    check_hex("INIT + ack clears ERR", rd16(c[0].regs + REG_AL_STATUS), ESM_INIT);
+
+    /* 3. ack together with a real transition (TwinCAT: 0x0012 INIT -> PREOP) */
+    req_al_state(c, 1, buf, 0x1001, (uint16_t)(ESM_PREOP | 0x10));
+    check_hex("PREOP + ack from INIT -> PREOP", rd16(c[0].regs + REG_AL_STATUS), ESM_PREOP);
+
+    free(c);
+}
+
 int main(void)
 {
     printf("=========================================================\n");
@@ -564,6 +671,9 @@ int main(void)
     test_esm_safeop_to_op_without_outputs();
     test_esm_forced_reject();
     test_esm_invalid_direct_jump();
+    test_esm_op_to_preop();
+    test_fmmu_bit_mbox_state();
+    test_esm_same_state_ack();
 
     printf("\n=========================================================\n");
     printf(" RESULT: %d pass, %d fail\n", g_pass, g_fail);

@@ -5,10 +5,10 @@
  * physical hardware involved.
  *
  * Known limitations of this implementation (stated, not hidden):
- *  - FMMU only handles byte-aligned mappings (ignores LogicalStartBit/
- *    StopBit, PhysicalStartBit). Sufficient for the current L1 test suite
- *    since PDOs are byte-sized. Declared officially via ESC features
- *    register 0x0008 bit0=1 (byte-oriented FMMU) — see esc_init().
+ *  - FMMU: [RESOLVED, GD8 8.3 X-02s] bit-oriented mappings are handled
+ *    (LogicalStartBit/StopBit, PhysicalStartBit), byte-aligned ones keep the
+ *    original byte path. TwinCAT maps the SM1 "mailbox full" signal with a
+ *    1-bit FMMU (MBoxState, 0x080D.0) — see fmmu_apply_bits().
  *  - AL Control/Status (ESM state transitions) not implemented — that is
  *    Phase 3 scope (state machine).
  *  - Distributed Clocks (0x0900+) not implemented — Phase 4 scope.
@@ -230,9 +230,9 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     esc->regs[REG_RAM_SIZE]        = 4; /* KB, matches LAN9252 */
     esc->regs[REG_PORT_DESCRIPTOR] = ESC_PORTDESC_2ETH;
 
-    /* Officially declare the byte-oriented-FMMU limitation via the protocol
-     * itself, rather than leaving it as an implicit comment. */
-    wr_le16(esc->regs + REG_ESC_FEATURES, ESC_FEATURE_FMMU_BYTEWISE);
+    /* 0x0008 bit0 = 0: bit-oriented FMMU operation (GD8 8.3). Until X-02s
+     * this was 1 (byte-oriented) and TwinCAT ignored it anyway. */
+    wr_le16(esc->regs + REG_ESC_FEATURES, 0x0000);
 
     /* Reset value = 1 (INIT), NOT 0 — 0 is not a valid ESM state. */
     wr_le16(esc->regs + REG_AL_CONTROL, ESM_INIT);
@@ -307,11 +307,34 @@ static void esc_sii_refresh_data(esc_t *esc)
     wr_le16(esc->regs + REG_SII_DATA + 2, v1);
 }
 
+#ifndef SM_STATUS_IRQ_WRITE
+#define SM_STATUS_IRQ_WRITE 0x01u
+#endif
+
+/* SM1 status bit0 "interrupt write" (Sec. II 2.14.4): 1 after the writer
+ * (here the PDI side, i.e. the slave posting a response) completed the
+ * buffer, 0 after the reader (ECAT) read the first byte. In mailbox mode
+ * that is exactly "mailbox full" (bit3), so bit0 is derived from bit3 on
+ * every ECAT read instead of being set at each place that posts a response
+ * (esc_coe.c, repeat request, fault injection).
+ * TwinCAT polls THIS bit through its 1-bit MBoxState FMMU (logical
+ * 0x09000000.0 <- 0x080D.0) and never fetches a response without it:
+ * "Object 0x1000 could not be read" (X-02s, GD8 8.3). SOEM and IgH test
+ * bit3 with FPRD, which is why this went unnoticed. */
+static inline void esc_sm1_sync_irq_write(esc_t *esc)
+{
+    if (esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL)
+        esc->regs[REG_SM1_STATUS] |= (uint8_t)SM_STATUS_IRQ_WRITE;
+    else
+        esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_IRQ_WRITE;
+}
+
 /* Plain read (no OR) — used for APRD/FPRD/L*RD, overwrites `data` directly. */
 static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint16_t len)
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
     esc_dc_before_read(esc, phys_offset, len);
+    esc_sm1_sync_irq_write(esc);
 
     //if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
     //    esc_sii_refresh_data(esc);
@@ -337,6 +360,7 @@ static void esc_phys_read_or(esc_t *esc, uint16_t phys_offset, uint8_t *data, ui
 {
     if (phys_offset + (uint32_t)len > ESC_REG_SPACE_SIZE) return;
     esc_dc_before_read(esc, phys_offset, len);
+    esc_sm1_sync_irq_write(esc);
     //if (phys_offset < REG_SII_DATA + 4 && phys_offset + len > REG_SII_DATA) {
     //    esc_sii_refresh_data(esc);
     //}
@@ -570,6 +594,67 @@ static int esc_addr_match(const esc_t *esc, uint16_t adp)
  * the write direction — matching a single ESC's contribution regardless of
  * how many of its own FMMUs the datagram happened to touch.
  * ========================================================================== */
+static inline int bit_get(const uint8_t *b, uint32_t i)
+{
+    return (b[i >> 3] >> (i & 7u)) & 1;
+}
+
+static inline void bit_put(uint8_t *b, uint32_t i, int v)
+{
+    if (v) b[i >> 3] |= (uint8_t)(1u << (i & 7u));
+    else   b[i >> 3] &= (uint8_t)~(1u << (i & 7u));
+}
+
+/* Bit-oriented FMMU (Sec. I §6, Sec. II 2.13): logical bits
+ * [lbit0, lbit_end) map to physical bits starting at pbit0. Logical bits of
+ * the datagram outside the mapping are left untouched (other slaves' bits in
+ * the same byte, e.g. TwinCAT's MBoxState byte with N slaves). Returns a
+ * bit mask: 1 = read applied, 2 = write applied. */
+static int fmmu_apply_bits(esc_t *esc, uint32_t log_addr, uint8_t *data, uint16_t dlen,
+                           uint64_t lbit0, uint64_t lbit_end, uint32_t pbit0,
+                           int seg_read, int seg_write)
+{
+    uint64_t d0 = (uint64_t)log_addr * 8u, d1 = d0 + (uint64_t)dlen * 8u;
+    uint64_t o0 = lbit0 > d0 ? lbit0 : d0;
+    uint64_t o1 = lbit_end < d1 ? lbit_end : d1;
+    if (o0 >= o1 || (!seg_read && !seg_write)) return 0;
+
+    uint32_t nbits   = (uint32_t)(o1 - o0);
+    uint32_t dbit    = (uint32_t)(o0 - d0);            /* first bit in data[] */
+    uint32_t pb      = pbit0 + (uint32_t)(o0 - lbit0); /* first physical bit  */
+    uint32_t pbyte   = pb >> 3;
+    uint32_t plen    = ((pb + nbits + 7u) >> 3) - pbyte;
+    uint32_t pbit_in = pb & 7u;                        /* first bit in phys[] */
+    if (pbyte + plen > ESC_REG_SPACE_SIZE) return 0;
+
+    uint32_t dbyte = dbit >> 3;
+    uint32_t dlen_b = ((dbit + nbits + 7u) >> 3) - dbyte;
+    uint8_t *phys = malloc(plen), *wsrc = malloc(dlen_b);
+    if (!phys || !wsrc) { free(phys); free(wsrc); return 0; }
+    memcpy(wsrc, data + dbyte, dlen_b);  /* write value BEFORE the read overwrites it */
+    int done = 0;
+
+    if (seg_read) {
+        esc_phys_read(esc, (uint16_t)pbyte, phys, (uint16_t)plen);
+        for (uint32_t k = 0; k < nbits; k++)
+            bit_put(data, dbit + k, bit_get(phys, pbit_in + k));
+        done |= 1;
+    }
+    if (seg_write) {
+        /* read-modify-write AFTER the read, so side effects of the read
+         * (mailbox flag, DC latch) are not undone by stale bytes */
+        memcpy(phys, esc->regs + pbyte, plen);
+        uint32_t wbit = dbit - dbyte * 8u;
+        for (uint32_t k = 0; k < nbits; k++)
+            bit_put(phys, pbit_in + k, bit_get(wsrc, wbit + k));
+        esc_phys_write(esc, (uint16_t)pbyte, phys, (uint16_t)plen);
+        done |= 2;
+    }
+    free(phys);
+    free(wsrc);
+    return done;
+}
+
 static void fmmu_apply(esc_t *esc, uint32_t log_addr, uint8_t *data,
                         uint16_t dlen, uint8_t cmd, uint16_t *wkc)
 {
@@ -584,7 +669,25 @@ static void fmmu_apply(esc_t *esc, uint32_t log_addr, uint8_t *data,
         uint16_t length     = rd_le16(e + FMMU_OFF_LENGTH);
         uint16_t phys_start = rd_le16(e + FMMU_OFF_PHYS_START);
         uint8_t  type_op    = e[FMMU_OFF_TYPE];
+        uint8_t  lstart_bit = e[FMMU_OFF_LOG_START_BIT]  & 7u;
+        uint8_t  lstop_bit  = e[FMMU_OFF_LOG_STOP_BIT]   & 7u;
+        uint8_t  pstart_bit = e[FMMU_OFF_PHYS_START_BIT] & 7u;
         uint32_t fmmu_end   = log_start + length;
+
+        if (length == 0) continue;
+        if (lstart_bit != 0 || lstop_bit != 7 || pstart_bit != 0) {
+            /* bit-oriented mapping (GD8 8.3) */
+            uint64_t lbit0    = (uint64_t)log_start * 8u + lstart_bit;
+            uint64_t lbit_end = ((uint64_t)log_start + length - 1u) * 8u + lstop_bit + 1u;
+            if (lbit_end <= lbit0) continue;                /* invalid entry */
+            int r = (type_op & 0x01) && (cmd == CMD_LRD || cmd == CMD_LRW);
+            int w = (type_op & 0x02) && (cmd == CMD_LWR || cmd == CMD_LRW);
+            int done = fmmu_apply_bits(esc, log_addr, data, dlen, lbit0, lbit_end,
+                                       (uint32_t)phys_start * 8u + pstart_bit, r, w);
+            if (done & 1) any_read = 1;
+            if (done & 2) { any_write = 1; esc->got_valid_outputs = 1; }
+            continue;
+        }
 
         uint32_t ov_start = (log_addr > log_start) ? log_addr : log_start;
         uint32_t ov_end   = (dg_end < fmmu_end) ? dg_end : fmmu_end;
@@ -646,20 +749,21 @@ void esc_al_control_write(esc_t *esc)
     uint8_t  current    = al_status & 0x0F;
     uint8_t  had_error  = (al_status >> 4) & 0x1;
 
-    /* Error ack: master acknowledges — clear error flag, state unchanged.
-     * (No new state requested this write — SOEM sends ack alone.) */
-    if (error_ack && had_error && requested == current) {
-        wr_le16(esc->regs + REG_AL_STATUS, current); /* bit4 cleared implicitly */
-        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);
-        return;
-    }
-
-    /* [Phase 7] Requesting the state the slave is already in is not a
-     * transition: nothing changes, and an existing error indication stays
-     * until it is acknowledged. SOEM's ecx_recover_slave() writes INIT to a
-     * slave that has just powered up in INIT; the old code answered that
-     * with INIT+ERR 0x0011. */
-    if (requested == current && !error_ack) {
+    /* Requesting the state the slave is already in is not a transition.
+     *  - with the ack bit: clear an existing error indication (SOEM sends
+     *    "current state + ack" to acknowledge);
+     *  - without it: nothing changes, an error stays until acknowledged
+     *    ([Phase 7] SOEM's ecx_recover_slave() writes INIT to a slave that
+     *    has just powered up in INIT).
+     * [GD8 8.3 X-02s, fix #10] The ack bit on a slave WITHOUT an error used
+     * to fall through to the transition table, which has no INIT->INIT, so
+     * TwinCAT's Scan (APWR 0x0120 = 0x0011 on a slave already in INIT) got
+     * INIT+ERR 0x0011 back. */
+    if (requested == current) {
+        if (error_ack && had_error) {
+            wr_le16(esc->regs + REG_AL_STATUS, current); /* bit4 cleared */
+            wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);
+        }
         return;
     }
 
@@ -676,7 +780,12 @@ void esc_al_control_write(esc_t *esc)
         case ESM_PREOP:  valid_transition = (requested == ESM_INIT || requested == ESM_SAFEOP); break;
         case ESM_SAFEOP: valid_transition = (requested == ESM_PREOP || requested == ESM_INIT
                                              || requested == ESM_OP); break;
-        case ESM_OP:     valid_transition = (requested == ESM_SAFEOP || requested == ESM_INIT); break;
+        /* ETG.1000.6 ESM: OP -> PREOP is a valid direct transition (X-02s,
+         * GD8 8.3: TwinCAT's ENI goes OP -> PREOP when leaving OP; SOEM and
+         * IgH never use it, so the old table rejected it with 0x0011 and the
+         * slave stuck in OP+ERR). */
+        case ESM_OP:     valid_transition = (requested == ESM_SAFEOP || requested == ESM_PREOP
+                                             || requested == ESM_INIT); break;
         default: break;
     }
 

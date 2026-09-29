@@ -143,6 +143,14 @@
             </DataTypes>
             <Objects>
               <Object>
+                <Index>#x1000</Index>
+                <Name>Device type</Name>
+                <Type>UDINT</Type>
+                <BitSize>32</BitSize>
+                <Info><DefaultData>00000000</DefaultData></Info>
+                <Flags><Access>ro</Access></Flags>
+              </Object>
+              <Object>
                 <Index>#x1018</Index>
                 <Name>Identity</Name>
                 <Type>DT1018</Type>
