@@ -23,7 +23,7 @@
 #         -> IgH fails the configuration (abort 0x06010000), slaves stay
 #         below OP, igh_x01b returns non-zero
 #
-# Env: SOFT_BUS IGH_APP ETHERCAT IF_S N SECONDS SB_PRIO SB_CPU
+# Env: SOFT_BUS IGH_APP ETHERCAT IF_S N X04_SECONDS SB_PRIO SB_CPU
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -33,7 +33,7 @@ IGH_APP=${IGH_APP:-$HERE/igh_x01b}
 ETHERCAT=${ETHERCAT:-/opt/etherlab/bin/ethercat}
 IF_S=${IF_S:-veth_igs}
 N=${N:-8}
-SECONDS_RUN=${SECONDS:-25}
+SECONDS_RUN=${X04_SECONDS:-25}
 SB_PRIO=${SB_PRIO:-79}; SB_CPU=${SB_CPU:-2}
 LOG=${LOG:-log_x04_$(date +%Y%m%d_%H%M%S)}
 mkdir -p "$LOG"
