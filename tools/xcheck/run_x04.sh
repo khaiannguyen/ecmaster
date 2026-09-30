@@ -45,6 +45,10 @@ chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 for f in "$SOFT_BUS" "$IGH_APP" "$ETHERCAT"; do
     [ -x "$f" ] || { echo "missing $f (igh_x01b: see the build line in igh_x01b.c)"; exit 2; }
 done
+# A stale GD8 build of igh_x01b has no --complete-sdo: it prints Usage and
+# exits 1, which made X-04n "pass" for the wrong reason (Jetson 30/9).
+"$IGH_APP" --no-such-option 2>&1 | grep -q -- '--complete-sdo' || {
+    echo "$IGH_APP is an old build without --complete-sdo: rebuild it (see igh_x01b.c)"; exit 2; }
 lsmod | grep -q '^ec_master' || { echo "IgH not started: sudo /opt/etherlab/sbin/ethercatctl start"; exit 2; }
 
 sb_start () {  # name, args...
@@ -99,9 +103,10 @@ sb_start x04n
 timeout 30 "$IGH_APP" --n "$N" --seconds 10 --complete-sdo > "$LOG/igh_x04n.log" 2>&1; NRC=$?
 "$ETHERCAT" slaves > "$LOG/slaves_x04n.txt" 2>&1
 sb_stop
-dmesg | tail -200 | grep -iE "1c12|1c13|abort|complete" | tail -8 > "$LOG/dmesg_x04n.txt"
+dmesg | tail -400 | grep -iE "1c12|1c13|06010000|complete" | tail -8 > "$LOG/dmesg_x04n.txt"
 sed 's/^/    /' "$LOG/dmesg_x04n.txt"
-chk "X-04n igh_x01b fails (rc != 0)" "[ $NRC != 0 ]"
+chk "X-04n igh_x01b fails (rc != 0) after really running (no Usage)" \
+    "[ $NRC != 0 ] && ! grep -q '^Usage' $LOG/igh_x04n.log && grep -q 'config SDOs' $LOG/igh_x04n.log"
 chk "X-04n not all slaves in OP" "! grep -q 'all $N slaves in OP' $LOG/igh_x04n.log"
 chk "X-04n IgH log shows the abort 0x06010000 (dmesg)" "grep -qi '06010000' $LOG/dmesg_x04n.txt"
 
