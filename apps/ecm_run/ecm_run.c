@@ -134,6 +134,7 @@
 #include <linux/if_packet.h>
 #include <linux/net_tstamp.h>
 #include <linux/sockios.h>
+#include <linux/ethtool.h>   /* GD9.2: link speed -> ETF ns/byte */
 #include <linux/errqueue.h>   /* Giai doan 8.5: SO_EE_ORIGIN_TXTIME */
 #include <arpa/inet.h>
 
@@ -361,7 +362,7 @@ static int         g_link_etf        = 0;
 static long        g_etf_lead_us     = 200;
 static long        g_etf_asap_us     = 150;
 static int         g_etf_prio        = 3;
-static int         g_etf_ns_per_byte = 8;        /* 1 Gbit/s; 80 for a 100 Mbit/s link */
+static int         g_etf_ns_per_byte = 0;        /* 0 = from the link speed (GD9.2): 8 at 1 Gbit/s, 80 at 100 Mbit/s */
 static uint64_t    g_tai_steps;                  /* RT only */
 static int64_t     g_tai_step_max;               /* RT only, ns */
 static atomic_ulong g_etf_missed, g_etf_invalid, g_etf_other;   /* telemetry thread */
@@ -463,6 +464,26 @@ static int64_t tai_minus_mono_ns(void)
 }
 
 /* Startup only: is there an ETF qdisc with offload on this interface? */
+/* GD9.2: link speed in Mbit/s from the driver (ETHTOOL_GSET), -1 if unknown
+ * (veth reports SPEED_UNKNOWN). Used to pick the ETF ns/byte: at 100 Mbit/s
+ * a byte takes 80 ns, ten times the 1 Gbit/s value the frames were spaced
+ * with before, so back-to-back txtimes would overlap on the wire. */
+static __attribute__((unused)) int link_speed_mbps(const char *ifname)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    struct ethtool_cmd ec = { .cmd = ETHTOOL_GSET };
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", ifname);
+    ifr.ifr_data = (char *)&ec;
+    int rc = ioctl(fd, SIOCETHTOOL, &ifr);
+    close(fd);
+    if (rc < 0) return -1;
+    uint32_t sp = ethtool_cmd_speed(&ec);
+    return (sp == 0 || sp == (uint32_t)SPEED_UNKNOWN) ? -1 : (int)sp;
+}
+
 static int etf_qdisc_state(const char *ifname)
 {
     char cmd[128], line[512];
@@ -1656,6 +1677,18 @@ int main(int argc, char **argv)
             fprintf(stderr, "ecm_run: --link etf: need 0 < asap < lead < cycle/2 (lead %ld, asap %ld us)\n",
                     g_etf_lead_us, g_etf_asap_us);
             ecx_close(&ctx); return 1;
+        }
+        int sp = link_speed_mbps(ifname);
+        if (g_etf_ns_per_byte <= 0) {
+            /* Never below the 1 Gbit/s value 8 used until GD9.2 (veth reports
+             * 10 Gbit/s; the i226 at 2.5 Gbit/s never carries EtherCAT). */
+            g_etf_ns_per_byte = (sp > 0 && sp < 1000) ? (8000 + sp - 1) / sp : 8;
+            fprintf(stderr, "ecm_run: link etf: %s speed %d Mbit/s -> %d ns/byte%s\n", ifname, sp,
+                    g_etf_ns_per_byte, sp > 0 ? "" : " (speed unknown, 1 Gbit/s value kept)");
+        } else if (sp > 0 && g_etf_ns_per_byte * sp < 8000) {
+            fprintf(stderr, "ecm_run: WARNING --etf-ns-per-byte %d is too small for %d Mbit/s "
+                            "(needs >= %d): txtimes of back-to-back frames overlap\n",
+                    g_etf_ns_per_byte, sp, (8000 + sp - 1) / sp);
         }
         if (!ecx_txtime_enable(&ctx.port, g_etf_prio, (int64_t)g_etf_asap_us * 1000,
                                (uint32_t)g_etf_ns_per_byte)) {
