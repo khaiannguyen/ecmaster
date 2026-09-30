@@ -8,6 +8,8 @@
 #            the same scenario in ENI mode (GD8 8.4, E-05) must match
 #            tools/golden/golden_ecm_run_eni.txt, and an ENI without the
 #            Startup SDO must NOT match it
+#            GD9.1: the one-slave bus (every slave GROUP_MOTION, GROUP_IO
+#            empty) has its own golden, tools/golden/golden_ecm_run_n1.txt
 #  l5-smoke  a subset of the L5 fault-injection cases. GitHub runners are
 #            shared and not RT, so this job reports but does not block
 #            (continue-on-error); the reference results come from the Jetson.
@@ -97,6 +99,12 @@ jobs:
           sudo -E env ENI=config/eni/eni_8node_dc.enicfg
           GOLDEN=tools/golden/golden_ecm_run_eni.txt EXPECT_DIFF=1
           tools/golden/check_golden.sh
+      - name: Golden structure check, one-slave bus (GD9.1 G-08)
+        run: >
+          sudo -E env N=1 GROUP_ARGS= GOLDEN=tools/golden/golden_ecm_run_n1.txt
+          tools/golden/check_golden.sh
+      - name: --io-slaves 5-8 is the old --motion-slaves 4 (GD9.1 G-01b)
+        run: sudo -E env GROUP_ARGS="--io-slaves 5-8" tools/golden/check_golden.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -117,7 +125,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake git tshark python3
       - name: Build SOEM ${{ env.SOEM_TAG }} (EC_MAXGROUP=4, mailbox Cnt + txtime patches)
         run: |
           git clone --depth 1 --branch "$SOEM_TAG" https://github.com/OpenEtherCATsociety/SOEM "$SOEM_DIR"
@@ -143,6 +151,13 @@ jobs:
       - name: 7.4 late/stale/mailbox (L5-09, L5-12 + negative control)
         working-directory: apps/ecm_run
         run: sudo -E SB_ARGS=--no-sm-wd CASES="l509 l509neg l512" ./run_l5_io.sh
+      - name: GD9.1 group assignment, one-slave and motion-only buses (G-03..G-07)
+        run: sudo -E SB_ARGS=--no-sm-wd ECM_ARGS=--no-tx-ts NOFRAME_PCT=5 tools/gd9/run_groups.sh
+      - name: GD9.1 L5 on a one-slave bus (policy + io subset)
+        working-directory: apps/ecm_run
+        run: |
+          sudo -E N=1 M=0 L505_SLAVE=1 SB_ARGS=--no-sm-wd ECM_ARGS=--no-tx-ts OVR_MAX=50 CASES="l502 l505 l505neg" ./run_l5_policy.sh
+          sudo -E N=1 M=0 L509_SLAVE=1 SB_ARGS=--no-sm-wd CASES="l509 l509neg l512" ./run_l5_io.sh
 
   etf-soft:
     name: ETF software mode, --link etf (veth + mqprio, non-blocking)

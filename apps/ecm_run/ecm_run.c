@@ -289,6 +289,61 @@ static uint64_t g_stale_replies;                /* motion replies rejected by th
 static int      g_reply_check = 1;              /* --no-reply-check (negative control): count, don't act */
 static uint64_t g_foreign_replies[3];           /* [group]: reply header != what was sent */
 
+/* ---- Giai doan 9.1: group of every slave, from the command line ----
+ * Until GD8 slaves 1..k were GROUP_MOTION and k+1..n GROUP_IO, with
+ * 0 < k < n: a bus of ONE slave (P1/P2/P4: one LAN9252) or of motion
+ * slaves only (own slave + a commercial servo) could not run. Now:
+ *   default               every slave GROUP_MOTION, GROUP_IO empty
+ *   --io-slaves LIST      those positions GROUP_IO ("5-8", "2,4", "none")
+ *   --motion-slaves k     kept as before: 1..k motion, the rest IO
+ * GROUP_MOTION must not be empty: it carries the tick, the FRMW for DC(b)
+ * and the diagnostics. An empty GROUP_IO is never sent or received: SOEM
+ * sends nothing for a group of length 0 but its receive then returns
+ * EC_NOFRAME, which the fault policy would count as a lost IO frame. */
+static uint8_t  g_is_io[EC_MAXSLAVE + 1];       /* [SOEM slave], 1 = GROUP_IO */
+static int      g_io_active;                    /* GROUP_IO has at least one slave */
+
+/* "none" | comma list of positions or ranges, e.g. "5-8" or "2,4,6-7" */
+static int parse_slave_list(const char *s, uint8_t *mark, int max, char *err, size_t errsz)
+{
+    memset(mark, 0, (size_t)max + 1);
+    if (strcmp(s, "none") == 0) return 0;
+    const char *p = s;
+    while (*p) {
+        char *end;
+        long a = strtol(p, &end, 10), b = a;
+        if (end == p) { snprintf(err, errsz, "'%s': expected a slave position at '%s'", s, p); return -1; }
+        p = end;
+        if (*p == '-') {
+            p++;
+            b = strtol(p, &end, 10);
+            if (end == p) { snprintf(err, errsz, "'%s': expected the end of a range at '%s'", s, p); return -1; }
+            p = end;
+        }
+        if (a < 1 || b < a || b > max) {
+            snprintf(err, errsz, "'%s': position %ld-%ld outside 1..%d", s, a, b, max);
+            return -1;
+        }
+        for (long i = a; i <= b; i++) mark[i] = 1;
+        if (*p == ',') p++;
+        else if (*p) { snprintf(err, errsz, "'%s': unexpected '%c'", s, *p); return -1; }
+    }
+    return 0;
+}
+
+/* One process-data exchange of every non-empty group, blocking, outside
+ * the RT loop (before OP, keeping the watchdog fed, recovery). Order kept
+ * from GD3: motion send/receive, then IO send/receive. */
+static void pd_exchange_all(int timeout_us)
+{
+    ecx_send_processdata_group(&ctx, GROUP_MOTION);
+    ecx_receive_processdata_group(&ctx, GROUP_MOTION, timeout_us);
+    if (g_io_active) {
+        ecx_send_processdata_group(&ctx, GROUP_IO);
+        ecx_receive_processdata_group(&ctx, GROUP_IO, timeout_us);
+    }
+}
+
 /* ---- Giai doan 8.5 (R-02): --link etf (patches/soem-txtime.patch) ----
  * `next` (CLOCK_MONOTONIC) stays the tick's target. With --link etf the RT
  * thread wakes g_etf_lead_us earlier and gives the motion frame
@@ -454,10 +509,7 @@ static int request_op_keepalive(int timeout_us)
     struct timespec t0, now;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
-        ecx_send_processdata_group(&ctx, GROUP_MOTION);
-        ecx_receive_processdata_group(&ctx, GROUP_MOTION, EC_TIMEOUTRET);
-        ecx_send_processdata_group(&ctx, GROUP_IO);
-        ecx_receive_processdata_group(&ctx, GROUP_IO, EC_TIMEOUTRET);
+        pd_exchange_all(EC_TIMEOUTRET);   /* GD9.1: skips an empty GROUP_IO */
 
         ctx.slavelist[0].state = 0;
         ecx_readstate(&ctx);
@@ -1305,10 +1357,7 @@ static int recover_full(void)
     }
     /* Same sequence as at startup: valid outputs first, then OP with the
      * watchdog kept fed. */
-    ecx_send_processdata_group(&ctx, GROUP_MOTION);
-    ecx_receive_processdata_group(&ctx, GROUP_MOTION, EC_TIMEOUTRET);
-    ecx_send_processdata_group(&ctx, GROUP_IO);
-    ecx_receive_processdata_group(&ctx, GROUP_IO, EC_TIMEOUTRET);
+    pd_exchange_all(EC_TIMEOUTRET);
     int all_op = request_op_keepalive(RECOVER_OP_TIMEOUT_US);
     ecx_readstate(&ctx);
     int nop = 0;
@@ -1438,7 +1487,8 @@ int main(int argc, char **argv)
 {
     const char *ifname = NULL;
     int n = 0;
-    int motion_slaves = -1;
+    int motion_slaves = -1;          /* --motion-slaves k (alias, GD3..GD8) */
+    const char *io_list = NULL;      /* --io-slaves LIST (GD9.1) */
     long motion_cycle_us = 1000;
     long io_cycle_us     = 8000;
     long duration_sec    = 0; /* 0 = run until Ctrl+C */
@@ -1453,6 +1503,8 @@ int main(int argc, char **argv)
             n = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--motion-slaves") == 0 && i + 1 < argc) {
             motion_slaves = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--io-slaves") == 0 && i + 1 < argc) {   /* Giai doan 9.1 */
+            io_list = argv[++i];
         } else if (strcmp(argv[i], "--motion-cycle-us") == 0 && i + 1 < argc) {
             motion_cycle_us = atol(argv[++i]);
         } else if (strcmp(argv[i], "--io-cycle-us") == 0 && i + 1 < argc) {
@@ -1523,9 +1575,41 @@ int main(int argc, char **argv)
         fprintf(stderr, "ecm_run: ENI %s (from %s): %d slaves, %d CoE InitCmd(s), cycle %u us, DC ref %d\n",
                 g_eni_path, g_eni.source, g_eni.nslaves, g_eni.ncoe, g_eni.cycle_us, ecm_eni_refclock(&g_eni));
     }
-    if (!ifname || n <= 0 || motion_slaves <= 0 || motion_slaves >= n) {
+    /* Giai doan 9.1: group of every position. --motion-slaves k keeps its
+     * GD3..GD8 meaning (1..k motion, k+1..n IO, 0 < k < n) so every existing
+     * script and golden capture runs unchanged. */
+    int groups_ok = ifname && n > 0 && n <= EC_MAXSLAVE;
+    if (groups_ok && motion_slaves >= 0 && io_list) {
+        fprintf(stderr, "ecm_run: --motion-slaves and --io-slaves exclude each other\n");
+        groups_ok = 0;
+    } else if (groups_ok && motion_slaves >= 0) {
+        if (motion_slaves <= 0 || motion_slaves >= n) {
+            fprintf(stderr, "ecm_run: --motion-slaves %d needs 0 < k < n (%d); for a bus without "
+                    "IO slaves leave both options out (every slave is then a motion slave)\n", motion_slaves, n);
+            groups_ok = 0;
+        } else {
+            memset(g_is_io, 0, sizeof(g_is_io));
+            for (int s = motion_slaves + 1; s <= n; s++) g_is_io[s] = 1;
+        }
+    } else if (groups_ok && io_list) {
+        char err[160];
+        if (parse_slave_list(io_list, g_is_io, n, err, sizeof(err)) != 0) {
+            fprintf(stderr, "ecm_run: --io-slaves %s\n", err);
+            groups_ok = 0;
+        }
+    }
+    if (groups_ok) {
+        int nio = 0;
+        for (int s = 1; s <= n; s++) nio += g_is_io[s];
+        if (nio == n) {
+            fprintf(stderr, "ecm_run: every slave would be in GROUP_IO; GROUP_MOTION carries the tick, "
+                    "DC and diagnostics and needs at least one slave\n");
+            groups_ok = 0;
+        }
+    }
+    if (!groups_ok) {
         fprintf(stderr,
-            "Usage: %s --iface <veth_m> --n <total_slaves> --motion-slaves <count> [--eni FILE.enicfg] "
+            "Usage: %s --iface <veth_m> --n <total_slaves> [--io-slaves LIST | --motion-slaves <count>] [--eni FILE.enicfg] "
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
@@ -1603,13 +1687,27 @@ int main(int argc, char **argv)
     } else if (wc < n) {
         fprintf(stderr, "Warning: found %d slave(s), expected %d -- continuing with what was found.\n", wc, n);
         n = wc;
-        if (motion_slaves >= n) motion_slaves = n - 1;
+        /* GD3..GD8 behaviour of --motion-slaves: keep at least one IO slave */
+        if (motion_slaves >= n && n > 1) {
+            motion_slaves = n - 1;
+            for (int s = 1; s <= n; s++) g_is_io[s] = (uint8_t)(s > motion_slaves);
+        }
+        int nio = 0;
+        for (int s = 1; s <= n; s++) nio += g_is_io[s];
+        if (nio == n) {
+            fprintf(stderr, "ecm_run: the %d slave(s) found are all IO slaves, GROUP_MOTION would be empty\n", n);
+            ecx_close(&ctx);
+            return 1;
+        }
     }
 
     /* ---- Group assignment: MUST happen after config_init, before map_group ---- */
+    int n_motion = 0, n_io = 0;
     for (int s = 1; s <= n; s++) {
-        ctx.slavelist[s].group = (s <= motion_slaves) ? GROUP_MOTION : GROUP_IO;
+        ctx.slavelist[s].group = g_is_io[s] ? GROUP_IO : GROUP_MOTION;
+        if (g_is_io[s]) n_io++; else n_motion++;
     }
+    g_io_active = n_io > 0;
 
     if (g_eni_on) {
         /* IP InitCmds need the mailbox, i.e. PRE-OP (ecx_config_init requested it) */
@@ -1641,8 +1739,15 @@ int main(int argc, char **argv)
         }
     }
 
-    fprintf(stderr, "ecm_run: GROUP_MOTION (%d slave, %d byte IOmap), GROUP_IO (%d slave, %d byte IOmap)\n",
-            motion_slaves, motion_iomap_size, n - motion_slaves, io_iomap_size);
+    /* Giai doan 9.1: ecx_config_map_group()'s return value includes the
+     * logstartaddr that its mbxstatuslength is off by (see the GD5 note
+     * further below); up to GD8 this line printed e.g. "65572 byte" for a
+     * 36 byte motion map. Print the bytes the group really sends. */
+    motion_iomap_size -= (int)ctx.grouplist[GROUP_MOTION].logstartaddr;
+    io_iomap_size     -= (int)ctx.grouplist[GROUP_IO].logstartaddr;
+    fprintf(stderr, "ecm_run: GROUP_MOTION (%d slave, %d byte IOmap), GROUP_IO (%d slave, %d byte IOmap)%s\n",
+            n_motion, motion_iomap_size, n_io, io_iomap_size,
+            g_io_active ? "" : " -- GROUP_IO empty: never sent");
 
     motion = (group_stats_t){
         .label = "GROUP_MOTION", .group = GROUP_MOTION,
@@ -1825,10 +1930,7 @@ int main(int argc, char **argv)
 
     /* ---- One real cycle per group BEFORE requesting OP -- satisfies each
      * ESC's "must have received valid outputs" precondition (see L2-04). */
-    ecx_send_processdata_group(&ctx, GROUP_MOTION);
-    ecx_receive_processdata_group(&ctx, GROUP_MOTION, EC_TIMEOUTRET);
-    ecx_send_processdata_group(&ctx, GROUP_IO);
-    ecx_receive_processdata_group(&ctx, GROUP_IO, EC_TIMEOUTRET);
+    pd_exchange_all(EC_TIMEOUTRET);
 
     if (!request_op_keepalive(EC_TIMEOUTSTATE)) {
         fprintf(stderr, "Failed to reach OPERATIONAL\n"); ecx_close(&ctx); return 1;
@@ -1917,8 +2019,12 @@ int main(int argc, char **argv)
         }
     }
 
-    fprintf(stderr, "ecm_run: all slaves in OPERATIONAL. Starting cyclic loop (base tick = %ld us, IO every %ld ticks).\n",
-            motion_cycle_us, ticks_per_io);
+    if (g_io_active)
+        fprintf(stderr, "ecm_run: all slaves in OPERATIONAL. Starting cyclic loop (base tick = %ld us, IO every %ld ticks).\n",
+                motion_cycle_us, ticks_per_io);
+    else
+        fprintf(stderr, "ecm_run: all slaves in OPERATIONAL. Starting cyclic loop (base tick = %ld us, no IO group).\n",
+                motion_cycle_us);
     fprintf(stderr, "ecm_run: no further stderr output from the RT thread until the loop ends -- see the Giai doan 3 file header for why.\n");
 
     signal(SIGINT, on_sigint);
@@ -1975,7 +2081,7 @@ int main(int argc, char **argv)
         uint64_t motion_rx_ts_ns     = 0;
         int motion_wkc = 0;
         int64_t cycle_occupancy_ns = 0;
-        uint8_t io_due = (tick % (uint64_t)ticks_per_io == 0) ? 1 : 0;
+        uint8_t io_due = (g_io_active && tick % (uint64_t)ticks_per_io == 0) ? 1 : 0;   /* GD9.1 */
         uint8_t any_wkc_mismatch = 0;
         int64_t dc_adjust_ns = 0;
 
@@ -2079,7 +2185,7 @@ int main(int argc, char **argv)
                                               ts_to_ns(&t_wake), DIAG_MAX_AGE_TICKS);
                 if (r < 0) quar_add(g_diag_io.idx, tick);    /* Giai doan 7.4: gave up on it */
                 if (r != 0) {
-                    g_diag_raw_rt.ngroups = 2;
+                    g_diag_raw_rt.ngroups = g_io_active ? 2 : 1;   /* GD9.1 */
                     g_diag_raw_rt.wkc[0] = motion.wkcs;
                     g_diag_raw_rt.wkc[1] = io.wkcs;
                     g_diag_raw_rt.handoff_drops = g_diag_ho.drops;
@@ -2175,7 +2281,8 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "\n=== Final stats after %" PRIu64 " motion ticks ===\n", tick);
     print_stats(&motion);
-    print_stats(&io);
+    if (g_io_active) print_stats(&io);
+    else fprintf(stderr, "  [GROUP_IO] empty (no slave assigned), never sent\n");
 
     /* ---- Giai doan 6: DC(b) summary (RT loop has exited) ---- */
     if (g_dc_enabled) {
@@ -2250,7 +2357,7 @@ int main(int argc, char **argv)
             ecm_diag_finding_str(&f[i], al_code_str, line, sizeof(line));
             fprintf(stderr, "  [DIAG] %s\n", line);
         }
-        for (int g = 0; g < 2; g++) {
+        for (int g = 0; g < (g_io_active ? 2 : 1); g++) {   /* GD9.1 */
             const group_stats_t *gs = g ? &io : &motion;
             fprintf(stderr, "  [WKC %s] ok=%" PRIu64 " noframe=%" PRIu64 " zero=%" PRIu64
                     " partial=%" PRIu64 " over=%" PRIu64 " max_run_bad=%u\n", gs->label,

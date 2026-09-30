@@ -48,3 +48,5 @@ libecmaster/config/test_eni_offline
 tools/etf/clock_check
 tools/etf/txtime_probe
 tools/etf/soem_txtime_smoke
+tools/gd9/log_gd9_groups_*/
+log_gd9_groups_*/

@@ -24,6 +24,10 @@ ECM_RUN=${ECM_RUN:-$HERE/ecm_run}
 L4_TEST=${L4_TEST:-$HERE/../l4_test/l4_test}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 N=${N:-8}; M=${M:-4}
+# GD9.1: M=0 -> no --motion-slaves, every slave in GROUP_MOTION, GROUP_IO empty
+# (one-slave bus: N=1 M=0 L509_SLAVE=1; the IO-only checks are then skipped)
+if [ "$M" = 0 ]; then GRP=(); else GRP=(--motion-slaves "$M"); fi
+L509_SLAVE=${L509_SLAVE:-3}; L509_NODE=$((L509_SLAVE - 1))
 SB_PRIO=${SB_PRIO:-}; SB_CPU=${SB_CPU:-2}
 SB_ARGS=${SB_ARGS:-}; ECM_ARGS=${ECM_ARGS:-}
 OVR_MAX=${OVR_MAX:-20}
@@ -63,7 +67,7 @@ run_case () {
     local tag=$1 dur=$2 eargs=$3; shift 3
     sb_start "$tag" "" || return 1
     rm -f "$SNAP"
-    timeout --foreground $((dur + 60)) "$ECM_RUN" --iface "$IF_M" --n "$N" --motion-slaves "$M" \
+    timeout --foreground $((dur + 60)) "$ECM_RUN" --iface "$IF_M" --n "$N" ${GRP[@]+"${GRP[@]}"} \
         --duration-sec "$dur" --diag-file "$SNAP" --fresh-offset 0 $ECM_ARGS $eargs > "$LOG/er_$tag.log" 2>&1 &
     E=$!
     local t=0
@@ -92,8 +96,10 @@ l507)
     fm=$(foreign l507 motion); fi=$(foreign l507 io)
     echo "  caught: DC age gate=$(num l507 'age gate') foreign replies motion=$fm io=$fi, quarantined=$(num l507 parked)"
     chk "L5-07 no old reply reached the application (counter never went back)" "[ $(regr l507) = 0 ]"
+    if [ "$M" != 0 ]; then
     chk "L5-07 IO never took another frame's reply (PARTIAL/OVER = 0)" \
         "[ $(wkcf l507 IO partial) = 0 ] && [ $(wkcf l507 IO over) = 0 ]"
+    fi
     chk "L5-07 DC stayed locked (0 unlocks)" "[ $(unlocks l507) = 0 ]"
     o=$(grep "\[GROUP_MOTION\] cycles" "$LOG/er_l507.log" | grep -oE "overrun=[0-9]+" | cut -d= -f2)
     chk "L5-07 no overrun chain: motion overrun=${o:-?} <= $OVR_MAX" "[ ${o:-999} -le $OVR_MAX ]"
@@ -121,15 +127,15 @@ l508)
     fi
     ;;
 l509)
-    echo "=== L5-09: slave 3's TxPDO frozen for 60 PD frames, WKC stays correct"
-    run_case l509 6 "" "2:stale 2 60"
-    chk "L5-09 detected: slave 3 inputs unchanged although WKC is correct" "has l509 'slave 3: inputs UNCHANGED'"
-    chk "L5-09 reported back to normal" "has l509 'slave 3: inputs changing again'"
+    echo "=== L5-09: slave $L509_SLAVE's TxPDO frozen for 60 PD frames, WKC stays correct"
+    run_case l509 6 "" "2:stale $L509_NODE 60"
+    chk "L5-09 detected: slave $L509_SLAVE inputs unchanged although WKC is correct" "has l509 'slave $L509_SLAVE: inputs UNCHANGED'"
+    chk "L5-09 reported back to normal" "has l509 'slave $L509_SLAVE: inputs changing again'"
     chk "L5-09 no other slave flagged" "[ \$(grep -c 'inputs UNCHANGED' $LOG/er_l509.log) = 1 ]"
     ;;
 l509neg)
     echo "=== L5-09 negative control: same injection, checker threshold above it (--fresh-stale 1000)"
-    run_case l509neg 6 "--fresh-stale 1000" "2:stale 2 60"
+    run_case l509neg 6 "--fresh-stale 1000" "2:stale $L509_NODE 60"
     chk "L5-09neg nothing detected when the threshold is not reached" "! has l509neg 'inputs UNCHANGED'"
     ;;
 l512)

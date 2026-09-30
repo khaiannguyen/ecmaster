@@ -12,6 +12,9 @@
 # soft_bus node k = SOEM slave k+1; slaves 1..M are GROUP_MOTION (DC).
 #
 # Env: SOFT_BUS ECM_RUN SBCTL IF_M IF_S N M
+#      M=0             GD9.1: no --motion-slaves, every slave in GROUP_MOTION and
+#                      GROUP_IO empty (one-slave bus: N=1 M=0 L505_SLAVE=1)
+#      L505_SLAVE      slave taken to SAFE-OP in L5-05 (default 3)
 #      SB_PRIO / SB_CPU  soft_bus SCHED_FIFO priority + core (as run_l6_tests.sh)
 #      SB_ARGS           extra soft_bus args for every case except the L5-13
 #                        positive run, which needs the SM watchdog ON. On a
@@ -28,6 +31,8 @@ SBCTL=${SBCTL:-$HERE/../../tools/soft_bus/sbctl.sh}
 ECM_RUN=${ECM_RUN:-$HERE/ecm_run}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 N=${N:-8}; M=${M:-4}
+if [ "$M" = 0 ]; then GRP=(); MN=$N; else GRP=(--motion-slaves "$M"); MN=$M; fi   # MN: motion slaves
+L505_SLAVE=${L505_SLAVE:-3}; L505_NODE=$((L505_SLAVE - 1))
 SB_PRIO=${SB_PRIO:-}; SB_CPU=${SB_CPU:-2}
 SB_ARGS=${SB_ARGS:-}; ECM_ARGS=${ECM_ARGS:-}
 OVR_MAX=${OVR_MAX:-10}; VALGRIND=${VALGRIND:-0}
@@ -71,7 +76,7 @@ run_case () {
         bin=$LOG/ecm_run.nocap; cp "$ECM_RUN" "$bin"
         pre=(valgrind --leak-check=full --suppressions="$HERE/soem.supp" --log-file="$LOG/valgrind_$tag.txt")
     fi
-    timeout --foreground $((dur + 60)) "${pre[@]}" "$bin" --iface "$IF_M" --n "$N" --motion-slaves "$M" \
+    timeout --foreground $((dur + 60)) "${pre[@]}" "$bin" --iface "$IF_M" --n "$N" ${GRP[@]+"${GRP[@]}"} \
         --duration-sec "$dur" --diag-file "$SNAP" $ECM_ARGS $eargs > "$LOG/er_$tag.log" 2>&1 &
     E=$!
     local t=0
@@ -152,18 +157,18 @@ l503)
     fi
     ;;
 l505)
-    echo "=== L5-05: safeop slave 3 with code 0x001A"
-    run_case l505 8 "$SB_ARGS" "" "2:safeop 2 0x001A"
-    chk "L5-05 monitor names slave 3 and the code" "has l505 'slave 3: AL 0x14 code 0x001a'"
-    chk "L5-05 path A: ack" "has l505 'slave 3: .* -> ack'"
-    chk "L5-05 path A: request OP" "has l505 'slave 3: .* -> request OP'"
-    chk "L5-05 slave 3 back in OP" "has l505 'slave 3 back in OP'"
+    echo "=== L5-05: safeop slave $L505_SLAVE with code 0x001A"
+    run_case l505 8 "$SB_ARGS" "" "2:safeop $L505_NODE 0x001A"
+    chk "L5-05 monitor names slave $L505_SLAVE and the code" "has l505 'slave $L505_SLAVE: AL 0x14 code 0x001a'"
+    chk "L5-05 path A: ack" "has l505 'slave $L505_SLAVE: .* -> ack'"
+    chk "L5-05 path A: request OP" "has l505 'slave $L505_SLAVE: .* -> request OP'"
+    chk "L5-05 slave $L505_SLAVE back in OP" "has l505 'slave $L505_SLAVE back in OP'"
     chk "L5-05 bus never LOST" "[ $(pol l505 LOST) = 0 ]"
     ;;
 l505neg)
     echo "=== L5-05 negative control: --no-recover"
-    run_case l505neg 6 "$SB_ARGS" "--no-recover" "2:safeop 2 0x001A"
-    chk "L5-05neg without recovery slave 3 stays SAFEOP+ERR" "has l505neg '\[DIAG\] slave 3: AL state SAFEOP+ERR'"
+    run_case l505neg 6 "$SB_ARGS" "--no-recover" "2:safeop $L505_NODE 0x001A"
+    chk "L5-05neg without recovery slave $L505_SLAVE stays SAFEOP+ERR" "has l505neg '\[DIAG\] slave $L505_SLAVE: AL state SAFEOP+ERR'"
     ;;
 l511b)
     echo "=== L5-11b: drop/restore an IO slave (6) and a DC motion slave (2): path B"
@@ -180,10 +185,10 @@ l513)
     # the trip must be the one we caused: soft_bus logs every expiry with the gap
     ngap=$(grep -c "SM watchdog expired ([0-9][0-9]\.[0-9]* ms" "$LOG/sb_l513.log")
     echo "  soft_bus: $(grep -c 'SM watchdog expired' "$LOG/sb_l513.log") watchdog expiries, $ngap of them with a gap >= 10 ms (the SIGSTOP)"
-    chk "L5-13 soft_bus saw the >= 10 ms gap on every motion slave" "[ $ngap -ge $M ]"
+    chk "L5-13 soft_bus saw the >= 10 ms gap on every motion slave" "[ $ngap -ge $MN ]"
     chk "L5-13 master reports 'Sync manager watchdog' (0x001B)" "has l513 'code 0x001b (Sync manager watchdog)'"
-    nb=0; for s in $(seq 1 "$M"); do has l513 "slave $s back in OP" && nb=$((nb+1)); done
-    chk "L5-13 all $M motion slaves back in OP ($nb)" "[ $nb = $M ]"
+    nb=0; for s in $(seq 1 "$MN"); do has l513 "slave $s back in OP" && nb=$((nb+1)); done
+    chk "L5-13 all $MN motion slaves back in OP ($nb)" "[ $nb = $MN ]"
     ;;
 l513neg)
     echo "=== L5-13 negative control: soft_bus --no-sm-wd"
