@@ -214,16 +214,43 @@ static void test_l4_03(uint16_t slave)
 /* L4-04: object 0x9999 exists nowhere in soft_bus's OD (see
  * coe_lookup_readable() in esc_coe.c) -- expect the Abort path,
  * surfaced by ecm_mailbox_sdo_read() as rc == -4 (see ecm_mailbox.h's
- * documented return codes). */
+ * documented return codes).
+ *
+ * Giai doan 9.0: rc == -4 alone is not enough -- ecx_SDOread() returns a
+ * WKC <= 0 for an Abort AND for other protocol failures (wrong service,
+ * timeout on a segment). The Abort code itself is in SOEM's error list
+ * (ecx_SDOerror -> ecx_pusherror). CiA 301 abort 0x06020000 = "object does
+ * not exist in the object dictionary". In this tool main() is the only
+ * reader of the error list; the cyclic thread may push to it (mailbox
+ * emergencies), soft_bus sends none. ecm_run leaves draining it to one
+ * thread (see ecm_mailbox.c execute_job). */
+#ifndef L4_04_ABORT_EXPECTED
+#define L4_04_ABORT_EXPECTED 0x06020000   /* -D override only for the negative control */
+#endif
 static void test_l4_04(uint16_t slave)
 {
     uint8_t buf[4] = {0};
     int size = sizeof(buf);
+    ec_errort e;
+    while (ecx_poperror(&ctx, &e)) { }      /* start from an empty error list */
     int rc = ecm_mailbox_sdo_read(g_mbx, slave, 0x9999, 0, false, buf, &size, 500000);
 
-    char detail[96];
-    snprintf(detail, sizeof(detail), "SDOread 0x9999:00 (unknown object) rc=%d (expect -4)", rc);
-    report("L4-04", rc == -4, detail);
+    int found = 0, others = 0;
+    uint32_t code = 0;
+    while (ecx_poperror(&ctx, &e)) {
+        if (e.Etype == EC_ERR_TYPE_SDO_ERROR && e.Slave == slave && e.Index == 0x9999 && e.SubIdx == 0) {
+            found++;
+            code = (uint32_t)e.AbortCode;
+        } else {
+            others++;
+        }
+    }
+    char detail[160];
+    snprintf(detail, sizeof(detail),
+             "SDOread 0x9999:00 (unknown object) rc=%d (expect -4), abort 0x%08" PRIX32
+             " (expect 0x%08X, %d SDO error(s) for it, %d other error(s))",
+             rc, code, (unsigned)L4_04_ABORT_EXPECTED, found, others);
+    report("L4-04", rc == -4 && found == 1 && code == L4_04_ABORT_EXPECTED, detail);
 }
 
 /* L4-05: object 0x8001:00 is a fixed 200 byte, i%256 pattern blob in

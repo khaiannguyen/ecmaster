@@ -1,3 +1,4 @@
+SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = l4_test
@@ -19,7 +20,7 @@ $(TARGET): l4_test.c $(MAILBOX_SRC)
 # Grants permission to run without sudo. Needs BOTH capabilities: NET_RAW to
 # open a raw socket, NET_ADMIN for promiscuous mode.
 setcap: $(TARGET)
-	sudo setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
+	$(SUDO) setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
 
 clean:
 	rm -f $(TARGET)

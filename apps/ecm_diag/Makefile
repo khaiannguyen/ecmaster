@@ -1,3 +1,4 @@
+SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
 # ecm_diag — Phase 7.2 diagnostics CLI. Needs SOEM v2.0.0 built with CMake
 # (only for --standalone; the snapshot reader itself does not touch the bus).
 CC      = gcc
@@ -19,7 +20,7 @@ $(TARGET): ecm_diag.c $(DIAG_SRC) $(DIAG_DIR)/ecm_diag.h $(DIAG_DIR)/ecm_diag_so
 
 # --standalone opens a raw socket: same capabilities as the other tools.
 setcap: $(TARGET)
-	sudo setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
+	$(SUDO) setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
 
 clean:
 	rm -f $(TARGET)

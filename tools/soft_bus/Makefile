@@ -1,3 +1,4 @@
+SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = soft_bus
@@ -27,7 +28,7 @@ test: $(TEST) $(TESTF)
 # from slaveinfo/hw_ts_test (NET_RAW alone silently fails with a misleading
 # "socket" error).
 setcap: $(TARGET)
-	sudo setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
+	$(SUDO) setcap cap_net_raw,cap_net_admin+ep ./$(TARGET)
 
 clean:
 	rm -f l1_probe
@@ -49,7 +50,7 @@ l1_probe: l1_probe.c
 	$(CC) $(CFLAGS) -o $@ $< $(SOEM_INC) $(SOEM_LIB) -lpthread
 
 setcap-probe: l1_probe
-	sudo setcap cap_net_raw,cap_net_admin+ep ./l1_probe
+	$(SUDO) setcap cap_net_raw,cap_net_admin+ep ./l1_probe
 
 l2_probe: l2_probe.c
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
@@ -57,6 +58,6 @@ l2_probe: l2_probe.c
 	$(CC) $(CFLAGS) -o $@ $< $(SOEM_INC) $(SOEM_LIB) -lpthread
 
 setcap-probe2: l2_probe
-	sudo setcap cap_net_raw,cap_net_admin+ep ./l2_probe
+	$(SUDO) setcap cap_net_raw,cap_net_admin+ep ./l2_probe
 
 .PHONY: setcap-probe

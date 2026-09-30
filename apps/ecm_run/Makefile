@@ -1,3 +1,4 @@
+SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = ecm_run
@@ -25,7 +26,7 @@ $(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POL
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
 setcap: $(TARGET)
-	sudo setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep ./$(TARGET)
+	$(SUDO) setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep ./$(TARGET)
 
 clean:
 	rm -f $(TARGET)

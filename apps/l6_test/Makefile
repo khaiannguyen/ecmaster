@@ -1,3 +1,4 @@
+SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
 # l6_test — Phase 6 (L6) DC test tool. Needs SOEM v2.0.0 built with CMake.
 # Override SOEM_DIR / SOEM_BUILD if your tree lives elsewhere.
 SOEM_DIR   ?= $(HOME)/projects/SOEM
@@ -17,7 +18,7 @@ l6_test: l6_test.c $(ECM_CORE)/ecm_dc.c $(ECM_CORE)/ecm_dc.h
 	$(CC) $(CFLAGS) -o $@ l6_test.c $(ECM_CORE)/ecm_dc.c $(LDLIBS)
 
 setcap: l6_test
-	sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep ./l6_test
+	$(SUDO) setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep ./l6_test
 
 clean:
 	rm -f l6_test
