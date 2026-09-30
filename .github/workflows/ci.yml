@@ -50,6 +50,14 @@ jobs:
         run: tools/esi/check_xsd.sh
       - name: CA ESI variant (GD9.3) up to date, valid, matches the --coe-ca SII (+ negative)
         run: tools/esi/check_ca_variant.sh
+      - name: P1 draft ESI valid (GD9.4); ENI audit of the soft_bus ENIs (no UNKNOWN, LRD = mailbox poll)
+        run: |
+          tools/esi/check_xsd.sh config/esi/p1_draft_esi.xml
+          for f in config/eni/eni_1node_1pdo.xml config/eni/eni_8node.xml config/eni/eni_8node_dc.xml config/eni/eni_8node_dc_sdo.xml; do
+            python3 tools/eni/eni_audit.py --known config/eni/known_regs.txt "$f" > /tmp/audit.md
+            grep -q 'not in the known list: 0' /tmp/audit.md
+            grep -q '(process data by LRW)' /tmp/audit.md
+          done
       - name: soft_bus (SII, ESM, DC, fault injection, CoE C-01)
         run: make -C tools/soft_bus test
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)

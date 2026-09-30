@@ -1,0 +1,31 @@
+# known_regs.txt -- GD9.4 seed for the 9.6 loader table: register InitCmds
+# that TwinCAT puts into the soft_bus ENIs (eni_8node*.xml, eni_1node_1pdo.xml)
+# and that SOEM + libecmaster already do themselves during configuration
+# (audit in claude/giai_doan_8_nhat_ky_8_3.md). One ADO (hex) per line, or
+# ADO/cmd to restrict it to one datagram command. A register InitCmd of a
+# vendor ENI that is not listed here is reported UNKNOWN by eni_audit.py.
+
+0010    # station address; seen as APWR, BWR
+0103    # DL control (loop); seen as BWR
+0120    # AL control; seen as APWR, FPWR
+0130    # AL status; seen as APRD, BRD, FPRD
+0200    # ECAT event mask; seen as BWR
+0300    # RX error counters; seen as BWR
+0500    # SII access; seen as APWR, FPWR
+0502    # SII control/status; seen as APWR
+0508    # SII data; seen as APRD
+0600    # FMMU 0; seen as BWR, FPWR
+0610    # FMMU 1; seen as FPWR
+0620    # FMMU 2; seen as FPWR
+0800    # SM 0; seen as APWR, BWR, FPWR
+0808    # SM 1; seen as FPWR
+0810    # SM 2; seen as FPWR
+0818    # SM 3; seen as FPWR
+0910    # DC system time; seen as BWR
+0930    # DC speed counter start; seen as BWR
+0934    # DC filter; seen as BWR
+0980    # DC activation (AssignActivate); seen as APWR, FPWR
+0981    # DC activation (SYNC); seen as BWR
+0990    # DC start time; seen as FPWR
+09A0    # SYNC0 cycle; seen as FPWR
+09A8    # Latch0/1 control; seen as FPWR

@@ -156,21 +156,27 @@ c03|c04)
     sb_stop
     python3 "$HERE/pcap_coe.py" "$LOG/$c.pcap" > "$LOG/$c.coe"
     E=$LOG/er_$c.log
+    # Expectations come from the .enicfg itself, so the same checks hold for
+    # the hand-written file and for the TwinCAT ENI of step 9.4.
+    NCA=$(grep -c '^coe .* ca 1 ' "$ENI_CA")
+    NFAIL=$(grep -c 'FAILED' "$E")
     if [ "$c" = c03 ]; then
         chk "C-03 ecm_run rc 0 (OP with ENI CA InitCmds)" "[ $RC = 0 ]"
-        chk "C-03 16 CA InitCmds ok (0x1C12/0x1C13 x 8)" \
-            "[ \$(grep -c 'CoE download 0x1C1[23]:00 (complete access) ok (4 byte)' $E) = 16 ]"
-        chk "C-03 16 byte normal download 0x8002 ok" "grep -q 'CoE download 0x8002:00 ok (16 byte)' $E"
-        chk "C-03 wire: 16 CA download responses, no abort" \
-            "[ \$(grep -cE 'resp .* CA-DOWN +1C1[23]:00' $LOG/$c.coe) = 16 ] && ! grep -q ABORT $LOG/$c.coe"
+        chk "C-03 all $NCA CA InitCmds ok, no InitCmd FAILED" \
+            "[ $NCA -gt 0 ] && [ \$(grep -c '(complete access) ok' $E) = $NCA ] && [ $NFAIL = 0 ]"
+        if grep -q 'index 0x8002' "$ENI_CA"; then
+            chk "C-03 normal download 0x8002 ok" "grep -q 'CoE download 0x8002:00 ok' $E"
+        fi
+        chk "C-03 wire: $NCA CA download responses, no abort" \
+            "[ \$(grep -cE 'resp .* CA-DOWN ' $LOG/$c.coe) = $NCA ] && ! grep -q ABORT $LOG/$c.coe"
     else
         chk "C-04 ecm_run refuses (rc != 0) before SAFE-OP" "[ $RC != 0 ] && grep -q 'refusing SAFE-OP' $E"
-        chk "C-04 16 CA InitCmds reported FAILED" \
-            "[ \$(grep -c '(complete access) FAILED' $E) = 16 ]"
-        chk "C-04 each failure names its own slave/object/abort (slave 1 and 8)" \
-            "grep -q 'slave 1 0x1C12:00 abort 0x06010000' $E && grep -q 'slave 8 0x1C13:00 abort 0x06010000' $E"
-        chk "C-04 no other abort reported (stale 0x1C00 errors not misattributed)" \
-            "[ \$(grep -c 'abort 0x' $E) = 16 ]"
+        chk "C-04 all $NCA CA InitCmds refused with 0x06010000" \
+            "[ $NCA -gt 0 ] && [ \$(grep -c '(complete access) FAILED' $E) = $NCA ] && [ \$(grep -c 'abort 0x06010000' $E) = $NCA ]"
+        chk "C-04 the first failure names slave 1, its object and the abort" \
+            "grep -qE 'slave 1 0x[0-9A-F]{4}:[0-9A-F]{2} abort 0x06010000' $E"
+        chk "C-04 one abort per failure (stale 0x1C00 errors not misattributed)" \
+            "[ \$(grep -c 'abort 0x' $E) = $NFAIL ]"
     fi
     ;;
 c05)
