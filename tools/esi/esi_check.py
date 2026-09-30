@@ -188,6 +188,24 @@ def main():
     cats = sii_categories(words)
     types = [c[0] for c in cats]
     print(f"[categories] in SII order: {types}")
+    # GD9.3: General category CoE details (ETG.2010: bit0 SDO, bit1 SDO Info,
+    # bit2 PDO assign, bit3 PDO config, bit4 upload at startup, bit5 SDO
+    # Complete Access) against the ESI Mailbox/CoE attributes. Without a
+    # General category a master sees CoE details 0 (SOEM: no CA).
+    coe = dev.find("./Mailbox/CoE")
+    def esi_flag(attr):
+        return 1 if coe is not None and coe.get(attr, "false").lower() in ("true", "1") else 0
+    want_det = 0
+    if coe is not None:
+        want_det = (0x01 | esi_flag("SdoInfo") << 1 | esi_flag("PdoAssign") << 2 |
+                    esi_flag("PdoConfig") << 3 | esi_flag("PdoUpload") << 4 | esi_flag("CompleteAccess") << 5)
+    gen = next((b for t, _, b in cats if t == CAT_GENERAL), None)
+    if gen is not None:
+        print("[general]")
+        check("General CoE details (body byte 5)", gen[5] if len(gen) > 5 else -1, want_det, "0x{:02X}")
+    elif want_det & 0x3E:
+        report("FAIL", f"ESI CoE flags need CoE details 0x{want_det:02X} but the SII has no General "
+                       f"category (a master would not see them)")
     for missing, name in ((CAT_GENERAL, "General (30)"), (CAT_STRINGS, "Strings (10)"), (CAT_FMMU, "FMMU (40)")):
         if missing not in types:
             report("WARN", f"SII has no {name} category; an ESI-generated image (TwinCAT) will carry one")

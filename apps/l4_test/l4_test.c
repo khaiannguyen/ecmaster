@@ -15,6 +15,12 @@
  *   L4-03  OP     SDO while PDO cyclic runs    -- PDO not interrupted, WKC steady
  *   L4-04  --     SDOread unknown object       -- Abort, rc == -4
  *   L4-05  --     SDOread 0x8001:00 (200 byte) -- segmented, reassembled correctly
+ *   L4-07  OP     SDOwrite 0x8002:00, 16 byte (normal) and 250 byte (init +
+ *                 2 segments), read back identical; write to the read-only
+ *                 0x8001 -> abort 0x06010002 (GD9.3)
+ *   L4-08  PREOP/OP  --ca only (soft_bus --coe-ca): Complete Access read of
+ *                 0x1C12 = 01 00 00 16, CA write of it in PREOP ok, in OP
+ *                 refused with abort 0x08000022 (GD9.3)
  *
  * L4-06 (SM watchdog) is covered separately in ecm_run.c + a tshark
  * capture, not repeated here.
@@ -276,6 +282,95 @@ static void test_l4_05(uint16_t slave)
     report("L4-05", rc == 0 && size == 200 && pattern_ok, detail);
 }
 
+/* Pops every queued error; returns how many were SDO aborts for
+ * slave/index and the last such abort code. */
+static int pop_sdo_aborts(uint16_t slave, uint16_t index, uint32_t *code, int *others)
+{
+    ec_errort e;
+    int found = 0;
+    *others = 0;
+    while (ecx_poperror(&ctx, &e)) {
+        if (e.Etype == EC_ERR_TYPE_SDO_ERROR && e.Slave == slave && e.Index == index) {
+            found++;
+            *code = (uint32_t)e.AbortCode;
+        } else {
+            (*others)++;
+        }
+    }
+    return found;
+}
+
+/* L4-07 (GD9.3): normal and segmented SDO download. 0x8002 is a RW
+ * OCTET_STRING in soft_bus (1..400 byte). 16 byte fit the init frame
+ * (normal transfer); 250 byte need the init frame (112) and two download
+ * segments (119 + 19) with 128 byte mailboxes. Runs in OP, so the
+ * segments share the bus with cyclic process data. */
+static void l4_07_one(uint16_t slave, int len, const char *id)
+{
+    uint8_t w[ECM_MBX_MAX_DATA], r[ECM_MBX_MAX_DATA];
+    for (int i = 0; i < len; i++) w[i] = (uint8_t)(0x5A ^ (i * 13 + len));
+    int wrc = ecm_mailbox_sdo_write(g_mbx, slave, 0x8002, 0, false, w, len, 500000);
+    int size = sizeof(r);
+    memset(r, 0, sizeof(r));
+    int rrc = ecm_mailbox_sdo_read(g_mbx, slave, 0x8002, 0, false, r, &size, 500000);
+    int same = size == len && memcmp(r, w, (size_t)len) == 0;
+    char detail[160];
+    snprintf(detail, sizeof(detail), "SDOwrite 0x8002:00 %d byte wrc=%d, read back rrc=%d size=%d identical=%d",
+             len, wrc, rrc, size, same);
+    report(id, wrc == 0 && rrc == 0 && same, detail);
+}
+
+static void test_l4_07(uint16_t slave)
+{
+    l4_07_one(slave, 16, "L4-07 normal download (16 byte)");
+    l4_07_one(slave, 250, "L4-07 segmented download (250 byte, 2 segments)");
+
+    uint8_t w[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    ec_errort e;
+    while (ecx_poperror(&ctx, &e)) { }
+    int wrc = ecm_mailbox_sdo_write(g_mbx, slave, 0x8001, 0, false, w, sizeof(w), 500000);
+    uint32_t code = 0;
+    int others = 0;
+    int found = pop_sdo_aborts(slave, 0x8001, &code, &others);
+    char detail[160];
+    snprintf(detail, sizeof(detail), "SDOwrite 0x8001 (read-only) wrc=%d abort 0x%08" PRIX32
+             " (expect 0x06010002, %d abort(s), %d other error(s))", wrc, code, found, others);
+    report("L4-07 write to read-only object refused", wrc != 0 && found == 1 && code == 0x06010002u, detail);
+}
+
+/* L4-08 (GD9.3, --ca): Complete Access against soft_bus --coe-ca. */
+static void test_l4_08_preop(uint16_t slave)
+{
+    uint8_t r[8] = { 0 };
+    int size = sizeof(r);
+    int rrc = ecm_mailbox_sdo_read(g_mbx, slave, 0x1C12, 0, true, r, &size, 500000);
+    char detail[160];
+    snprintf(detail, sizeof(detail), "CA SDOread 0x1C12 rc=%d size=%d bytes %02x %02x %02x %02x (expect 01 00 00 16)",
+             rrc, size, r[0], r[1], r[2], r[3]);
+    report("L4-08 CA read 0x1C12 (SI0 16 bit)", rrc == 0 && size == 4 && r[0] == 1 && r[1] == 0 &&
+                                                r[2] == 0x00 && r[3] == 0x16, detail);
+
+    uint8_t w[4] = { 1, 0, 0x00, 0x16 };
+    int wrc = ecm_mailbox_sdo_write(g_mbx, slave, 0x1C12, 0, true, w, 4, 500000);
+    snprintf(detail, sizeof(detail), "CA SDOwrite 0x1C12 = 01 00 00 16 in PREOP rc=%d", wrc);
+    report("L4-08 CA write PDO assign in PREOP", wrc == 0, detail);
+}
+
+static void test_l4_08_op(uint16_t slave)
+{
+    uint8_t w[4] = { 1, 0, 0x00, 0x16 };
+    ec_errort e;
+    while (ecx_poperror(&ctx, &e)) { }
+    int wrc = ecm_mailbox_sdo_write(g_mbx, slave, 0x1C12, 0, true, w, 4, 500000);
+    uint32_t code = 0;
+    int others = 0;
+    int found = pop_sdo_aborts(slave, 0x1C12, &code, &others);
+    char detail[160];
+    snprintf(detail, sizeof(detail), "CA SDOwrite 0x1C12 in OP rc=%d abort 0x%08" PRIX32
+             " (expect 0x08000022, %d abort(s), %d other error(s))", wrc, code, found, others);
+    report("L4-08 CA write PDO assign in OP refused", wrc != 0 && found == 1 && code == 0x08000022u, detail);
+}
+
 /* ==========================================================================
  * Bring-up, sequencing, teardown.
  * ========================================================================== */
@@ -330,6 +425,7 @@ int main(int argc, char **argv)
     uint32_t expected_vendor_id = 0x00000499u; /* SII_VENDOR_ID placeholder default */
     int l512_rounds = 0;               /* Giai doan 7.4: --l512 N */
     const char *ctl = NULL;            /* soft_bus control FIFO for --l512 */
+    int ca = 0;                        /* GD9.3: --ca, L4-08 (soft_bus --coe-ca) */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -342,6 +438,8 @@ int main(int argc, char **argv)
             l512_rounds = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--ctl") == 0 && i + 1 < argc) {
             ctl = argv[++i];
+        } else if (strcmp(argv[i], "--ca") == 0) {
+            ca = 1;
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
             return 2;
@@ -349,7 +447,7 @@ int main(int argc, char **argv)
     }
     if (!ifname) {
         fprintf(stderr, "Usage: %s --iface <veth_m> [--n <slaves>] "
-                        "[--expected-vendor 0xHEX] [--l512 ROUNDS [--ctl SOFT_BUS_FIFO]]\n", argv[0]);
+                        "[--expected-vendor 0xHEX] [--l512 ROUNDS [--ctl SOFT_BUS_FIFO]] [--ca]\n", argv[0]);
         return 2;
     }
 
@@ -413,6 +511,7 @@ int main(int argc, char **argv)
     printf("\n=== PREOP tests ===\n");
     test_l4_01(1, expected_vendor_id);
     test_l4_02(1);
+    if (ca) test_l4_08_preop(1);
 
     if (!request_all_state(EC_STATE_SAFE_OP, EC_TIMEOUTSTATE)) {
         fprintf(stderr, "Failed to reach SAFEOP\n");
@@ -432,6 +531,8 @@ int main(int argc, char **argv)
     test_l4_03(1);
     test_l4_04(1);
     test_l4_05(1);
+    test_l4_07(1);
+    if (ca) test_l4_08_op(1);
     if (l512_rounds > 0) {
         printf("\n=== L5-12 (mailbox repeat / duplicate), %d rounds%s ===\n", l512_rounds,
                ctl ? "" : " -- no --ctl: nothing injected");

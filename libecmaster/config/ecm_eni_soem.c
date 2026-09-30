@@ -24,10 +24,9 @@ int ecm_eni_soem_supported(const ecm_eni_t *eni)
             fprintf(stderr, " not supported by ecm_run (only IP, PS)\n");
             bad++;
         }
-        if (c->ca) {
-            fprintf(stderr, "ecm_eni: slave %u CoE 0x%04X: complete access not supported\n", c->pos, c->index);
-            bad++;
-        }
+        /* GD9.3: Complete Access InitCmds are run with ecx_SDOwrite/
+         * ecx_SDOread(CA = TRUE), data verbatim from the ENI. SOEM itself
+         * clamps a CA subindex > 1 to 1; the ENI never has one (ETG.2100). */
     }
     return bad;
 }
@@ -71,29 +70,54 @@ int ecm_eni_soem_check_layout(ecx_contextt *ctx, const ecm_eni_t *eni)
     return check_common("process data layout", bad, msg);
 }
 
+/* GD9.3: the error list is shared with SOEM's own configuration. When the
+ * PS InitCmds run from the PO2SO hook, the list may still hold what SOEM
+ * queued for the PREVIOUS slave after its hook (for example the abort of
+ * its 0x1C00 read before it falls back to the SII PDO categories), and
+ * ecx_elist2string() prints one entry per call: the old code therefore
+ * reported another slave's abort for a failed InitCmd. Now the list is
+ * emptied before each InitCmd and every entry it leaves is printed. */
+static int print_errors(ecx_contextt *ctx)
+{
+    ec_errort e;
+    int n = 0;
+    while (ecx_poperror(ctx, &e)) {
+        if (e.Etype == EC_ERR_TYPE_SDO_ERROR)
+            fprintf(stderr, "ecm_eni:   slave %u 0x%04X:%02X abort 0x%08X %s\n", e.Slave, e.Index,
+                    e.SubIdx, (unsigned)e.AbortCode, ec_sdoerror2string((uint32)e.AbortCode));
+        else
+            fprintf(stderr, "ecm_eni:   %s", ecx_err2string(e));
+        n++;
+    }
+    return n;
+}
+
 static int run_one(ecx_contextt *ctx, const ecm_eni_coe_t *c)
 {
     int timeout = c->timeout_ms ? (int)c->timeout_ms * 1000 : EC_TIMEOUTRXM;
+    ec_errort stale;
+    while (ecx_poperror(ctx, &stale)) { }
     int wkc;
     uint8_t buf[ECM_ENI_MAX_DATA];
     int size = (int)sizeof(buf);
 
     if (c->ccs == ECM_ENI_CCS_DOWNLOAD) {
-        wkc = ecx_SDOwrite(ctx, c->pos, c->index, c->sub, FALSE, c->len, c->data, timeout);
+        wkc = ecx_SDOwrite(ctx, c->pos, c->index, c->sub, c->ca ? TRUE : FALSE, c->len, c->data, timeout);
     } else {
-        wkc = ecx_SDOread(ctx, c->pos, c->index, c->sub, FALSE, &size, buf, timeout);
+        wkc = ecx_SDOread(ctx, c->pos, c->index, c->sub, c->ca ? TRUE : FALSE, &size, buf, timeout);
     }
+    const char *ca = c->ca ? " (complete access)" : "";
     int err = ecx_iserror(ctx);
     if (wkc <= 0 || err) {
-        fprintf(stderr, "ecm_eni: slave %u CoE %s 0x%04X:%02X FAILED (wkc=%d)%s",
+        fprintf(stderr, "ecm_eni: slave %u CoE %s 0x%04X:%02X%s FAILED (wkc=%d)\n",
                 c->pos, c->ccs == ECM_ENI_CCS_DOWNLOAD ? "download" : "upload",
-                c->index, c->sub, wkc, err ? ": " : "\n");
+                c->index, c->sub, ca, wkc);
         if (err)
-            fprintf(stderr, "%s", ecx_elist2string(ctx)); /* also drains the error list */
+            print_errors(ctx);
         return 1;
     }
-    fprintf(stderr, "ecm_eni: slave %u CoE %s 0x%04X:%02X ok (%d byte)\n", c->pos,
-            c->ccs == ECM_ENI_CCS_DOWNLOAD ? "download" : "upload", c->index, c->sub,
+    fprintf(stderr, "ecm_eni: slave %u CoE %s 0x%04X:%02X%s ok (%d byte)\n", c->pos,
+            c->ccs == ECM_ENI_CCS_DOWNLOAD ? "download" : "upload", c->index, c->sub, ca,
             c->ccs == ECM_ENI_CCS_DOWNLOAD ? c->len : size);
     return 0;
 }

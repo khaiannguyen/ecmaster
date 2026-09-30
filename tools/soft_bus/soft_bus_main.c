@@ -11,6 +11,14 @@
  *     ./sbctl.sh mute 100          or    echo "mute 100" > /tmp/soft_bus.ctl
  * The main loop waits with ppoll() on the raw socket AND the FIFO, with a
  * timeout set by the earliest delayed reply (late/reorder injections).
+ *
+ * GD9.3 (both off by default, so the wire traffic of a default run is
+ * unchanged -- golden_ecm_run.txt):
+ *   --coe-pdo-od  object dictionary gets 0x1C00/0x1C12/0x1C13/0x1600/0x1A00,
+ *                 SOEM maps process data over CoE (ecx_readPDOmap)
+ *   --coe-ca      SDO Complete Access + SII General category (CoE details
+ *                 0x25), implies --coe-pdo-od; SOEM uses ecx_readPDOmapCA.
+ *                 ESI: config/esi/softbus_esi_ca.xml
  * ========================================================================== */
 
 #define _GNU_SOURCE          /* ppoll() */
@@ -74,6 +82,7 @@ int main(int argc, char **argv)
     int sm_wd_react = 1;
 
     int sii_poke_word[8], sii_poke_val[8], n_poke = 0;   /* --sii-poke W=V (negative controls) */
+    int coe_pdo_od = 0, coe_ca = 0;                      /* GD9.3, both off by default */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -99,6 +108,10 @@ int main(int argc, char **argv)
             app_seq_offset = atoi(argv[++i]);          /* byte offset in TxPDO */
         } else if (strcmp(argv[i], "--no-sm-wd") == 0) {
             sm_wd_react = 0;
+        } else if (strcmp(argv[i], "--coe-pdo-od") == 0) {
+            coe_pdo_od = 1;                            /* 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
+        } else if (strcmp(argv[i], "--coe-ca") == 0) {
+            coe_ca = 1;                                /* SDO Complete Access, implies --coe-pdo-od */
         } else if (strcmp(argv[i], "--sii-poke") == 0 && i + 1 < argc) {
             int w, v;
             if (n_poke >= 8 || sscanf(argv[++i], "%i=%i", &w, &v) != 2 || w < 0 || v < 0 || v > 0xFFFF) {
@@ -117,7 +130,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s --iface <veth_s> --n <node_count> [--pdo-size <bytes>]\n"
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
-                "       [--sii-poke WORD=VALUE ...]\n",
+                "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca]\n",
                 argv[0]);
         return 1;
     }
@@ -136,7 +149,12 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < n; i++) {
         esc_init(&chain[i], (uint8_t)i, (uint16_t)pdo_size);
+        if (coe_pdo_od || coe_ca)
+            esc_set_coe_features(&chain[i], coe_pdo_od, coe_ca);   /* rebuilds the SII */
     }
+    if (coe_pdo_od || coe_ca)
+        printf("soft_bus: CoE %s%s\n", "PDO objects 0x1C00/0x1C12/0x1C13/0x1600/0x1A00",
+               coe_ca ? " + Complete Access (SII General CoE details 0x25)" : "");
     /* --sii-poke: overwrite SII words on every node, AFTER esc_init built the
      * image. Negative controls (X-01a) and later ENI identity tests (E-03). */
     for (int p = 0; p < n_poke; p++) {

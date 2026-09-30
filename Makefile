@@ -36,6 +36,7 @@ caps-show:
 
 test-offline:
 	tools/esi/check_xsd.sh
+	tools/esi/check_ca_variant.sh
 	$(MAKE) -C tools/soft_bus test
 	$(MAKE) -C libecmaster/telemetry run
 	$(MAKE) -C libecmaster/core test test_asan

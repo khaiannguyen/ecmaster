@@ -15,6 +15,7 @@
 #      N=1 GROUP_ARGS=           GD9.1 (G-08): one-slave bus, every slave in
 #                                GROUP_MOTION, GROUP_IO empty
 #                                (defaults: N=8 GROUP_ARGS="--motion-slaves 4")
+#      SB_ARGS="--coe-ca"         GD9.3 (C-02/C-05): extra soft_bus options
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,6 +28,9 @@ N=${N:-8}
 GROUP_ARGS=${GROUP_ARGS---motion-slaves 4}
 # shellcheck disable=SC2206
 GROUP_ARR=($GROUP_ARGS)
+SB_ARGS=${SB_ARGS:-}
+# shellcheck disable=SC2206
+SB_ARR=($SB_ARGS)
 ENI_ARGS=()
 if [ -n "$ENI" ]; then
     [ -f "$ENI" ] || { echo "ENI file $ENI not found" >&2; exit 2; }
@@ -35,7 +39,7 @@ fi
 command -v tshark >/dev/null || { echo "tshark not installed" >&2; exit 2; }
 rm -f "$PCAP"
 
-"$SOFT_BUS" --iface "$IF_S" --n "$N" --pdo-size 4 --dc 32 --dc-report-s 100 --no-sm-wd >/dev/null 2>&1 &
+"$SOFT_BUS" --iface "$IF_S" --n "$N" --pdo-size 4 --dc 32 --dc-report-s 100 --no-sm-wd ${SB_ARR[@]+"${SB_ARR[@]}"} >/dev/null 2>&1 &
 SBP=$!
 tshark -q -i "$IF_M" -F pcap -w "$PCAP" -f "ether proto 0x88a4" >/dev/null 2>&1 &
 TSP=$!

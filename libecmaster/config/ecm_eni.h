@@ -25,7 +25,9 @@
 
 #define ECM_ENI_MAX_SLAVES   64
 #define ECM_ENI_MAX_COE      256
-#define ECM_ENI_MAX_DATA     64     /* bytes of one CoE InitCmd payload */
+#define ECM_ENI_MAX_DATA     256    /* bytes of one CoE InitCmd payload (GD9.3: was 64;
+                                       * a CA download of a PDO mapping object
+                                       * with 32 entries is 2 + 32*4 = 130) */
 #define ECM_ENI_NAME_LEN     64
 
 /* ESM transitions, one bit each (a CoE InitCmd may list several) */

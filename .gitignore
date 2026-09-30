@@ -27,6 +27,10 @@ libecmaster/telemetry/test_ring_offline
 libecmaster/telemetry/test_turnaround_offline
 tools/rt_tail/log_rt_tail_*/
 tools/soft_bus/test_fault
+tools/soft_bus/test_coe
+log_gd9_coe_*/
+log_x04_*/
+__pycache__/
 libecmaster/diag/test_diag_offline
 libecmaster/diag/test_diag_offline_asan
 apps/ecm_diag/ecm_diag

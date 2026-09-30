@@ -1,0 +1,34 @@
+# hand-written GD9.3 test config (C-03/C-04), NOT generated from an ENI:
+# eni_8node_dc_sdo.enicfg + Complete Access PDO assign (0x1C12/0x1C13, PS) on
+# every slave + a 16 byte normal download (0x8002) on slave 1. Replaced by
+# the TwinCAT eni_8node_ca.xml -> .enicfg in step 9.4.
+enicfg 1
+source eni_8node_dc_sdo.xml sha256 1d29b75c6356ecb8d5d819c12e29914acfd19bd8d45511daf00eb99a61c1bbbc
+cycle_us 1000
+slaves 8
+slave 1 name "Box 1 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03E9 osize_bits 32 isize_bits 32 dc 1 refclock 1 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 2 name "Box 2 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03EA osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 3 name "Box 3 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03EB osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 4 name "Box 4 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03EC osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 5 name "Box 5 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03ED osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 6 name "Box 6 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03EE osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 7 name "Box 7 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03EF osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+slave 8 name "Box 8 (SOFTBUS-PD4)" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03F0 osize_bits 32 isize_bits 32 dc 1 refclock 0 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300
+coe 1 trans PS ccs 1 index 0x8000 sub 0x01 ca 0 timeout_ms 0 data 2a000000
+coe 1 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 1 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 2 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 2 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 3 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 3 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 4 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 4 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 5 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 5 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 6 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 6 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 7 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 7 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 8 trans PS ccs 1 index 0x1C12 sub 0x00 ca 1 timeout_ms 0 data 01000016
+coe 8 trans PS ccs 1 index 0x1C13 sub 0x00 ca 1 timeout_ms 0 data 0100001A
+coe 1 trans PS ccs 1 index 0x8002 sub 0x00 ca 0 timeout_ms 0 data 000102030405060708090a0b0c0d0e0f

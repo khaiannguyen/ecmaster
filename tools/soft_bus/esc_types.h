@@ -28,6 +28,15 @@
  * 128 byte, ~112 usable after the 16-byte SDO header). */
 #define COE_SEGTEST_BLOB_SIZE  200
 
+/* GD9.3: 0x8002, read/write OCTET_STRING (1..COE_OCTET_RW_MAX bytes) --
+ * the target of normal and segmented SDO download tests (L4-07, X-04).
+ * 400 byte with 128 byte mailboxes = init frame (112) + 3 segments. */
+#define COE_OCTET_RW_MAX       400
+/* Largest download (normal or segmented) one session buffers before it is
+ * checked and applied atomically; also the scratch size of one serialized
+ * object (Complete Access of a 0x1600 with 64 entries = 2 + 64*4 bytes). */
+#define COE_XFER_BUF_MAX       512
+
 /* ---- ESC information (Section II §2.1) ---- */
 #define REG_TYPE              0x0000  /* 1 byte */
 #define REG_REVISION          0x0001  /* 1 byte */
@@ -208,6 +217,10 @@ typedef struct {
                             * = 128 byte, ~112 usable) so a plain SDOread on
                             * it can ONLY complete via genuine multi-frame
                             * segmentation -- exercises L4-05. */
+    uint8_t  octet_rw[COE_OCTET_RW_MAX];  /* GD9.3: 0x8002:00 value          */
+    uint16_t octet_rw_len;                /* its current length (1..MAX)     */
+    uint8_t  pdo_assign_n[2];     /* GD9.3: 0x1C12:00 / 0x1C13:00 (0 or 1)   */
+    uint16_t pdo_assign_idx[2];   /* 0x1C12:01 / 0x1C13:01 (0x1600/0x1A00)   */
     uint8_t  resp_cnt;     /* [Phase 7.4] mailbox counter of the last response
                             * (ETG.1000.4: 1..7, 0 reserved). A NEW response
                             * gets the next value; a repeated or duplicated
@@ -231,6 +244,8 @@ typedef struct {
     uint32_t total_size;
     uint32_t done;          /* bytes sent (upload) or received (download) so far */
     uint8_t  expected_toggle; /* next continuation frame's expected toggle bit (0x00/0x10) */
+    uint8_t  is_ca;         /* GD9.3: Complete Access transfer               */
+    uint8_t  xfer[COE_XFER_BUF_MAX]; /* GD9.3: download data received so far  */
 } coe_session_t;
 
 /* Phase 7: per-node fault-injection state. Frame-scoped flags (*_frame)
@@ -280,6 +295,8 @@ typedef struct {
     esc_node_fault_t fault;      /* Phase 7: per-node fault injection (esc_fault.c) */
     esc_wd_state_t   wd;         /* Phase 7: process data watchdog model */
     uint32_t  sii_cmd_reads;
+    uint8_t   coe_pdo_od;  /* GD9.3 --coe-pdo-od: 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
+    uint8_t   coe_ca;      /* GD9.3 --coe-ca: SDO Complete Access + SII General cat. */
 } esc_t;
 
 
@@ -287,6 +304,14 @@ typedef struct {
  * node's own SII image from pdo_size_bytes. Does not touch the network —
  * testable offline (test_offline.c) with no veth/socket involved. */
 void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes);
+
+/* GD9.3: optional CoE features, both off by default (the wire traffic of a
+ * default soft_bus does not change). pdo_od adds the PDO mapping/assign
+ * objects to the object dictionary; ca adds SDO Complete Access and an SII
+ * General category advertising it (CoE details SDO|PDOASSIGN|SDOCA), and
+ * implies pdo_od. Rebuilds the SII image, so call it after esc_init() and
+ * before any --sii-poke. */
+void esc_set_coe_features(esc_t *esc, int pdo_od, int ca);
 
 /* Sets DL Status based on chain position. Call AFTER esc_init on the whole
  * array — port link state is a relationship BETWEEN nodes, not a property

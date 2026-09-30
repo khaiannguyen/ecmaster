@@ -153,6 +153,32 @@ static size_t append_sm_category(uint16_t *out, size_t pos, size_t cap,
     return pos;
 }
 
+/* SII General category (type 30), GD9.3 --coe-ca only. ETG.2010 layout,
+ * 32 byte body: GroupIdx(0) ImgIdx(1) OrderIdx(2) NameIdx(3) reserved(4)
+ * CoE details(5) FoE(6) EoE(7) SoE(8) DS402Channels(9) SysmanClass(10)
+ * Flags(11) CurrentOnEBus(12-13) GroupIdx(14) reserved(15) PhysicalPort
+ * (16-17) PhysicalMemoryAddress(18-19) reserved(20-31). SOEM ecx_config
+ * reads CoE details at ssigen+0x07 (= body[5], ssigen points at the size
+ * word), blockLRW at ssigen+0x0d bit1 (body[11]) and the E-bus current at
+ * ssigen+0x0e/0x0f; IgH requires the body to be at least 32 byte. Every
+ * byte except CoE details and PhysicalPort stays 0: no strings, LRW
+ * allowed, 0 mA. PhysicalPort = 0x0011: ports 0 and 1 MII (4 bit per
+ * port), matching the two-port ESC_PORTDESC_2ETH of 0x0007. */
+#define SII_COEDET_SDO        0x01u
+#define SII_COEDET_PDOASSIGN  0x04u
+#define SII_COEDET_SDOCA      0x20u
+static size_t append_general_category(uint16_t *out, size_t pos, size_t cap,
+                                      uint8_t coe_details)
+{
+    if (pos + 2 + 16 > cap) return pos;
+    out[pos++] = SII_CAT_GENERAL;
+    out[pos++] = 16;
+    for (int i = 0; i < 16; i++) out[pos + i] = 0;
+    out[pos + 2] = (uint16_t)((uint16_t)coe_details << 8);   /* body[5] = high byte of word 2 */
+    out[pos + 8] = 0x0011;                                   /* body[16..17] PhysicalPort */
+    return pos + 16;
+}
+
 /* ETG.2010: SII word 7 low byte = CRC-8 over bytes 0..13 (words 0..6),
  * polynomial x^8+x^2+x+1 (0x07), initial value 0xFF, no reflection. A real
  * ESC checks it when loading the EEPROM (0x0502 bit 11 on mismatch). */
@@ -186,6 +212,11 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
     while (words < SII_CATEGORY_START_WORD && words < ESC_SII_IMAGE_MAX_WORDS)
         esc->sii_image_buf[words++] = 0x0000;
 
+    /* GD9.3: General first, as in ESI-generated images (order below). */
+    if (esc->coe_ca)
+        words = append_general_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
+                                        SII_COEDET_SDO | SII_COEDET_PDOASSIGN | SII_COEDET_SDOCA);
+
     /* SyncM (41) must precede the PDO categories: IgH parses categories in
      * order and rejects a PDO whose SM index is not yet known (X-01a,
      * "Invalid SM index 3 for PDO 0x1A00"). ESI-generated SII images use the
@@ -203,6 +234,13 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
         esc->sii_image_buf[words++] = SII_CAT_END;
 
     esc->sii_image_words = words;
+}
+
+void esc_set_coe_features(esc_t *esc, int pdo_od, int ca)
+{
+    esc->coe_ca     = ca ? 1 : 0;
+    esc->coe_pdo_od = (pdo_od || ca) ? 1 : 0;
+    esc_build_sii(esc, esc->pdo_size_bytes);
 }
 
 /* ==========================================================================
@@ -250,12 +288,13 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     esc->wd.react = 1;
     memset(&esc->fault, 0, sizeof(esc->fault));
 
+    esc->coe_pdo_od = 0;   /* GD9.3: esc_set_coe_features() turns them on */
+    esc->coe_ca     = 0;
     esc_build_sii(esc, pdo_size_bytes);
 
     coe_od_init(&esc->coe_od);
-    /* esc->coe_session is already all-zero (esc_t instances come from
-     * calloc() in soft_bus_main.c), so coe_session.active starts at 0
-     * without needing an explicit reset here. */
+    /* Explicit since GD9.3: offline tests re-run esc_init() on one esc_t. */
+    memset(&esc->coe_session, 0, sizeof(esc->coe_session));
 
     /* DL Status is filled in by esc_chain_wire() — depends on position. */
 }

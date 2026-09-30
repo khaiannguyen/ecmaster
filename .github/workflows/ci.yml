@@ -10,6 +10,8 @@
 #            Startup SDO must NOT match it
 #            GD9.1: the one-slave bus (every slave GROUP_MOTION, GROUP_IO
 #            empty) has its own golden, tools/golden/golden_ecm_run_n1.txt
+#            GD9.3: soft_bus --coe-ca (SOEM maps with Complete Access) has
+#            tools/golden/golden_ecm_run_ca.txt; the default golden is unchanged
 #  l5-smoke  a subset of the L5 fault-injection cases. GitHub runners are
 #            shared and not RT, so this job reports but does not block
 #            (continue-on-error); the reference results come from the Jetson.
@@ -46,7 +48,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential libxml2-utils curl
       - name: ESI against the ESI XML schema (GD8 8.2, schema 1.17 + negative control)
         run: tools/esi/check_xsd.sh
-      - name: soft_bus (SII, ESM, DC, fault injection)
+      - name: CA ESI variant (GD9.3) up to date, valid, matches the --coe-ca SII (+ negative)
+        run: tools/esi/check_ca_variant.sh
+      - name: soft_bus (SII, ESM, DC, fault injection, CoE C-01)
         run: make -C tools/soft_bus test
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
         run: make -C libecmaster/telemetry run
@@ -105,6 +109,10 @@ jobs:
           tools/golden/check_golden.sh
       - name: --io-slaves 5-8 is the old --motion-slaves 4 (GD9.1 G-01b)
         run: sudo -E env GROUP_ARGS="--io-slaves 5-8" tools/golden/check_golden.sh
+      - name: Golden structure check, soft_bus --coe-ca (GD9.3 C-05) + negative control
+        run: |
+          sudo -E env SB_ARGS=--coe-ca GOLDEN=tools/golden/golden_ecm_run_ca.txt tools/golden/check_golden.sh
+          sudo -E env GOLDEN=tools/golden/golden_ecm_run_ca.txt EXPECT_DIFF=1 tools/golden/check_golden.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -153,6 +161,8 @@ jobs:
         run: sudo -E SB_ARGS=--no-sm-wd CASES="l509 l509neg l512" ./run_l5_io.sh
       - name: GD9.1 group assignment, one-slave and motion-only buses (G-03..G-07)
         run: sudo -E SB_ARGS=--no-sm-wd ECM_ARGS=--no-tx-ts NOFRAME_PCT=5 tools/gd9/run_groups.sh
+      - name: GD9.3 Complete Access, normal/segmented download (C-02..C-05, L4-07/08)
+        run: sudo -E tools/gd9/run_coe.sh
       - name: GD9.1 L5 on a one-slave bus (policy + io subset)
         working-directory: apps/ecm_run
         run: |

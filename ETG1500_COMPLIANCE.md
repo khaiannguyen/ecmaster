@@ -6,9 +6,9 @@
 > This project does **not** implement item 1201 (Slave-to-Slave Communication), so it does not fully
 > qualify for either class in the strict sense of the spec; it reaches "most of Class B plus part of
 > Class A", consistent with the self-assessment approach. Since GD8 8.4 (ENI import) item 503 Complete
-> Access also becomes a Class B `shall` and is not implemented yet (see 503).
+> Access also becomes a Class B `shall`; implemented in GD9.3 (see 503).
 >
-> Last update: GD8 (29/9/2026) -- ENI import, ESI, TwinCAT/IgH cross-checks, ETF launch time.
+> Last update: GD9.3 (30/9/2026) -- Complete Access (loader + soft_bus), normal/segmented SDO download tests.
 
 ## Basic Features
 
@@ -56,8 +56,8 @@
 | ID | Feature | Class A | Class B | SOEM 2.0 available | Project implements | Notes |
 |---|---|---|---|---|---|---|
 | 501 | SDO Up/Download | shall | shall | ✅ | ✅ | L4 test series |
-| 502 | Segmented Transfer | shall | should | ✅ | ✅ | Handled by SOEM automatically for >4 bytes |
-| 503 | Complete Access | shall | should (**shall if ENI import**) | ✅ (`ecx_SDOread/write` CA flag) | ❌ | **Gap since GD8 8.4**: ENI import is supported, so this is a Class B `shall`. Today `eni2cfg.py` keeps the `CompleteAccess` flag and the loader refuses the start with an explicit `complete access not supported` (no silent wrong download). Needed: execute CA InitCmds via `ecx_SDOwrite(..., CA=TRUE)` and test it (soft_bus has no CA / segmented download yet). Planned GD9 |
+| 502 | Segmented Transfer | shall | should | ✅ | ✅ | Handled by SOEM automatically for >4 bytes. Upload: L4-05 (200 byte). Download (GD9.3): L4-07 (16 byte normal, 250 byte = init + 2 segments), offline C-01 (400 byte = init + 3 segments, short last segment, toggle error -> abort 0x05030000) |
+| 503 | Complete Access | shall | should (**shall if ENI import**) | ✅ (`ecx_SDOread/write` CA flag) | ✅ | GD9.3: the ENI loader runs `CompleteAccess` InitCmds with `ecx_SDOwrite/ecx_SDOread(..., CA=TRUE)`, data verbatim from the ENI; a failure stops before SAFE-OP and names slave, object and abort code (C-03/C-04). `soft_bus --coe-ca` serves CA (SI0 as U8 + pad, CA bit echoed, PDO assign writable in PREOP only, atomic) and advertises it in an SII General category, so SOEM maps process data with `ecx_readPDOmapCA` (C-02: IOmap identical to the SII path). Still open: IgH cross-check X-04 on the Jetson, and a TwinCAT-generated CA ENI (step 9.4) |
 | 504 | SDO Info service | shall | should | ✅ | ✅ | **Exact code path read in `ec_coe.c` GET_OD_REQ** |
 | 505 | Emergency Message | shall | shall | ✅ | ✅ | |
 | 506 | PDO transmission with CoE | may | may | ✅ | ❌ | Spec itself states "no relevant use case known" |

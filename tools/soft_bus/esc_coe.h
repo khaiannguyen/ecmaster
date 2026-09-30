@@ -7,23 +7,31 @@
 /* ==========================================================================
  * esc_coe.h — minimal CoE/SDO server, one mailbox session per node.
  *
- * Scope (Giai doan 5, "Mailbox SM0/SM1 + CoE" per roadmap_master_ethercat.md):
- *  - SDO Upload (read), expedited and segmented, single subindex only
- *    (no Complete Access server-side -- ecx_SDOread(CA=true) will get an
- *    Abort, see esc_coe.c's default case).
- *  - SDO Download (write), expedited and segmented, single subindex only.
- *  - SDO Abort for unknown Index/SubIndex.
- *  - Fixed object dictionary (esc_types.h's coe_od_t): 0x1018 Identity
- *    (read-only, mirrors this node's own SII Vendor/Product/Revision/
- *    Serial), 0x8000 PID test params (read/write, expedited-sized),
- *    0x8001 a >128 byte read-only blob (forces real segmentation).
+ * Scope (Giai doan 5, "Mailbox SM0/SM1 + CoE" per roadmap_master_ethercat.md;
+ * extended in GD9.3):
+ *  - SDO Upload (read), expedited, normal and segmented.
+ *  - SDO Download (write), expedited, normal and segmented (GD9.3: the
+ *    last two used to answer Abort 0x06070012). Every write is checked
+ *    completely before anything is stored.
+ *  - SDO Complete Access upload/download (GD9.3), only when the node was
+ *    set up with esc_set_coe_features(ca=1) (soft_bus --coe-ca); otherwise
+ *    a CA request gets Abort 0x06010000 exactly as before.
+ *  - SDO Abort with CiA 301 codes (object / subindex missing, read-only,
+ *    length, value range, wrong state, toggle, CA unsupported).
+ *  - Object dictionary: see the table in esc_coe.c. 0x1000, 0x1018,
+ *    0x8000 (PID test params, RW), 0x8001 (200 byte RO blob, segmented
+ *    upload), 0x8002 (1..400 byte RW, segmented download); with
+ *    --coe-pdo-od (implied by --coe-ca) also 0x1C00, 0x1C12/0x1C13 (PDO
+ *    assign, writable in PREOP only) and 0x1600/0x1A00 (PDO mapping,
+ *    mirroring the SII PDO categories).
  *
- * Explicitly OUT of scope here (not needed by L4-01..L4-05):
+ * Explicitly OUT of scope here:
  *  - SDO Info (ECT_COES_SDOINFO) -- ecx_readODlist/readOE would get no
  *    reply. Not used by ecm_run.c today.
  *  - Emergency messages (ECT_COES_EMERGENCY) -- soft_bus never spontaneously
  *    reports one; nothing generates them yet.
- *  - Complete Access (CA) SDO upload/download.
+ *  - Changing the process data layout: 0x1C12/0x1C13 only accept the one
+ *    fixed PDO (0x1600/0x1A00), mapping objects are read-only.
  *
  * All request/response bytes are read/written directly at
  * esc->regs[SII_SM0_OFFSET]/[SII_SM1_OFFSET] using plain little-endian

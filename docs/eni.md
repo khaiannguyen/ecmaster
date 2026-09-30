@@ -57,7 +57,7 @@ ecm_run --eni config/eni/<name>.enicfg
 **Bỏ qua có chủ đích:** register InitCmds (SM/FMMU/AL/địa chỉ/DC do SOEM + libecmaster làm), địa chỉ logic và offset process image (SOEM tự dựng IOmap), khung cyclic.
 
 **Thứ tự trong ecm_run (chế độ ENI):**
-1. Nạp `.enicfg`; `--n` không nhập → lấy từ ENI, nhập khác → lỗi. CoE InitCmd có transition ngoài IP/PS hoặc CompleteAccess → từ chối.
+1. Nạp `.enicfg`; `--n` không nhập → lấy từ ENI, nhập khác → lỗi. CoE InitCmd có transition ngoài IP/PS → từ chối. InitCmd `CompleteAccess` (từ GĐ9.3) chạy bằng `ecx_SDOwrite/ecx_SDOread(..., CA=TRUE)`, dữ liệu nguyên văn từ ENI; lỗi → dừng trước SAFE-OP, in slave + object + abort code.
 2. `ecx_config_init` → **kiểm danh tính (E-03)**: số slave + vendor/product từng vị trí, revision nếu `check_rev`. Lệch → dừng, in từng vị trí (kỳ vọng / thực tế). Không còn "tiếp tục với số slave tìm thấy".
 3. Chờ PRE-OP → chạy CoE InitCmd **IP**.
 4. Gắn hook `PO2SOconfig` → CoE InitCmd **PS** chạy bên trong `ecx_config_map_group`, trước khi SOEM đọc PDO assign (cùng điểm SOEM gọi `ecx_mbxENIinitcmds`). SOEM bỏ qua giá trị trả về của hook → lỗi được đếm, kiểm ngay sau map: ≥1 lỗi → dừng trước SAFE-OP, log abort code (`ecx_elist2string`).

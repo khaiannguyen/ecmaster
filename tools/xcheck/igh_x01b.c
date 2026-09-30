@@ -18,6 +18,15 @@
  *       -Wl,-rpath,/opt/etherlab/lib
  * Run (needs /dev/EtherCAT0 access, SCHED_FIFO, mlockall):
  *   sudo ./igh_x01b --n 8 --seconds 600
+ *
+ * GD9.3 X-04 (tools/xcheck/run_x04.sh), against soft_bus --coe-ca:
+ *   --complete-sdo   configure 0x1C12 = {1, 0x1600} and 0x1C13 = {1, 0x1A00}
+ *                    on every slave with ecrt_slave_config_complete_sdo()
+ *                    (Complete Access download in PREOP, data 01 00 00 16 /
+ *                    01 00 00 1A: SI0 as U8 + pad byte, ETG.1000.6)
+ *   --sdo8002 LEN    configure 0x8002:00 with LEN byte (1..400) via
+ *                    ecrt_slave_config_sdo() -> IgH normal (LEN <= 4:
+ *                    expedited) or segmented download in PREOP
  * ========================================================================== */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -70,6 +79,8 @@ int main(int argc, char **argv)
     int64_t cycle_ns = 1000000;             /* 1 ms */
     int32_t sync0_shift_ns = 0;
     int use_dc = 1;
+    int complete_sdo = 0;                   /* GD9.3 X-04 */
+    int sdo8002_len = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--n") && i + 1 < argc)              n = atoi(argv[++i]);
@@ -79,13 +90,20 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--prio") && i + 1 < argc)      prio = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shift-us") && i + 1 < argc)  sync0_shift_ns = atoi(argv[++i]) * 1000;
         else if (!strcmp(argv[i], "--no-dc"))                     use_dc = 0;
+        else if (!strcmp(argv[i], "--complete-sdo"))              complete_sdo = 1;
+        else if (!strcmp(argv[i], "--sdo8002") && i + 1 < argc)   sdo8002_len = atoi(argv[++i]);
         else {
             fprintf(stderr, "Usage: %s [--n N] [--seconds S] [--cycle-us US] [--cpu C] "
-                            "[--prio P] [--shift-us US] [--no-dc]\n", argv[0]);
+                            "[--prio P] [--shift-us US] [--no-dc] [--complete-sdo] [--sdo8002 LEN]\n", argv[0]);
             return 1;
         }
     }
     if (n < 1 || n > MAX_SLAVES) { fprintf(stderr, "--n must be 1..%d\n", MAX_SLAVES); return 1; }
+    if (sdo8002_len < 0 || sdo8002_len > 400) { fprintf(stderr, "--sdo8002 must be 1..400\n"); return 1; }
+    static uint8_t blob8002[400];
+    for (int k = 0; k < sdo8002_len; k++) blob8002[k] = (uint8_t)('A' + k % 26);  /* printable: `ethercat upload -t string` */
+    static const uint8_t ca_1c12[4] = { 0x01, 0x00, 0x00, 0x16 };
+    static const uint8_t ca_1c13[4] = { 0x01, 0x00, 0x00, 0x1A };
 
     /* ---- configuration (non-RT) ---- */
     ec_master_t *master = ecrt_request_master(0);
@@ -102,9 +120,21 @@ int main(int argc, char **argv)
         if (!sc[i]) { fprintf(stderr, "slave_config %d failed\n", i); return 1; }
 
         /* No ecrt_slave_config_pdos(): use the default mapping from SII.
-         * soft_bus has no 0x1C12/0x1C13 (IgH gets an abort and falls back to
-         * SII), and giving an explicit mapping would make IgH try to write
-         * the PDO assignment over CoE, which soft_bus does not support. */
+         * A default soft_bus has no 0x1C12/0x1C13 (IgH gets an abort and
+         * falls back to SII); with --coe-ca (GD9.3) IgH reads the mapping
+         * over CoE instead. The PDO assignment is written only on request
+         * (--complete-sdo), as raw Complete Access configuration data. */
+        if (complete_sdo &&
+            (ecrt_slave_config_complete_sdo(sc[i], 0x1C12, ca_1c12, sizeof(ca_1c12)) ||
+             ecrt_slave_config_complete_sdo(sc[i], 0x1C13, ca_1c13, sizeof(ca_1c13)))) {
+            fprintf(stderr, "slave %d: ecrt_slave_config_complete_sdo failed\n", i);
+            return 1;
+        }
+        if (sdo8002_len > 0 &&
+            ecrt_slave_config_sdo(sc[i], 0x8002, 0, blob8002, (size_t)sdo8002_len)) {
+            fprintf(stderr, "slave %d: ecrt_slave_config_sdo 0x8002 failed\n", i);
+            return 1;
+        }
         off_out[i] = ecrt_slave_config_reg_pdo_entry(sc[i], OUT_INDEX, 1, domain, NULL);
         off_in[i]  = ecrt_slave_config_reg_pdo_entry(sc[i], IN_INDEX, 1, domain, NULL);
         if (off_out[i] < 0 || off_in[i] < 0) {
@@ -125,6 +155,9 @@ int main(int argc, char **argv)
     printf("igh_x01b: N=%d cycle=%lld us DC=%s (bus-shift, SYNC0 shift %d us) seconds=%d cpu=%d prio=%d\n",
            n, (long long)(cycle_ns / 1000), use_dc ? "on" : "off", sync0_shift_ns / 1000,
            seconds, cpu, prio);
+    if (complete_sdo || sdo8002_len)
+        printf("igh_x01b: config SDOs: %s%s%d byte 0x8002:00\n",
+               complete_sdo ? "CA 0x1C12/0x1C13, " : "", sdo8002_len ? "" : "no ", sdo8002_len);
     for (int i = 0; i < n; i++)
         printf("  slave %d: out 0x%04X:01 @%d, in 0x%04X:01 @%d\n", i, OUT_INDEX, off_out[i], IN_INDEX, off_in[i]);
 
