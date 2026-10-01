@@ -47,6 +47,9 @@ numbers in hex with 0x prefix except counts/times in decimal):
         dc 0|1 refclock 0|1 sync0_ns <n> sync1_ns <n> shift_ns <n> assign 0x....
         preop_ms <n> safeop_ms <n> op_ms <n>          (0 = not in the ENI)
   reg <pos> trans <IP,..> cmd <n> ado 0x.... len <n> data <hex|->
+  pdo <pos> dir out|in pdo 0x.... index 0x.... sub 0x.. bits <n>
+        (GD9.10: every mapped PDO entry in process image order; index 0 =
+        padding; the order of PDOs follows the 0x1C12/0x1C13 InitCmds)
         (pos 0 = master InitCmd; data truncated to 32 byte, len is the real one)
   coe <pos> trans <IP,PS,..> ccs <1|2> index 0x.... sub 0x.. ca 0|1 timeout_ms <n> data <hex|->
 
@@ -101,6 +104,51 @@ def pdo_bits(pd, tag):
         for e in pdo.findall("Entry"):
             total += num(e.findtext("BitLen"), 0)
     return total
+
+
+def pdo_assignment(coe, sm_index):
+    """GD9.10: the PDO assignment the ENI's CoE InitCmds leave in 0x1C12
+    (outputs) / 0x1C13 (inputs), in order; None if the ENI does not write
+    it. Complete Access: data = SI0 (16 bit, padded) + 16-bit PDO numbers.
+    Without CA: SI0 = n and SIk = PDO, as separate downloads (last wins)."""
+    vals, count, seen = {}, None, False
+    for c in coe:
+        if c["index"] != sm_index or c["ccs"] != 1 or c["data"] == "-":
+            continue
+        seen = True
+        d = bytes.fromhex(c["data"])
+        if c["ca"]:
+            n = d[0]
+            vals = {k + 1: d[2 + 2 * k] | d[3 + 2 * k] << 8 for k in range(n) if 3 + 2 * k < len(d)}
+            count = n
+        elif c["sub"] == 0:
+            count = d[0]
+        elif len(d) >= 2:
+            vals[c["sub"]] = d[0] | d[1] << 8
+    if not seen:
+        return None
+    return [vals[k] for k in range(1, (count or 0) + 1) if k in vals]
+
+
+def pdo_entries(pd, tag, assign, who):
+    """GD9.10: (pdo, index, sub, bits) of every entry the slave maps, in
+    process image order: PDOs in the order of the assignment the ENI writes
+    (or file order when it writes none), entries in PDO order. Index 0 =
+    padding gap, kept: it shifts every entry after it."""
+    pdos = [p for p in pd.findall(tag) if p.get("Sm") is not None]
+    by_index = {num(p.findtext("Index")): p for p in pdos}
+    if assign is not None:
+        if set(assign) != set(by_index):
+            fail(f"{who}: {tag} assigned in the ENI's SM ({sorted(hex(i) for i in by_index)}) "
+                 f"differs from its 0x1C1x InitCmds ({[hex(i) for i in assign]})")
+        pdos = [by_index[i] for i in assign]
+    out = []
+    for p in pdos:
+        pi = num(p.findtext("Index"))
+        for e in p.findall("Entry"):
+            out.append((pi, num(e.findtext("Index"), 0), num(e.findtext("SubIndex"), 0),
+                        num(e.findtext("BitLen"), 0)))
+    return out
 
 
 def reg_initcmds(inits, who):
@@ -254,6 +302,13 @@ def parse_slave(s, idx):
                 "data": data.lower() or "-",
             })
     rec["coe"] = coe
+
+    rec["pdo"] = []
+    if pd is not None:
+        who = f"slave {rec['pos']}"
+        for tag, sm_obj, d in (("RxPdo", 0x1C12, "out"), ("TxPdo", 0x1C13, "in")):
+            for (pi, ix, sb, bl) in pdo_entries(pd, tag, pdo_assignment(coe, sm_obj), who):
+                rec["pdo"].append((d, pi, ix, sb, bl))
     return rec
 
 
@@ -305,6 +360,9 @@ def convert(path):
     out += reg_lines(0, master_regs)
     for r in slaves:
         out += reg_lines(r["pos"], r["reg"])
+    for r in slaves:
+        for (d, pi, ix, sb, bl) in r["pdo"]:
+            out.append(f'pdo {r["pos"]} dir {d} pdo 0x{pi:04X} index 0x{ix:04X} sub 0x{sb:02X} bits {bl}')
     for r in slaves:
         for c in r["coe"]:
             out.append(

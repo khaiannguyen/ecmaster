@@ -45,6 +45,7 @@ test-offline:
 	$(MAKE) -C libecmaster/diag test test_asan
 	$(MAKE) -C libecmaster/policy test test_asan
 	$(MAKE) -C libecmaster/config test
+	$(MAKE) -C libecmaster/pdo test test_asan
 	tests/tsan/run_tsan.sh 1000000
 
 clean:

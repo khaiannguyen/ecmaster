@@ -17,10 +17,11 @@ DC_SRC = ../../libecmaster/core/ecm_dc.c
 DIAG_SRC = ../../libecmaster/diag/ecm_diag.c ../../libecmaster/diag/ecm_diag_soem.c
 POLICY_SRC = ../../libecmaster/policy/ecm_policy.c
 ENI_SRC = ../../libecmaster/config/ecm_eni.c ../../libecmaster/config/ecm_eni_soem.c   # Giai doan 8.4
+PDO_SRC = ../../libecmaster/pdo/ecm_pdo.c ../../libecmaster/pdo/ecm_pdo_soem.c       # GD9.10
 
 all: $(TARGET)
 
-$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(SOEM_LIB)
+$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(SOEM_LIB)
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
 	@echo "Using SOEM lib: $(SOEM_LIB)"
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm

@@ -164,6 +164,8 @@
 #include "libecmaster/diag/ecm_diag.h"     
 #include "libecmaster/config/ecm_eni.h"
 #include "libecmaster/config/ecm_eni_soem.h"
+#include "libecmaster/pdo/ecm_pdo.h"         /* GD9.10 */
+#include "libecmaster/pdo/ecm_pdo_soem.h"
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -224,6 +226,23 @@ static ecm_eni_t   g_eni;         /* large; file scope, never on the stack */
 static int         g_eni_on;
 static int         g_eni_allow_unknown_reg;   /* GD9.6: --eni-allow-unknown-regcmd */
 static int         g_sdo_timeout_ms;          /* GD9.6: --sdo-timeout-ms, 0 = EC_TIMEOUTRXM */
+
+/* GD9.10: process data by (slave, index, sub). The table comes from the ENI
+ * (.enicfg "pdo" records) or from a scan of the bus (--pdo-scan); with both,
+ * they must agree. --pdo-set / --pdo-get exercise ecm_pdo_bind() end to end:
+ * the RT thread writes the set values into the outputs every tick (it owns
+ * the IOmap), the gets are printed at exit. */
+#define PDO_MAX_REFS 16
+static int              g_pdo_scan;
+static int              g_pdo_dump;                 /* --pdo-dump: print the table in use */
+static ecm_pdo_table_t  g_pdo_eni, g_pdo_bus;
+static const ecm_pdo_table_t *g_pdo;           /* the one in use, or NULL */
+static ecm_pdo_loc_t    g_pdo_loc[ECM_PDO_MAX_SLAVES + 1];
+static const char      *g_pdo_set_spec, *g_pdo_get_spec;
+static int              g_pdo_nset, g_pdo_nget;
+static ecm_pdo_handle_t g_pdo_set_h[PDO_MAX_REFS], g_pdo_get_h[PDO_MAX_REFS];
+static uint64_t         g_pdo_set_v[PDO_MAX_REFS];
+static char             g_pdo_get_name[PDO_MAX_REFS][32];
 
 /* GD9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
  * unless the ENI gives a slave a longer one (the Timeout of its AL Control
@@ -1738,6 +1757,14 @@ int main(int argc, char **argv)
             g_reply_check = 0;
         } else if (strcmp(argv[i], "--fresh-offset") == 0 && i + 1 < argc) {
             g_fresh_off = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--pdo-scan") == 0) {                 /* GD9.10 */
+            g_pdo_scan = 1;
+        } else if (strcmp(argv[i], "--pdo-dump") == 0) {
+            g_pdo_dump = 1;
+        } else if (strcmp(argv[i], "--pdo-set") == 0 && i + 1 < argc) {
+            g_pdo_set_spec = argv[++i];
+        } else if (strcmp(argv[i], "--pdo-get") == 0 && i + 1 < argc) {
+            g_pdo_get_spec = argv[++i];
         } else if (strcmp(argv[i], "--fresh") == 0 && i + 1 < argc) {   /* GD9.8 */
             g_fresh_spec = argv[++i];
         } else if (strcmp(argv[i], "--fresh-stale") == 0 && i + 1 < argc) {
@@ -1832,6 +1859,7 @@ int main(int argc, char **argv)
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
             "       [--no-quarantine] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (GD9.8, per slave)\n"
+            "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (GD9.10)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -1978,6 +2006,90 @@ int main(int argc, char **argv)
     fprintf(stderr, "ecm_run: GROUP_MOTION (%d slave, %d byte IOmap), GROUP_IO (%d slave, %d byte IOmap)%s\n",
             n_motion, motion_iomap_size, n_io, io_iomap_size,
             g_io_active ? "" : " -- GROUP_IO empty: never sent");
+
+    /* ---- GD9.10: PDO table (ENI and/or scan), checked against what SOEM
+     * mapped, then the --pdo-set/--pdo-get references bound. Scanning
+     * uses plain SDO reads: here the cyclic mailbox is not enabled yet. */
+    if (g_eni_on && g_eni.npdo) {
+        ecm_pdo_table_init(&g_pdo_eni);
+        for (int k = 0; k < g_eni.npdo; k++) {
+            const ecm_eni_pdo_t *q = &g_eni.pdo[k];
+            ecm_pdo_add(&g_pdo_eni, q->pos, q->dir ? ECM_PDO_IN : ECM_PDO_OUT, q->pdo, q->index, q->sub, q->bits);
+        }
+        g_pdo = &g_pdo_eni;
+        fprintf(stderr, "ecm_run: PDO table from the ENI: %d entries\n", g_pdo_eni.n);
+    }
+    if (g_pdo_scan) {
+        ecm_pdo_table_init(&g_pdo_bus);
+        if (ecm_pdo_scan(&ctx, &g_pdo_bus) != 0) {
+            fprintf(stderr, "ecm_run: --pdo-scan failed, refusing\n"); ecx_close(&ctx); return 1;
+        }
+        { ec_errort er; while (ecx_poperror(&ctx, &er)) { } }   /* SOEM probing aborts of the scan */
+        fprintf(stderr, "ecm_run: PDO table from the bus: %d entries\n", g_pdo_bus.n);
+        if (g_pdo) {
+            static char perr[8192];
+            int d = ecm_pdo_table_compare(&g_pdo_eni, &g_pdo_bus, perr, sizeof(perr));
+            if (d) {
+                fprintf(stderr, "ecm_run: PDO table of the ENI differs from the bus (%d):\n%s"
+                        "ecm_run: refusing\n", d, perr);
+                ecx_close(&ctx); return 1;
+            }
+            fprintf(stderr, "ecm_run: PDO table: ENI == bus (%d entries)\n", g_pdo_bus.n);
+        }
+        g_pdo = &g_pdo_bus;
+    }
+    if (g_pdo) {
+        if (ecm_pdo_soem_check(&ctx, g_pdo) != 0) {
+            fprintf(stderr, "ecm_run: PDO table does not match the mapping, refusing\n");
+            ecx_close(&ctx); return 1;
+        }
+        uint8 *const iomaps[3] = { IOmap_motion, IOmap_motion, IOmap_io };
+        ecm_pdo_locate(&ctx, iomaps, 3, g_pdo_loc);
+        if (g_pdo_dump) {
+            static char tb[65536];
+            ecm_pdo_table_format(g_pdo, tb, sizeof(tb));
+            fputs(tb, stderr);
+        }
+    }
+    if (g_pdo_set_spec || g_pdo_get_spec) {
+        if (!g_pdo) {
+            fprintf(stderr, "ecm_run: --pdo-set/--pdo-get need a PDO table: --eni (enicfg 2) or --pdo-scan\n");
+            ecx_close(&ctx); return 1;
+        }
+        const char *specs[2] = { g_pdo_set_spec, g_pdo_get_spec };
+        for (int w = 0; w < 2; w++) {
+            if (!specs[w]) continue;
+            char buf[512], perr[512];
+            snprintf(buf, sizeof(buf), "%s", specs[w]);
+            for (char *save = NULL, *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+                char *eq = w == 0 ? strchr(t, '=') : NULL;
+                if (w == 0 && !eq) { fprintf(stderr, "ecm_run: --pdo-set %s: expected S:IDX:SUB=VALUE\n", t); ecx_close(&ctx); return 1; }
+                if (eq) *eq = '\0';
+                int sl; uint16_t ix; uint8_t sb;
+                int *cnt = w == 0 ? &g_pdo_nset : &g_pdo_nget;
+                ecm_pdo_handle_t *hh = w == 0 ? &g_pdo_set_h[*cnt] : &g_pdo_get_h[*cnt];
+                if (*cnt >= PDO_MAX_REFS || ecm_pdo_parse_ref(t, &sl, &ix, &sb) != 0) {
+                    fprintf(stderr, "ecm_run: --pdo-%s %s: expected SLAVE:INDEX:SUB (max %d)\n", w ? "get" : "set", t, PDO_MAX_REFS);
+                    ecx_close(&ctx); return 1;
+                }
+                if (ecm_pdo_bind(g_pdo, g_pdo_loc, sl, ix, sb, hh, perr, sizeof(perr)) != 0) {
+                    fprintf(stderr, "ecm_run: --pdo-%s: %s\n", w ? "get" : "set", perr);
+                    ecx_close(&ctx); return 1;
+                }
+                if (w == 0) g_pdo_set_v[*cnt] = strtoull(eq + 1, NULL, 0);
+                else snprintf(g_pdo_get_name[*cnt], sizeof(g_pdo_get_name[0]), "%s", t);
+                fprintf(stderr, "ecm_run: pdo %s slave %d 0x%04X:%02X -> group %u %s bit %u, %u bit%s\n",
+                        w ? "get" : "set", sl, ix, sb, hh->group, hh->dir ? "in" : "out", hh->bit, hh->bits,
+                        hh->dir == (w ? ECM_PDO_IN : ECM_PDO_OUT) ? "" :
+                        (w ? " (an output: reads back what the master writes)" : " -- NOT an output"));
+                if (w == 0 && hh->dir != ECM_PDO_OUT) {
+                    fprintf(stderr, "ecm_run: --pdo-set: slave %d 0x%04X:%02X is an input, refusing\n", sl, ix, sb);
+                    ecx_close(&ctx); return 1;
+                }
+                (*cnt)++;
+            }
+        }
+    }
 
     /* ---- GD9.8: freshness per slave. Resolved here, after mapping, so a
      * counter outside a slave's inputs is refused now (by name) instead of
@@ -2415,6 +2527,9 @@ int main(int argc, char **argv)
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
         if (g_link_etf) ecx_txtime_set_next(&ctx.port, launch_tai_ns);   /* 8.5: only the motion frame */
 #endif
+        for (int k = 0; k < g_pdo_nset; k++)   /* GD9.10: the RT thread owns the IOmap */
+            ecm_pdo_set(&g_pdo_set_h[k], g_pdo_set_h[k].group == GROUP_IO ? IOmap_io : IOmap_motion,
+                        g_pdo_set_v[k]);
         service_group(&motion, tick, &motion_prep_send_ns, &motion_total_ns, &motion_rx_ts_ns, &motion_wkc);
         cycle_occupancy_ns = motion_total_ns;   /* quantity #4, starts with motion's own cost */
 
@@ -2702,6 +2817,12 @@ int main(int argc, char **argv)
             "reply through a reused index): motion=%" PRIu64 " io=%" PRIu64 "%s\n",
             g_foreign_replies[GROUP_MOTION], g_foreign_replies[GROUP_IO],
             g_reply_check ? "" : "  (--no-reply-check: counted, NOT rejected)");
+    for (int k = 0; k < g_pdo_nget; k++) {   /* GD9.10 */
+        const ecm_pdo_handle_t *h = &g_pdo_get_h[k];
+        uint64_t v = ecm_pdo_get(h, h->group == GROUP_IO ? IOmap_io : IOmap_motion);
+        fprintf(stderr, "  [PDO] get %s = 0x%llX (%llu)\n", g_pdo_get_name[k],
+                (unsigned long long)v, (unsigned long long)v);
+    }
     if (g_fresh_any) {
         uint64_t reg = 0, eps = 0, n = 0;
         for (int s = 1; s <= ctx.slavecount && s <= ECM_SREC_MAX_SLAVES; s++) {

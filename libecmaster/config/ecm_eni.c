@@ -247,6 +247,38 @@ static int parse_reg(char **tok, int n, int lineno, ecm_eni_t *eni, char *err, s
     return 0;
 }
 
+static int parse_pdo(char **tok, int n, int lineno, ecm_eni_t *eni, char *err, size_t errlen)
+{
+    uint32_t pos, v;
+    if (n < 2 || parse_u32(tok[1], &pos) || pos < 1 || (int)pos > eni->nslaves) {
+        seterr(err, errlen, "line %d: pdo: position not a declared slave", lineno);
+        return -1;
+    }
+    if (eni->npdo >= ECM_ENI_MAX_PDO) {
+        seterr(err, errlen, "line %d: more than %d PDO entries", lineno, ECM_ENI_MAX_PDO);
+        return -1;
+    }
+    ecm_eni_pdo_t *p = &eni->pdo[eni->npdo];
+    memset(p, 0, sizeof(*p));
+    p->pos = (uint16_t)pos;
+    const char *d = kv(tok, n, 2, "dir");
+    if (!d || (strcmp(d, "out") && strcmp(d, "in"))) {
+        seterr(err, errlen, "line %d: pdo: bad 'dir'", lineno);
+        return -1;
+    }
+    p->dir = (uint8_t)(strcmp(d, "in") == 0);
+    NEED_U32("pdo", v, 0xFFFF); p->pdo = (uint16_t)v;
+    NEED_U32("index", v, 0xFFFF); p->index = (uint16_t)v;
+    NEED_U32("sub", v, 0xFF); p->sub = (uint8_t)v;
+    NEED_U32("bits", v, 0xFFFF); p->bits = (uint16_t)v;
+    if (!p->bits) {
+        seterr(err, errlen, "line %d: pdo: bits 0", lineno);
+        return -1;
+    }
+    eni->npdo++;
+    return 0;
+}
+
 static int parse_coe(char **tok, int n, int lineno, ecm_eni_t *eni, char *err, size_t errlen)
 {
     uint32_t pos, v;
@@ -344,6 +376,9 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
         } else if (strcmp(tok[0], "coe") == 0) {
             if (parse_coe(tok, n, lineno, eni, err, errlen))
                 return -1;
+        } else if (strcmp(tok[0], "pdo") == 0 && eni->version >= 2) {
+            if (parse_pdo(tok, n, lineno, eni, err, errlen))
+                return -1;
         } else if (strcmp(tok[0], "reg") == 0 && eni->version >= 2) {
             if (parse_reg(tok, n, lineno, eni, err, errlen))
                 return -1;
@@ -368,6 +403,21 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
     if (eni->version >= 2 && eni->pd_cmd == ECM_ENI_PD_UNKNOWN) {
         seterr(err, errlen, "enicfg 2 without a 'pd_cmd' record");
         return -1;
+    }
+    /* GD9.10: PDO entries, when present, must add up to the slave sizes */
+    if (eni->npdo) {
+        for (int i = 0; i < eni->nslaves; i++) {
+            uint32_t o = 0, in = 0;
+            for (int k = 0; k < eni->npdo; k++)
+                if (eni->pdo[k].pos == i + 1) {
+                    if (eni->pdo[k].dir) in += eni->pdo[k].bits; else o += eni->pdo[k].bits;
+                }
+            if (o != eni->slave[i].osize_bits || in != eni->slave[i].isize_bits) {
+                seterr(err, errlen, "slave %d: pdo entries %u out / %u in bits, slave record %u / %u",
+                       i + 1, o, in, eni->slave[i].osize_bits, eni->slave[i].isize_bits);
+                return -1;
+            }
+        }
     }
     if (declared != eni->nslaves) {
         seterr(err, errlen, "'slaves %d' but %d slave records", declared, eni->nslaves);

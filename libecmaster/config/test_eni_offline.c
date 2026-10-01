@@ -231,6 +231,23 @@ int main(void)
     check("separate 0x09A4 write vs sync1 0 -> refused",
           ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "SYNC1 cycle"));
 
+    /* ------------------------------------------------------------ GD9.10 */
+    printf("[GD9.10: PDO entries from the ENI]\n");
+    rc = ecm_eni_load("config/eni/eni_mixed.enicfg", &eni, err, sizeof(err));
+    check("eni_mixed: 27 PDO entries", rc == 0 && eni.npdo == 27);
+    check("P1 first output 0x6040:00 16 bit in PDO 0x1600",
+          eni.pdo[0].pos == 1 && !eni.pdo[0].dir && eni.pdo[0].pdo == 0x1600 && eni.pdo[0].index == 0x6040 &&
+          eni.pdo[0].bits == 16);
+    check("P1 inputs: 0x1A00 before 0x1A01 (order of the 0x1C13 CA InitCmd)",
+          eni.pdo[11].pdo == 0x1A01 && eni.pdo[10].pdo == 0x1A00 && eni.pdo[11].index == 0x2F00);
+    check("IS620N outputs from 0x1701 (assigned by the non-CA InitCmds)",
+          eni.pdo[14].pos == 2 && eni.pdo[14].pdo == 0x1701 && eni.pdo[17].index == 0x60FE && eni.pdo[17].sub == 1);
+    snprintf(buf, sizeof(buf), "%s%s", s2, "pdo 1 dir out pdo 0x1600 index 0x7000 sub 0x01 bits 16\n");
+    check("pdo entries not adding up to the slave size -> refused",
+          expect_parse_error(buf, "slave 1: pdo entries 16 out / 0 in bits, slave record 32 / 32"));
+    snprintf(buf, sizeof(buf), "%s%s", s2, "pdo 1 dir up pdo 0x1600 index 0x7000 sub 0x01 bits 32\n");
+    check("bad dir -> refused", expect_parse_error(buf, "pdo: bad 'dir'"));
+
     printf("\nRESULT: %d pass, %d fail\n", npass, nfail);
     return nfail ? 1 : 0;
 }

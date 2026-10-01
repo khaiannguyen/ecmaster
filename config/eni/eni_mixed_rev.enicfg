@@ -110,6 +110,33 @@ reg 2 trans PS cmd 4 ado 0x0130 len 6 data 000000000000
 reg 2 trans OS cmd 4 ado 0x0130 len 6 data 000000000000
 reg 2 trans SO cmd 5 ado 0x0120 len 2 data 0800
 reg 2 trans SO cmd 4 ado 0x0130 len 6 data 000000000000
+pdo 1 dir out pdo 0x1701 index 0x6040 sub 0x00 bits 16
+pdo 1 dir out pdo 0x1701 index 0x607A sub 0x00 bits 32
+pdo 1 dir out pdo 0x1701 index 0x60B8 sub 0x00 bits 16
+pdo 1 dir out pdo 0x1701 index 0x60FE sub 0x01 bits 32
+pdo 1 dir in pdo 0x1B01 index 0x603F sub 0x00 bits 16
+pdo 1 dir in pdo 0x1B01 index 0x6041 sub 0x00 bits 16
+pdo 1 dir in pdo 0x1B01 index 0x6064 sub 0x00 bits 32
+pdo 1 dir in pdo 0x1B01 index 0x6077 sub 0x00 bits 16
+pdo 1 dir in pdo 0x1B01 index 0x60F4 sub 0x00 bits 32
+pdo 1 dir in pdo 0x1B01 index 0x60B9 sub 0x00 bits 16
+pdo 1 dir in pdo 0x1B01 index 0x60BA sub 0x00 bits 32
+pdo 1 dir in pdo 0x1B01 index 0x60BC sub 0x00 bits 32
+pdo 1 dir in pdo 0x1B01 index 0x60FD sub 0x00 bits 32
+pdo 2 dir out pdo 0x1600 index 0x6040 sub 0x00 bits 16
+pdo 2 dir out pdo 0x1600 index 0x6060 sub 0x00 bits 8
+pdo 2 dir out pdo 0x1600 index 0x607A sub 0x00 bits 32
+pdo 2 dir out pdo 0x1600 index 0x60FF sub 0x00 bits 32
+pdo 2 dir out pdo 0x1600 index 0x6071 sub 0x00 bits 16
+pdo 2 dir in pdo 0x1A00 index 0x6041 sub 0x00 bits 16
+pdo 2 dir in pdo 0x1A00 index 0x6061 sub 0x00 bits 8
+pdo 2 dir in pdo 0x1A00 index 0x6064 sub 0x00 bits 32
+pdo 2 dir in pdo 0x1A00 index 0x606C sub 0x00 bits 32
+pdo 2 dir in pdo 0x1A00 index 0x6077 sub 0x00 bits 16
+pdo 2 dir in pdo 0x1A00 index 0x603F sub 0x00 bits 16
+pdo 2 dir in pdo 0x1A01 index 0x2F00 sub 0x01 bits 16
+pdo 2 dir in pdo 0x1A01 index 0x2F00 sub 0x02 bits 16
+pdo 2 dir in pdo 0x1A01 index 0x2F00 sub 0x03 bits 16
 coe 1 trans PS ccs 1 index 0x1C12 sub 0x00 ca 0 timeout_ms 0 data 00
 coe 1 trans PS ccs 1 index 0x1C13 sub 0x00 ca 0 timeout_ms 0 data 00
 coe 1 trans PS ccs 1 index 0x1C12 sub 0x01 ca 0 timeout_ms 0 data 0117

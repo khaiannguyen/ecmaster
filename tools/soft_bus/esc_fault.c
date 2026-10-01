@@ -465,6 +465,28 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             sticky ? "every" : "next",
             tst ? (tst == 1 ? " to INIT" : tst == 2 ? " to PREOP" : tst == 4 ? " to SAFEOP" : " to OP") : "",
             argv[1], code ? code : 0x0012ul);
+    } else if (!strcmp(cmd, "pdo_out") && argc == 2) {
+        /* GD9.10: what the master wrote into the node's outputs (SM2) */
+        NEED_NODE(1);
+        const uint8_t *sm2 = chain[node].regs + REG_SM_BASE + 2 * REG_SM_ENTRY_SIZE;
+        uint16_t start = rd16(sm2 + SM_OFF_PHYS_START), len = rd16(sm2 + SM_OFF_LENGTH);
+        char hex[3 * 256 + 1] = "";   /* the first 256 byte */
+        for (int k = 0; k < len && k < 256 && (uint32_t)start + k < ESC_REG_SPACE_SIZE; k++)
+            snprintf(hex + 3 * k, sizeof(hex) - 3 * (size_t)k, "%02X ", chain[node].regs[start + k]);
+        LOG(f, now_ns, "pdo_out: node %d (SOEM slave %d) %u byte: %s", node, node + 1, len, hex);
+    } else if (!strcmp(cmd, "pdo_in") && argc == 4) {
+        /* GD9.10: pdo_in <node> <byte> <hex>: put bytes into the node's inputs (SM3) */
+        NEED_NODE(1);
+        const uint8_t *sm3 = chain[node].regs + REG_SM_BASE + 3 * REG_SM_ENTRY_SIZE;
+        uint16_t start = rd16(sm3 + SM_OFF_PHYS_START), len = rd16(sm3 + SM_OFF_LENGTH);
+        unsigned long off = strtoul(argv[2], NULL, 0);
+        size_t hl = strlen(argv[3]);
+        if (hl % 2 || off + hl / 2 > len) goto bad_args;
+        for (size_t k = 0; k < hl / 2; k++) {
+            char b[3] = { argv[3][2 * k], argv[3][2 * k + 1], 0 };
+            chain[node].regs[start + off + k] = (uint8_t)strtoul(b, NULL, 16);
+        }
+        LOG(f, now_ns, "pdo_in: node %d (SOEM slave %d) input byte %lu = %s", node, node + 1, off, argv[3]);
     } else if (!strcmp(cmd, "emcy") && argc >= 3 && argc <= 5) {
         /* GD9.7: emcy <node> <code> [reg] [count] */
         NEED_NODE(1);

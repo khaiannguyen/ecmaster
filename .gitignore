@@ -56,3 +56,5 @@ tools/gd9/log_gd9_groups_*/
 log_gd9_groups_*/
 config/eni/*.eni2cfg.log
 log_gd9_*/
+libecmaster/pdo/test_pdo_offline
+libecmaster/pdo/test_pdo_offline_asan

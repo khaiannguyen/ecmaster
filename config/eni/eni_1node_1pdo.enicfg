@@ -56,3 +56,5 @@ reg 1 trans PS cmd 4 ado 0x0130 len 6 data 000000000000
 reg 1 trans OS cmd 4 ado 0x0130 len 6 data 000000000000
 reg 1 trans SO cmd 5 ado 0x0120 len 2 data 0800
 reg 1 trans SO cmd 4 ado 0x0130 len 6 data 000000000000
+pdo 1 dir out pdo 0x1600 index 0x7000 sub 0x01 bits 32
+pdo 1 dir in pdo 0x1A00 index 0x6000 sub 0x01 bits 32

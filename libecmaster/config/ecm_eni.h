@@ -46,6 +46,7 @@
 #define ECM_ENI_NAME_LEN     64
 #define ECM_ENI_MAX_REG      1024   /* register InitCmds, all slaves + master */
 #define ECM_ENI_REG_DATA     32     /* bytes of a register InitCmd kept (len is the real one) */
+#define ECM_ENI_MAX_PDO      1024   /* GD9.10: mapped PDO entries, all slaves */
 
 /* ESM transitions, one bit each (a CoE InitCmd may list several) */
 enum {
@@ -104,6 +105,15 @@ typedef struct {
     uint8_t  data[ECM_ENI_MAX_DATA];
 } ecm_eni_coe_t;
 
+/* GD9.10: one mapped PDO entry, in process image order per slave/dir */
+typedef struct {
+    uint16_t pos;
+    uint8_t  dir;                 /* 0 out (RxPDO), 1 in (TxPDO)              */
+    uint16_t pdo, index;          /* index 0 = padding                        */
+    uint8_t  sub;
+    uint16_t bits;
+} ecm_eni_pdo_t;
+
 typedef struct {
     int      version;             /* enicfg 1 or 2                           */
     char     source[128];         /* ENI file name the .enicfg came from     */
@@ -111,6 +121,8 @@ typedef struct {
     int      pd_cmd;              /* ECM_ENI_PD_*; UNKNOWN for enicfg 1      */
     int      nreg;
     ecm_eni_reg_t reg[ECM_ENI_MAX_REG];          /* file order               */
+    int      npdo;                /* GD9.10; 0 for enicfg 1                  */
+    ecm_eni_pdo_t pdo[ECM_ENI_MAX_PDO];
     int      nslaves;
     ecm_eni_slave_t slave[ECM_ENI_MAX_SLAVES];   /* slave[i].pos == i + 1    */
     int      ncoe;

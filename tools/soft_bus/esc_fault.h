@@ -59,6 +59,9 @@
  *                             AL status code <code> (default 0x0012), only
  *                             a request TO <state> (1/2/4/8), and "sticky":
  *                             every such request until "clear"
+ *   pdo_out <node>            log the node's outputs (SM2 bytes) (GD9.10)
+ *   pdo_in <node> <byte> <hex>
+ *                             write bytes into the node's inputs (SM3) (GD9.10)
  *   emcy <node> <code> [reg] [count]
  *                             node posts <count> CoE Emergency messages
  *                             (default 1, reg 0x01), one per frame while
