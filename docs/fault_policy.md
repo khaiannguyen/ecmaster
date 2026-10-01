@@ -233,3 +233,12 @@ Slave `FAILED(config)` tự khoẻ lại (về OP) thì cờ được xoá, gi�
 - `soft_bus`: ctl `emcy <node> <code> [reg] [count]` (data = seq LE16, A5 5A C3, mỗi frame một bản tin khi SM1 trống); `reject_al <node> <code> <state> sticky`.
 
 Test: `tools/gd9/run_emcy_9_7.sh` (M-01…M-03, P-01a/b, P-02, P-03).
+
+## 14. GĐ9.8: kiểm độ tươi theo từng slave
+
+- `--fresh LIST` (ví dụ `all=0,2=off,5=4:8`): mỗi slave có thể bật (byte offset, bộ đếm 8/16/32 bit) hoặc tắt. `--fresh-offset N` giữ nguyên nghĩa GĐ7.4, tương đương `--fresh all=N`, nên L5-09 không đổi.
+- Cấu hình được giải sau khi map process data: bộ đếm nằm ngoài input của slave → từ chối trước SAFE-OP và nêu tên slave. Trước đây trường hợp này bị bỏ qua im lặng ở mỗi chu kỳ.
+- Lúc khởi động in từng slave: bật (bit, byte) hoặc `OFF -- "WKC correct but data old" is NOT detected`.
+- Servo thương mại (IS620N) thường không có bộ đếm như vậy → `off`. Ở GĐ10 dùng toggle bit của statusword hoặc EMCY ở lớp CiA402.
+
+Test: `tools/gd9/run_fresh_9_8.sh` (F-01 = L5-09 + đối chứng âm; F-02a…d).

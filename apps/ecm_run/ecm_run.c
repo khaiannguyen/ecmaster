@@ -313,7 +313,16 @@ static uint64_t g_quar_total, g_quar_overflow;
 /* Input freshness (fault_policy §3.4 / plan §3.4): offset of a 16-bit
  * counter in EVERY slave's inputs that the slave increments per cycle. It
  * is the slave's PDO contract -- given on the command line, never assumed. */
-static int      g_fresh_off   = -1;             /* --fresh-offset N */
+static int      g_fresh_off   = -1;             /* --fresh-offset N: every slave, 16 bit (GD7.4 alias) */
+/* GD9.8: freshness per slave. The application counter is part of each
+ * slave's own PDO contract, so where it is (and whether there is one) is
+ * per slave: --fresh "all=0,2=off,5=4:8". g_fresh_on[s] = 0 means the
+ * master cannot tell "WKC correct but data old" for that slave. */
+static const char *g_fresh_spec;                 /* --fresh LIST */
+static uint8_t  g_fresh_on[ECM_SREC_MAX_SLAVES + 1];
+static uint16_t g_fresh_byte[ECM_SREC_MAX_SLAVES + 1];
+static uint8_t  g_fresh_bits[ECM_SREC_MAX_SLAVES + 1];
+static int      g_fresh_any;                     /* at least one slave checked */
 static uint32_t g_fresh_stale = 20;             /* --fresh-stale N (cycles) */
 static ecm_fresh_t g_fresh[ECM_SREC_MAX_SLAVES + 1];   /* RT only, [SOEM slave] */
 static uint64_t g_stale_replies;                /* motion replies rejected by the DC age gate */
@@ -899,11 +908,55 @@ static void quar_expire(uint64_t tick)
 }
 
 /* ---- Giai doan 7.4: input freshness, one slave (RT thread, no syscalls) ---- */
+/* GD9.8: "all=0,2=off,5=4:8" -> per slave on/byte/bits. Entries are
+ * applied left to right, a later one overrides; ranges "3-6=..." allowed.
+ * Value: "off", or BYTE[:BITS] with BITS 8, 16 (default) or 32. */
+static int fresh_parse(const char *spec, int n, char *err, size_t errsz)
+{
+    char buf[512];
+    if (strlen(spec) >= sizeof(buf)) { snprintf(err, errsz, "too long"); return -1; }
+    strcpy(buf, spec);
+    for (char *save = NULL, *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+        char *eq = strchr(t, '=');
+        if (!eq) { snprintf(err, errsz, "'%s': expected SLAVE=VALUE", t); return -1; }
+        *eq = '\0';
+        int lo, hi;
+        if (strcmp(t, "all") == 0) { lo = 1; hi = n; }
+        else {
+            char *end;
+            lo = (int)strtol(t, &end, 10); hi = lo;
+            if (*end == '-') hi = (int)strtol(end + 1, &end, 10);
+            if (*end || lo < 1 || hi < lo || hi > n || hi > ECM_SREC_MAX_SLAVES) {
+                snprintf(err, errsz, "'%s': slave(s) must be within 1..%d", t, n); return -1;
+            }
+        }
+        const char *v = eq + 1;
+        int on = 1, byte = 0, bits = 16;
+        if (strcmp(v, "off") == 0) on = 0;
+        else {
+            char *end;
+            byte = (int)strtol(v, &end, 10);
+            if (end == v || byte < 0 || byte > 4095) { snprintf(err, errsz, "'%s': expected off or BYTE[:8|16|32]", v); return -1; }
+            if (*end == ':') bits = (int)strtol(end + 1, &end, 10);
+            if (*end || (bits != 8 && bits != 16 && bits != 32)) {
+                snprintf(err, errsz, "'%s': expected off or BYTE[:8|16|32]", v); return -1;
+            }
+        }
+        for (int s = lo; s <= hi; s++) {
+            g_fresh_on[s] = (uint8_t)on; g_fresh_byte[s] = (uint16_t)byte; g_fresh_bits[s] = (uint8_t)bits;
+        }
+    }
+    return 0;
+}
+
 static void fresh_feed(int s, uint64_t tick)
 {
     const ec_slavet *sl = &ctx.slavelist[s];
-    if (s > ECM_SREC_MAX_SLAVES || !sl->inputs || sl->Ibytes < (uint32_t)g_fresh_off + 2) return;
-    uint32_t v = (uint32_t)sl->inputs[g_fresh_off] | ((uint32_t)sl->inputs[g_fresh_off + 1] << 8);
+    if (s > ECM_SREC_MAX_SLAVES || !g_fresh_on[s] || !sl->inputs) return;
+    const uint8_t *p = sl->inputs + g_fresh_byte[s];   /* range checked at startup */
+    uint32_t v = p[0];
+    if (g_fresh_bits[s] >= 16) v |= (uint32_t)p[1] << 8;
+    if (g_fresh_bits[s] == 32) v |= (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
     ecm_fresh_ev_t fe = ecm_fresh_update(&g_fresh[s], v);
     if (fe == ECM_FRESH_STALE_START || fe == ECM_FRESH_RESUMED
         || (fe == ECM_FRESH_REGRESSION && g_fresh[s].regressions <= 5)) {
@@ -1685,6 +1738,8 @@ int main(int argc, char **argv)
             g_reply_check = 0;
         } else if (strcmp(argv[i], "--fresh-offset") == 0 && i + 1 < argc) {
             g_fresh_off = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--fresh") == 0 && i + 1 < argc) {   /* GD9.8 */
+            g_fresh_spec = argv[++i];
         } else if (strcmp(argv[i], "--fresh-stale") == 0 && i + 1 < argc) {
             g_fresh_stale = (uint32_t)atol(argv[++i]);
         } else if (strcmp(argv[i], "--link") == 0 && i + 1 < argc) {  /* Giai doan 8.5 */
@@ -1776,6 +1831,7 @@ int main(int argc, char **argv)
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
             "       [--no-quarantine] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
+            "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (GD9.8, per slave)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -1922,6 +1978,34 @@ int main(int argc, char **argv)
     fprintf(stderr, "ecm_run: GROUP_MOTION (%d slave, %d byte IOmap), GROUP_IO (%d slave, %d byte IOmap)%s\n",
             n_motion, motion_iomap_size, n_io, io_iomap_size,
             g_io_active ? "" : " -- GROUP_IO empty: never sent");
+
+    /* ---- GD9.8: freshness per slave. Resolved here, after mapping, so a
+     * counter outside a slave's inputs is refused now (by name) instead of
+     * being skipped silently every cycle. --fresh-offset N (GD7.4) is the
+     * same as --fresh all=N; --fresh entries override it. */
+    if (g_fresh_off >= 0 || g_fresh_spec) {
+        int nf = ctx.slavecount < ECM_SREC_MAX_SLAVES ? ctx.slavecount : ECM_SREC_MAX_SLAVES;
+        if (g_fresh_off >= 0)
+            for (int s = 1; s <= nf; s++) { g_fresh_on[s] = 1; g_fresh_byte[s] = (uint16_t)g_fresh_off; g_fresh_bits[s] = 16; }
+        char ferr[160];
+        if (g_fresh_spec && fresh_parse(g_fresh_spec, nf, ferr, sizeof(ferr)) != 0) {
+            fprintf(stderr, "ecm_run: --fresh %s: %s\n", g_fresh_spec, ferr);
+            ecx_close(&ctx); return 1;
+        }
+        int bad = 0;
+        for (int s = 1; s <= nf; s++) {
+            if (!g_fresh_on[s]) continue;
+            g_fresh_any = 1;
+            uint32_t need = (uint32_t)g_fresh_byte[s] + g_fresh_bits[s] / 8u;
+            if (need > ctx.slavelist[s].Ibytes) {
+                fprintf(stderr, "ecm_run: freshness slave %d: %d-bit counter at input byte %u needs %u input "
+                        "byte(s), the slave maps %u\n", s, g_fresh_bits[s], g_fresh_byte[s], need,
+                        (unsigned)ctx.slavelist[s].Ibytes);
+                bad++;
+            }
+        }
+        if (bad) { fprintf(stderr, "ecm_run: --fresh: refusing\n"); ecx_close(&ctx); return 1; }
+    }
 
     motion = (group_stats_t){
         .label = "GROUP_MOTION", .group = GROUP_MOTION,
@@ -2181,14 +2265,24 @@ int main(int argc, char **argv)
         atomic_init(&g_recover_ok, 0);
         atomic_init(&g_excl_depth, 0);
         atomic_init(&g_excl_gen, 0u);
-        for (int s = 0; s <= ECM_SREC_MAX_SLAVES; s++) ecm_fresh_init(&g_fresh[s], g_fresh_stale, 16);
+        for (int s = 0; s <= ECM_SREC_MAX_SLAVES; s++)
+            ecm_fresh_init(&g_fresh[s], g_fresh_stale, g_fresh_bits[s] ? g_fresh_bits[s] : 16);
         fprintf(stderr, "ecm_run: late replies: index quarantine %s (%d ticks, max %d), reply check %s; input freshness %s\n",
                 g_quarantine ? "ON" : "OFF (--no-quarantine)", QUAR_TICKS, QUAR_MAX,
                 g_reply_check ? "ON" : "OFF (--no-reply-check)",
-                g_fresh_off >= 0 ? "ON" : "off (no --fresh-offset)");
-        if (g_fresh_off >= 0)
+                g_fresh_any ? "ON" : "off (no --fresh / --fresh-offset)");
+        if (g_fresh_off >= 0 && !g_fresh_spec)
             fprintf(stderr, "ecm_run: freshness: 16-bit counter at input byte %d of every slave, "
                     "stale after %u unchanged cycles\n", g_fresh_off, g_fresh_stale);
+        else if (g_fresh_any)
+            for (int s = 1; s <= ctx.slavecount && s <= ECM_SREC_MAX_SLAVES; s++) {
+                if (g_fresh_on[s])
+                    fprintf(stderr, "ecm_run: freshness slave %d: %d-bit counter at input byte %u, stale after "
+                            "%u unchanged cycles\n", s, g_fresh_bits[s], g_fresh_byte[s], g_fresh_stale);
+                else
+                    fprintf(stderr, "ecm_run: freshness slave %d: OFF -- \"WKC correct but data old\" is NOT "
+                            "detected for this slave\n", s);
+            }
 #ifdef ECMASTER_SOEM_MBXCNT_PATCH
         fprintf(stderr, "ecm_run: SOEM mailbox Cnt patch: present (duplicated mailbox responses dropped)\n");
 #else
@@ -2398,7 +2492,7 @@ int main(int argc, char **argv)
 
         /* Giai doan 7.4 (L5-09): input freshness, only on replies that were
          * accepted with the full WKC (a missing slave is WKC's business). */
-        if (g_fresh_off >= 0) {
+        if (g_fresh_any) {
             if (motion_class == ECM_POL_WKC_OK)
                 for (int s = 1; s <= ctx.slavecount; s++)
                     if (ctx.slavelist[s].group == GROUP_MOTION) fresh_feed(s, tick);
@@ -2608,7 +2702,7 @@ int main(int argc, char **argv)
             "reply through a reused index): motion=%" PRIu64 " io=%" PRIu64 "%s\n",
             g_foreign_replies[GROUP_MOTION], g_foreign_replies[GROUP_IO],
             g_reply_check ? "" : "  (--no-reply-check: counted, NOT rejected)");
-    if (g_fresh_off >= 0) {
+    if (g_fresh_any) {
         uint64_t reg = 0, eps = 0, n = 0;
         for (int s = 1; s <= ctx.slavecount && s <= ECM_SREC_MAX_SLAVES; s++) {
             const ecm_fresh_t *f = &g_fresh[s];

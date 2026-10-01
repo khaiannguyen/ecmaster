@@ -129,6 +129,8 @@ jobs:
         run: sudo -E env CASES="dc01 dc02 dc02n dc03 dc03n dc04 dc04b" LOG=/tmp/log_gd9_dc tools/gd9/run_dc_9_5.sh
       - name: EMCY + AL status code classes (GD9.7 M-01..M-03, P-01a/b, P-03)
         run: sudo -E env CASES="m01 m02 m03 p01a p01b p03" LOG=/tmp/log_gd9_emcy tools/gd9/run_emcy_9_7.sh
+      - name: Input freshness per slave (GD9.8 F-02a..d)
+        run: sudo -E env CASES="f02a f02b f02c f02d" LOG=/tmp/log_gd9_fresh tools/gd9/run_fresh_9_8.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -139,6 +141,7 @@ jobs:
             /tmp/log_gd9_eni
             /tmp/log_gd9_dc
             /tmp/log_gd9_emcy
+            /tmp/log_gd9_fresh
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 
