@@ -520,6 +520,38 @@ static void test_esm_forced_reject(void)
     check_hex("AL status code = UNKNOWNALCONTROL", rd16(c[0].regs + REG_AL_STATUS_CODE), ALSTATUSCODE_UNKNOWNALCONTROL);
     check("force_reject_al is one-shot (cleared after use)", c[0].force_reject_al, 0);
 
+    /* GD9.7: reject only a request TO SAFEOP, with code 0x0036 */
+    esc_t *d = make_chain(1, 4);
+    flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(d, 1, buf, flen);
+    d[0].force_reject_al = 1;
+    d[0].fault.reject_al_code = 0x0036;
+    d[0].fault.reject_al_state = ESM_SAFEOP;
+    req_al_state(d, 1, buf, 0x1001, ESM_PREOP);
+    check_hex("GD9.7 reject armed for SAFEOP: INIT->PREOP still accepted", rd16(d[0].regs + REG_AL_STATUS), ESM_PREOP);
+    req_al_state(d, 1, buf, 0x1001, ESM_SAFEOP);
+    check_hex("GD9.7 PREOP->SAFEOP rejected: PREOP+ERROR", rd16(d[0].regs + REG_AL_STATUS), (ESM_PREOP | 0x10));
+    check_hex("GD9.7 with the chosen AL status code 0x0036", rd16(d[0].regs + REG_AL_STATUS_CODE), 0x0036);
+    check("GD9.7 one-shot, code/state cleared", d[0].force_reject_al + d[0].fault.reject_al_code +
+                                                 d[0].fault.reject_al_state, 0);
+    free(d);
+
+    /* GD9.7: sticky -> every request to SAFEOP refused, also the second one */
+    esc_t *e = make_chain(1, 4);
+    flen = build_frame(buf, CMD_APWR, 0x0000, REG_STATION_ADDR, addr_payload, 2);
+    process_frame(e, 1, buf, flen);
+    e[0].force_reject_al = 1;
+    e[0].fault.reject_al_code = 0x0036;
+    e[0].fault.reject_al_state = ESM_SAFEOP;
+    e[0].fault.reject_al_sticky = 1;
+    req_al_state(e, 1, buf, 0x1001, ESM_PREOP);
+    req_al_state(e, 1, buf, 0x1001, ESM_SAFEOP);
+    req_al_state(e, 1, buf, 0x1001, ESM_SAFEOP);
+    check_hex("GD9.7 sticky: second SAFEOP request refused too", rd16(e[0].regs + REG_AL_STATUS), (ESM_PREOP | 0x10));
+    check_hex("GD9.7 sticky: code 0x0036", rd16(e[0].regs + REG_AL_STATUS_CODE), 0x0036);
+    check("GD9.7 sticky: still armed", e[0].force_reject_al, 1);
+    free(e);
+
     free(c);
 }
 

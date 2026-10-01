@@ -263,8 +263,16 @@ typedef struct {
     uint16_t app_seq;           /* --app-seq: slave application counter        */
     uint64_t mbx_repeats_served;/* master repeat requests answered (0x080E)    */
     uint32_t coe_delay_ms;      /* GD9.6: SDO download responses held this long */
+    uint32_t emcy_left;         /* GD9.7: EMCY still to post (ctl "emcy")      */
+    uint16_t emcy_code;
+    uint8_t  emcy_reg;
+    uint16_t emcy_seq;          /* data[0..1] = sequence number, LE (order check) */
+    uint64_t emcy_posted;
     uint8_t  mbx_held;          /* a response is in SM1 but not yet "full"     */
     uint64_t mbx_release_ns;    /* when it becomes visible (frame arrival time)*/
+    uint16_t reject_al_code;    /* GD9.7: AL status code of the next rejection (0 = 0x0012) */
+    uint8_t  reject_al_state;   /* GD9.7: only reject a request TO this state (0 = any)      */
+    uint8_t  reject_al_sticky;  /* GD9.7: reject every such request until "clear"            */
 } esc_node_fault_t;
 
 /* Phase 7: process data watchdog (Section I §13.1, Section II §2.10). */

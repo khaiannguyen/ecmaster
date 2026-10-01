@@ -177,11 +177,63 @@ void ecm_srec_init(ecm_srec_plan_t *p, int n, uint32_t max_attempts, uint64_t ba
     p->backoff0_ns = backoff0_ns;
 }
 
+/* ---- GD9.7: AL status code classes -------------------------------------- */
+ecm_al_class_t ecm_al_code_class(uint16_t code)
+{
+    switch (code) {
+    case 0x0000:
+        return ECM_AL_OK;
+    case 0x0003:   /* Invalid device setup                              */
+    case 0x0004:   /* Invalid revision                                  */
+    case 0x0006:   /* SII/EEPROM information does not match firmware    */
+    case 0x000E:   /* License error                                     */
+    case 0x0013:   /* Bootstrap not supported                           */
+    case 0x0014:   /* No valid firmware                                 */
+    case 0x0015:   /* Invalid mailbox configuration (BOOT)              */
+    case 0x0016:   /* Invalid mailbox configuration (PREOP)             */
+    case 0x0017:   /* Invalid sync manager configuration                */
+    case 0x001C:   /* Invalid sync manager types                        */
+    case 0x001D:   /* Invalid output configuration                      */
+    case 0x001E:   /* Invalid input configuration                       */
+    case 0x001F:   /* Invalid watchdog configuration                    */
+    case 0x0024:   /* Invalid input mapping                             */
+    case 0x0025:   /* Invalid output mapping                            */
+    case 0x0026:   /* Inconsistent settings                             */
+    case 0x0027:   /* Freerun not supported                             */
+    case 0x0028:   /* Synchronisation not supported                     */
+    case 0x0029:   /* Freerun needs 3 buffer mode                       */
+    case 0x002E:   /* Invalid input FMMU configuration                  */
+    case 0x0030:   /* Invalid DC SYNC configuration                     */
+    case 0x0031:   /* Invalid DC latch configuration                    */
+    case 0x0035:   /* DC invalid sync cycle time                        */
+    case 0x0036:   /* DC invalid sync0 cycle time                       */
+    case 0x0037:   /* DC invalid sync1 cycle time                       */
+    case 0x0041: case 0x0042: case 0x0043:   /* MBX_AOE/EOE/COE: a mailbox */
+    case 0x0044: case 0x0045: case 0x004F:   /* protocol startup failed    */
+    case 0x0070:   /* Detected Module Ident List does not match         */
+        return ECM_AL_CONFIG;
+    default:
+        return ECM_AL_TRANSIENT;
+    }
+}
+
+const char *ecm_al_class_name(ecm_al_class_t c)
+{
+    switch (c) {
+    case ECM_AL_OK:        return "ok";
+    case ECM_AL_TRANSIENT: return "transient";
+    case ECM_AL_CONFIG:    return "config";
+    }
+    return "?";
+}
+
 void ecm_srec_reset(ecm_srec_plan_t *p, int i)
 {
     if (i < 0 || i >= p->n) return;
     ecm_srec_t *s = &p->s[i];
     s->failed = 0;
+    s->failed_config = 0;
+    s->failed_code = 0;
     s->attempts = 0;
     s->next_try_ns = 0;
 }
@@ -216,12 +268,24 @@ ecm_sact_t ecm_srec_decide(ecm_srec_plan_t *p, int i, const ecm_srec_input_t *in
         s->unhealthy = 0;
         s->attempts = 0;
         s->failed = 0;
+        s->failed_config = 0;
+        s->failed_code = 0;
         s->next_try_ns = 0;
         s->last = ECM_SACT_NONE;
         return ECM_SACT_NONE;
     }
     s->unhealthy = 1;
     if (s->failed) return ECM_SACT_NONE;
+
+    /* GD9.7: the slave refuses its configuration. Acknowledging and asking
+     * again would send the same configuration: final, no attempt counted. */
+    if (in->answered && err && ecm_al_code_class(in->al_code) == ECM_AL_CONFIG) {
+        s->failed = 1;
+        s->failed_config = 1;
+        s->failed_code = in->al_code;
+        if (gave_up) *gave_up = 1;
+        return ECM_SACT_NONE;
+    }
 
     ecm_sact_t act;
     if (!in->answered || st == AL_INIT || st == AL_PREOP) act = ECM_SACT_RECONFIG;

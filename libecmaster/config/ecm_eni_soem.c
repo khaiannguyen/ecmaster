@@ -10,6 +10,12 @@
 static const ecm_eni_t *g_hook_eni;
 static int g_hook_failures;
 static int g_sdo_timeout_us = EC_TIMEOUTRXM;
+static int g_elist_foreign;   /* GD9.7: another thread reads SOEM's error list */
+
+void ecm_eni_soem_elist_foreign(int on)
+{
+    g_elist_foreign = on;
+}
 
 void ecm_eni_soem_set_sdo_timeout_us(int us)
 {
@@ -115,7 +121,8 @@ static int run_one(ecx_contextt *ctx, const ecm_eni_coe_t *c)
 {
     int timeout = c->timeout_ms ? (int)c->timeout_ms * 1000 : g_sdo_timeout_us;
     ec_errort stale;
-    while (ecx_poperror(ctx, &stale)) { }
+    if (!g_elist_foreign)
+        while (ecx_poperror(ctx, &stale)) { }
     int wkc;
     uint8_t buf[ECM_ENI_MAX_DATA];
     int size = (int)sizeof(buf);
@@ -126,12 +133,14 @@ static int run_one(ecx_contextt *ctx, const ecm_eni_coe_t *c)
         wkc = ecx_SDOread(ctx, c->pos, c->index, c->sub, c->ca ? TRUE : FALSE, &size, buf, timeout);
     }
     const char *ca = c->ca ? " (complete access)" : "";
-    int err = ecx_iserror(ctx);
+    int err = g_elist_foreign ? 0 : ecx_iserror(ctx);
     if (wkc <= 0 || err) {
         fprintf(stderr, "ecm_eni: slave %u CoE %s 0x%04X:%02X%s FAILED (wkc=%d)\n",
                 c->pos, c->ccs == ECM_ENI_CCS_DOWNLOAD ? "download" : "upload",
                 c->index, c->sub, ca, wkc);
-        if (err)
+        if (g_elist_foreign)
+            fprintf(stderr, "ecm_eni:   (abort code: see the [SDO] line of this slave)\n");
+        else if (err)
             print_errors(ctx);
         return 1;
     }

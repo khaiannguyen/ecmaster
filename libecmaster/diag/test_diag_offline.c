@@ -309,6 +309,58 @@ static void t_format(void)
     remove(path);
 }
 
+static void t_emcy(void)
+{
+    printf("\n[D9] GD9.7 emergency messages (M-01/M-02 offline)\n");
+    ecm_diag_init(&D, 4, OP);
+    raw_clean(4, 1);
+    ecm_diag_ingest(&D, &R);
+    int nf = ecm_diag_analyze(&D, F, 64);
+    check("no EMCY: no EMCY finding", count_type(F, nf, ECM_FIND_EMCY), 0);
+    static char buf[16384];
+    ecm_diag_format(&D, F, nf, NULL, "test", NULL, buf, sizeof(buf));
+    check("no EMCY: no emcy section (old snapshots unchanged)", strstr(buf, "emcy:") == NULL, 1);
+
+    ecm_emcy_t e = { .t_ns = 2000000000ull, .tick = 2000, .code = 0x2310, .reg = 0x03,
+                     .data = { 0x11, 0x22, 0x33, 0x44, 0x55 } };
+    ecm_diag_add_emcy(&D, 3, &e);
+    nf = ecm_diag_analyze(&D, F, 64);
+    check("1 EMCY on slave 3 -> finding for slave 3", has(F, nf, ECM_FIND_EMCY, 3), 1);
+    check("  WARN (code != 0)", F[0].type == ECM_FIND_EMCY ? (long)F[0].sev : -1, ECM_SEV_WARN);
+    ecm_diag_format(&D, F, nf, NULL, "test", NULL, buf, sizeof(buf));
+    printf("%s", strstr(buf, "emcy:"));
+    check("snapshot: code, class, register, 5 data bytes, time",
+          strstr(buf, "t_mono=2.000 tick=2000 code=0x2310 (current) reg=0x03 data=11 22 33 44 55") != NULL, 1);
+    char line[256];
+    ecm_diag_finding_str(&F[0], NULL, line, sizeof(line));
+    check("finding text", strstr(line, "slave 3: 1 emergency message(s), last: code 0x2310 (current)") != NULL, 1);
+
+    for (int k = 0; k < 100; k++) {
+        ecm_emcy_t x = { .t_ns = 3000000000ull + (uint64_t)k, .tick = 3000 + (uint64_t)k,
+                         .code = (uint16_t)(0xFF00 + k), .reg = 0x80 };
+        ecm_diag_add_emcy(&D, 2, &x);
+    }
+    check("100 EMCY on slave 2 counted", (long)D.s[1].emcy_count, 100);
+    check("newest kept is the 100th (order kept)", ecm_diag_emcy(&D, 2, 0)->code, 0xFF00 + 99);
+    check("4th newest is the 97th", ecm_diag_emcy(&D, 2, 3)->code, 0xFF00 + 96);
+    check("only ECM_DIAG_EMCY_KEEP kept", ecm_diag_emcy(&D, 2, ECM_DIAG_EMCY_KEEP) == NULL, 1);
+    check("total 101", (long)D.emcy_total, 101);
+
+    ecm_emcy_t rst = { .t_ns = 4000000000ull, .tick = 4000, .code = 0x0000 };
+    ecm_diag_add_emcy(&D, 3, &rst);
+    nf = ecm_diag_analyze(&D, F, 64);
+    int k3 = -1;
+    for (int i = 0; i < nf; i++) if (F[i].type == ECM_FIND_EMCY && F[i].a == 3) k3 = i;
+    check("slave 3 error reset (0x0000) -> INFO, not active", k3 >= 0 && F[k3].sev == ECM_SEV_INFO && !F[k3].active, 1);
+    D.emcy_lost = 7;
+    nf = ecm_diag_analyze(&D, F, 64);
+    check("lost EMCY reported", count_type(F, nf, ECM_FIND_EMCY_LOST), 1);
+    ecm_diag_add_emcy(&D, 9, &e);
+    check("EMCY of slave 9 on a 4 slave bus: counted as bad, not stored", (long)D.emcy_bad_slave, 1);
+    check("class names", strcmp(ecm_emcy_class_name(0xFF01), "device specific") == 0 &&
+                         strcmp(ecm_emcy_class_name(0x4210), "temperature") == 0, 1);
+}
+
 int main(void)
 {
     printf("=========================================================\n");
@@ -322,6 +374,7 @@ int main(void)
     t_accumulate();
     t_handoff();
     t_format();
+    t_emcy();
     printf("\n=========================================================\n");
     printf(" RESULT: %d pass, %d fail\n", g_pass, g_fail);
     printf("=========================================================\n");

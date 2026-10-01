@@ -41,6 +41,12 @@ int ecm_eni_soem_supported(const ecm_eni_t *eni, int allow_unknown_reg);
  * EC_TIMEOUTRXM). ecm_run --sdo-timeout-ms. */
 void ecm_eni_soem_set_sdo_timeout_us(int us);
 
+/* GD9.7: once ecm_run's RT thread is the reader of SOEM's error list, the
+ * InitCmds re-run by recovery (PO2SO hook) must not pop it: on = do not
+ * touch the list; a failed InitCmd is still reported, its abort code comes
+ * through the RT thread's [SDO] line. */
+void ecm_eni_soem_elist_foreign(int on);
+
 /* E-03. Returns number of mismatches, prints each. */
 int ecm_eni_soem_check_identity(ecx_contextt *ctx, const ecm_eni_t *eni);
 

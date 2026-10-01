@@ -806,10 +806,21 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
-    if (esc->force_reject_al && requested != current) {
-        esc->force_reject_al = 0; /* one-shot */
+    /* GD9.7: the rejection may wait for a request TO one state and carry
+     * a chosen AL status code (ctl "reject_al <node> <code> <state>"), so a
+     * slave can refuse e.g. PREOP->SAFEOP with 0x0036 like a real drive
+     * refusing its SYNC settings; "sticky" refuses every such request until
+     * "clear" (a wrong configuration stays wrong). */
+    if (esc->force_reject_al && requested != current &&
+        (!esc->fault.reject_al_state || requested == esc->fault.reject_al_state)) {
+        uint16_t code = esc->fault.reject_al_code ? esc->fault.reject_al_code : ALSTATUSCODE_UNKNOWNALCONTROL;
+        if (!esc->fault.reject_al_sticky) {   /* one-shot, unless "sticky" (GD9.7) */
+            esc->force_reject_al = 0;
+            esc->fault.reject_al_code = 0;
+            esc->fault.reject_al_state = 0;
+        }
         wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10));
-        wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_UNKNOWNALCONTROL);
+        wr_le16(esc->regs + REG_AL_STATUS_CODE, code);
         return;
     }
 

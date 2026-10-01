@@ -293,6 +293,17 @@ int ecm_diag_analyze(const ecm_diag_t *d, ecm_diag_finding_t *out, int max)
     if (d->frames_lost)
         push(out, &nf, max, ECM_FIND_DIAG_LOST, ECM_SEV_INFO, 0, 0, 0, d->frames_lost, 0);
 
+    /* 5. GD9.7: emergency messages */
+    for (int i = 0; i < n; i++) {
+        const ecm_diag_slave_t *s = &d->s[i];
+        if (!s->emcy_count) continue;
+        const ecm_emcy_t *e = ecm_diag_emcy(d, i + 1, 0);
+        push(out, &nf, max, ECM_FIND_EMCY, e->code ? ECM_SEV_WARN : ECM_SEV_INFO, i + 1, e->reg, e->code,
+             s->emcy_count, e->code != 0);
+    }
+    if (d->emcy_lost)
+        push(out, &nf, max, ECM_FIND_EMCY_LOST, ECM_SEV_WARN, 0, 0, 0, d->emcy_lost, 0);
+
     /* Most severe first, stable within a severity. */
     for (int i = 1; i < nf; i++) {
         ecm_diag_finding_t x = out[i];
@@ -301,6 +312,45 @@ int ecm_diag_analyze(const ecm_diag_t *d, ecm_diag_finding_t *out, int max)
         out[j + 1] = x;
     }
     return nf;
+}
+
+/* ------------------------------------------------------------ GD9.7 --- */
+const char *ecm_emcy_class_name(uint16_t code)
+{
+    if (code == 0x0000) return "error reset / no error";
+    switch (code >> 8) {
+    case 0x10: return "generic error";
+    case 0x20: case 0x21: case 0x22: case 0x23: return "current";
+    case 0x30: case 0x31: case 0x32: case 0x33: return "voltage";
+    case 0x40: case 0x41: case 0x42: return "temperature";
+    case 0x50: return "device hardware";
+    case 0x60: case 0x61: case 0x62: case 0x63: return "device software";
+    case 0x70: return "additional modules";
+    case 0x80: case 0x81: case 0x82: return "monitoring / communication";
+    case 0x90: return "external error";
+    case 0xF0: return "additional functions";
+    case 0xFF: return "device specific";
+    default:   return "unknown class";
+    }
+}
+
+void ecm_diag_add_emcy(ecm_diag_t *d, int slave, const ecm_emcy_t *e)
+{
+    if (slave < 1 || slave > d->n) { d->emcy_bad_slave++; return; }
+    ecm_diag_slave_t *s = &d->s[slave - 1];
+    s->emcy[s->emcy_next] = *e;
+    s->emcy_next = (s->emcy_next + 1) % ECM_DIAG_EMCY_KEEP;
+    s->emcy_count++;
+    d->emcy_total++;
+}
+
+const ecm_emcy_t *ecm_diag_emcy(const ecm_diag_t *d, int slave, int k)
+{
+    if (slave < 1 || slave > d->n || k < 0 || k >= ECM_DIAG_EMCY_KEEP) return NULL;
+    const ecm_diag_slave_t *s = &d->s[slave - 1];
+    if ((uint64_t)k >= s->emcy_count) return NULL;
+    int idx = (s->emcy_next - 1 - k + 2 * ECM_DIAG_EMCY_KEEP) % ECM_DIAG_EMCY_KEEP;
+    return &s->emcy[idx];
 }
 
 /* ------------------------------------------------------------- output --- */
@@ -385,6 +435,18 @@ size_t ecm_diag_finding_str(const ecm_diag_finding_t *f, ecm_al_str_fn al_str, c
     case ECM_FIND_DIAG_LOST:
         r = snprintf(buf, cap, "%llu diagnostic frames lost", c);
         break;
+    case ECM_FIND_EMCY:
+        if (f->c)
+            r = snprintf(buf, cap, "slave %d: %llu emergency message(s), last: code 0x%04X (%s), "
+                         "error register 0x%02X", f->a, c, f->c, ecm_emcy_class_name((uint16_t)f->c), f->b);
+        else
+            r = snprintf(buf, cap, "slave %d: %llu emergency message(s), last one is an error reset "
+                         "(code 0x0000)", f->a, c);
+        break;
+    case ECM_FIND_EMCY_LOST:
+        r = snprintf(buf, cap, "%llu emergency message(s) lost between the RT thread and the monitor "
+                     "(event ring full)", c);
+        break;
     }
     if (r < 0) r = 0;
     return (size_t)r < cap ? (size_t)r : cap - 1;
@@ -434,6 +496,23 @@ size_t ecm_diag_format(const ecm_diag_t *d, const ecm_diag_finding_t *f, int nf,
                (unsigned long long)t->pu, (unsigned long long)t->pdi,
                (unsigned long long)t->lost[0], (unsigned long long)t->lost[1],
                s->seen_read != d->reads ? "not read" : s->answered ? "yes" : "NO");
+    }
+    if (d->emcy_total || d->emcy_lost) {
+        APPEND("emcy: total=%llu lost=%llu\n", (unsigned long long)d->emcy_total,
+               (unsigned long long)d->emcy_lost);
+        for (int i = 0; i < d->n; i++) {
+            const ecm_diag_slave_t *s = &d->s[i];
+            if (!s->emcy_count) continue;
+            APPEND("  slave %d: %llu message(s), newest first:\n", i + 1, (unsigned long long)s->emcy_count);
+            for (int k = 0; k < ECM_DIAG_EMCY_KEEP; k++) {
+                const ecm_emcy_t *e = ecm_diag_emcy(d, i + 1, k);
+                if (!e) break;
+                APPEND("    t_mono=%.3f tick=%llu code=0x%04X (%s) reg=0x%02X data=%02X %02X %02X %02X %02X\n",
+                       (double)e->t_ns * 1e-9, (unsigned long long)e->tick, e->code,
+                       ecm_emcy_class_name(e->code), e->reg,
+                       e->data[0], e->data[1], e->data[2], e->data[3], e->data[4]);
+            }
+        }
     }
     if (nf == 0) {
         APPEND("findings: none\n");

@@ -207,3 +207,29 @@ Hồi quy: 7.3 `run_l5_policy.sh` 29/30 trong lượt chạy đầy đủ (L5-13
 **Quyết định (25/9):** nhận biện pháp L5-07 như §11; **nhận bản vá SOEM** `patches/soem-mbx-cnt.patch` cho L5-12.
 
 **Nợ còn lại:** soak 8 giờ.
+
+## 13. GĐ9.7: EMCY và phân loại AL status code
+
+### 13.1 AL status code → lớp
+`ecm_al_code_class()` (`libecmaster/policy`). Danh sách mã lấy từ `ec_ALstatuscodelist` của SOEM (ETG.1000.6/ETG.1020). Datasheet ESC Section I §10.1.3 chỉ định nghĩa thanh ghi 0x0134 và dẫn sang ETG.1020.
+
+| Lớp | Mã | Planner |
+|---|---|---|
+| CONFIG | 0x0003, 0x0004, 0x0006, 0x000E, 0x0013–0x0017, 0x001C–0x001F, 0x0024–0x0029, 0x002E, 0x0030, 0x0031, 0x0035–0x0037, 0x0041–0x0045, 0x004F, 0x0070 | `FAILED(config)` ngay, không ack, không thử lại, không tính attempt. Lý do: ack rồi xin lại thì master gửi đúng cấu hình cũ, slave sẽ từ chối lại |
+| TRANSIENT | mọi mã khác, gồm 0x001A sync error, 0x001B SM watchdog, 0x0018/0x0019, 0x0020–0x0023, 0x002C, 0x0032–0x0034, điện áp, mã hãng 0x8000+ | Như GĐ7.3: ack → OP, tối đa 5 lần, backoff |
+
+Slave `FAILED(config)` tự khoẻ lại (về OP) thì cờ được xoá, giống `FAILED` cũ. Lúc khởi động, nếu không đạt PREOP/SAFEOP/OP, ecm_run in từng slave kèm AL status, code, text và lớp, và nói rõ khi có lỗi cấu hình.
+
+**Sửa lỗi tìm thấy khi làm 9.7:** `request_all_state()` trả nguyên giá trị của `ecx_statecheck()`, tức trạng thái *đọc được* (BRD = OR của mọi slave), và chỗ gọi coi mọi giá trị ≠ 0 là thành công. Bus có một slave kẹt ở PREOP (0x02 | 0x04 = 0x06) vì vậy bị coi là "đã tới SAFEOP", và ecm_run đi tiếp lên OP. Nay hàm trả `== target`. Golden không đổi, vì các bus khoẻ vẫn tới đúng trạng thái.
+
+### 13.2 EMCY
+- SOEM đưa EMCY vào `context->elist` từ `ecx_mbxinhandler` (cyclic mailbox, trong RT thread). Từ 9.7 **RT thread là reader duy nhất** của elist (`elist_drain()`, sau process data của mỗi tick RUN/DEGRADED). Mỗi entry thành một event cho monitor:
+  - `ECM_EV_EMCY` → `ecm_diag_add_emcy()` (snapshot: mục `emcy:`, 4 bản tin gần nhất mỗi slave, finding WARN khi code ≠ 0) + log `[EMCY]`, tối đa 20 dòng/slave, sau đó chỉ đếm;
+  - `ECM_EV_SDO_ABORT` → log `[SDO]` với abort code và text;
+  - lỗi SOEM khác → log `[SOEM]`.
+- Event ring đầy → `emcy lost` trong snapshot (finding WARN).
+- Sau khi các thread chạy, `ecm_eni_soem` không đọc elist nữa (`ecm_eni_soem_elist_foreign`). InitCmd chạy lại khi recovery vẫn báo lỗi; abort code thì xem dòng `[SDO]`.
+- Race còn lại (đã ghi trong header `ecm_run.c`): mailbox thread push SDO abort trong lúc RT pop, vì elist của SOEM không có lock. Entry đó hiếm khi bị mất hoặc đọc hai lần. Nó chỉ dùng để báo cáo, không dùng để quyết định.
+- `soft_bus`: ctl `emcy <node> <code> [reg] [count]` (data = seq LE16, A5 5A C3, mỗi frame một bản tin khi SM1 trống); `reject_al <node> <code> <state> sticky`.
+
+Test: `tools/gd9/run_emcy_9_7.sh` (M-01…M-03, P-01a/b, P-02, P-03).

@@ -30,6 +30,7 @@
 #include "esc_core.h"
 #include "esc_dc.h"
 #include "esc_fault.h"
+#include "esc_coe.h"
 
 static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
@@ -153,6 +154,20 @@ int esc_fault_frame_begin(esc_fault_bus_t *f, esc_t *chain, int n,
             e->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;   /* same bytes, same Cnt */
             f->mbx_dup++;
             LOG(f, now_ns, "mbx_dup: node %d re-posted its last mailbox response", i);
+        }
+        /* GD9.7: one EMCY per frame while SM1 is free and the slave has a
+         * mailbox (PREOP and up); data[0..1] carry a sequence number so the
+         * master side can check order and loss. */
+        if (e->fault.emcy_left && (e->regs[REG_AL_STATUS] & 0x0F) >= 0x02 && !e->coe_session.active) {
+            uint8_t d[5] = { (uint8_t)e->fault.emcy_seq, (uint8_t)(e->fault.emcy_seq >> 8), 0xA5, 0x5A, 0xC3 };
+            if (coe_post_emcy(e, e->fault.emcy_code, e->fault.emcy_reg, d)) {
+                e->fault.emcy_left--;
+                e->fault.emcy_seq++;
+                e->fault.emcy_posted++;
+                if (!e->fault.emcy_left)
+                    LOG(f, now_ns, "emcy: node %d posted its last EMCY (%llu in total)", i,
+                        (unsigned long long)e->fault.emcy_posted);
+            }
         }
         if (e->fault.mbx_held && now_ns >= e->fault.mbx_release_ns) {
             e->fault.mbx_held = 0;
@@ -339,9 +354,9 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
     char *hash = strchr(tmp, '#');
     if (hash) *hash = '\0';
 
-    char *argv[4] = { 0 };
+    char *argv[6] = { 0 };   /* GD9.7: up to 5 tokens (emcy) */
     int argc = 0;
-    for (char *t = strtok(tmp, " \t\r\n"); t && argc < 4; t = strtok(NULL, " \t\r\n"))
+    for (char *t = strtok(tmp, " \t\r\n"); t && argc < 6; t = strtok(NULL, " \t\r\n"))
         argv[argc++] = t;
     if (argc == 0) return 0;                       /* blank / comment */
 
@@ -431,14 +446,38 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             chain[node].fault.coe_delay_ms = (uint32_t)ms;
         }
         LOG(f, now_ns, "coe_delay: SDO download responses of %s delayed %d ms", argv[1], ms);
-    } else if (!strcmp(cmd, "reject_al") && argc == 2) {
-        if (!strcmp(argv[1], "all")) {
-            for (int i = 0; i < n; i++) chain[i].force_reject_al = 1;
-        } else {
-            NEED_NODE(1);
-            chain[node].force_reject_al = 1;
+    } else if (!strcmp(cmd, "reject_al") && argc >= 2 && argc <= 5) {
+        /* GD9.7: optional AL status code, target state (1/2/4/8), "sticky" */
+        unsigned long code = argc >= 3 ? strtoul(argv[2], NULL, 0) : 0;
+        unsigned long tst  = argc >= 4 ? strtoul(argv[3], NULL, 0) : 0;
+        int sticky = argc == 5 && !strcmp(argv[4], "sticky");
+        if (code > 0xFFFF || (tst != 0 && tst != 1 && tst != 2 && tst != 4 && tst != 8) ||
+            (argc == 5 && !sticky)) goto bad_args;
+        int lo = 0, hi = n - 1;
+        if (strcmp(argv[1], "all") != 0) { NEED_NODE(1); lo = hi = node; }
+        for (int i = lo; i <= hi; i++) {
+            chain[i].force_reject_al = 1;
+            chain[i].fault.reject_al_code = (uint16_t)code;
+            chain[i].fault.reject_al_state = (uint8_t)tst;
+            chain[i].fault.reject_al_sticky = (uint8_t)sticky;
         }
-        LOG(f, now_ns, "reject_al: next AL Control request of %s will be rejected", argv[1]);
+        LOG(f, now_ns, "reject_al: %s AL Control request%s of %s will be rejected (AL status code 0x%04lX)",
+            sticky ? "every" : "next",
+            tst ? (tst == 1 ? " to INIT" : tst == 2 ? " to PREOP" : tst == 4 ? " to SAFEOP" : " to OP") : "",
+            argv[1], code ? code : 0x0012ul);
+    } else if (!strcmp(cmd, "emcy") && argc >= 3 && argc <= 5) {
+        /* GD9.7: emcy <node> <code> [reg] [count] */
+        NEED_NODE(1);
+        unsigned long code = strtoul(argv[2], NULL, 0);
+        unsigned long reg  = argc >= 4 ? strtoul(argv[3], NULL, 0) : 0x01;
+        unsigned long cnt  = argc >= 5 ? strtoul(argv[4], NULL, 0) : 1;
+        if (code > 0xFFFF || reg > 0xFF || cnt == 0 || cnt > 100000) goto bad_args;
+        esc_node_fault_t *nf = &chain[node].fault;
+        nf->emcy_code = (uint16_t)code;
+        nf->emcy_reg = (uint8_t)reg;
+        nf->emcy_left += (uint32_t)cnt;
+        LOG(f, now_ns, "emcy: node %d (SOEM slave %d) will post %lu EMCY code 0x%04lX reg 0x%02lX",
+            node, node + 1, cnt, code, reg);
     } else if (!strcmp(cmd, "clear") && argc == 1) {
         f->mute_left = f->late_left = f->dup_left = f->reorder_left = f->bad_cable_left = 0;
         for (int i = 0; i < n; i++) {
@@ -446,6 +485,10 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             nf->wkc_short_left = nf->stale_left = 0;
             nf->mbx_lose_armed = nf->mbx_dup_armed = nf->mbx_dup_pending = 0;
             nf->coe_delay_ms = 0;   /* a held response is still released */
+            nf->emcy_left = 0;
+            nf->reject_al_code = 0;
+            nf->reject_al_state = 0;
+            nf->reject_al_sticky = 0;
             chain[i].force_reject_al = 0;
         }
         LOG(f, now_ns, "clear: all pending injections cancelled");

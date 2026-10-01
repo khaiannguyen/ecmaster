@@ -82,10 +82,16 @@
  *    (ecx_mbxhandler -> ecx_mbxinhandler -> ecx_mbxerror/
  *    emergencyerror) and from the mailbox thread (ecx_SDOread/write ->
  *    ecx_SDOerror). This module never calls ecx_poperror()/
- *    ecx_iserror() itself to avoid adding a second concurrent reader;
- *    draining elist for decoded Abort codes is left to exactly one
- *    thread project-wide (monitor_thread_fn, once its Giai doan 9 scope
- *    lands) -- see ecm_mailbox.c's execute_job() comment.
+ *    ecx_iserror() itself to avoid adding a second concurrent reader.
+ *    GD9.7: the ONE reader is the RT thread (elist_drain(), right after
+ *    the process data of a RUN/DEGRADED tick). It is also the writer of
+ *    every EMCY (they arrive through ecx_mbxinhandler in the same thread),
+ *    so EMCY never race. It turns each entry into an event for the
+ *    monitor (EMCY -> diag snapshot, SDO abort and other SOEM errors ->
+ *    log). The remaining race is the mailbox thread pushing an SDO abort
+ *    while the RT thread pops; SOEM's list has no lock, so such an entry
+ *    can in rare cases be lost or read twice -- it is a report, never
+ *    used for a decision (the SDO caller gets its own return code).
  *
  * ---- Giai doan 6 additions on top of the Giai doan 5 file ----
  *
@@ -274,6 +280,9 @@ static long             g_motion_cycle_us = 1000;
 static ecm_bus_fsm_t    g_bus;                 /* RT only */
 static uint64_t         g_tick_deadline_ns;    /* RT only: receives must finish before this */
 static ecm_evring_t     g_ev;                  /* RT -> monitor */
+static uint64_t         g_emcy_ev_drops;       /* GD9.7: RT only, EMCY events the ring refused */
+static atomic_ullong    g_emcy_ev_drops_pub;   /* GD9.7: RT publishes, monitor reads */
+static int              g_emcy_print_max = 20; /* GD9.7: EMCY log lines per slave, then counted only */
 static ecm_cmdq_t       g_cmdq;                /* monitor -> RT */
 static ecm_srec_plan_t  g_srec;                /* monitor only */
 static atomic_int       g_bus_state_pub;       /* RT publishes, monitor reads */
@@ -527,7 +536,11 @@ static int request_all_state(int target, int timeout_us)
 {
     ctx.slavelist[0].state = target;
     ecx_writestate(&ctx, 0);
-    return ecx_statecheck(&ctx, 0, target, timeout_us);
+    /* GD9.7 fix: ecx_statecheck() returns the state it READ (BRD: the OR
+     * of every slave's), not success. Up to GD9.6 this function returned
+     * it as is, so a bus with one slave stuck in PREOP (0x02 | 0x04 = 0x06)
+     * counted as "reached SAFEOP" and ecm_run went on to request OP. */
+    return ecx_statecheck(&ctx, 0, target, timeout_us) == target;
 }
 
 /* Same as request_all_state(EC_STATE_OPERATIONAL, ...), except it keeps the
@@ -685,6 +698,39 @@ static void service_group(group_stats_t *g, uint64_t tick,
     if (wkc != g->expected_wkc) g->wkc_mismatch++;
     ecm_wkc_account(&g->wkcs, wkc, (int)g->expected_wkc);   /* Giai doan 7.2, no syscalls */
     if (elapsed_ns > g->cycle_ns) g->overrun++;
+}
+
+/* GD9.7: the only reader of SOEM's error list while the threads run (see
+ * the file header, point on elist). RT-safe: no syscalls, copies only, and
+ * the cheap ecaterror check keeps an empty list at one load per tick. */
+static void elist_drain(uint64_t tick)
+{
+    if (!ctx.ecaterror) return;
+    ec_errort er;
+    while (ecx_poperror(&ctx, &er)) {
+        ecm_event_t e = { .tick = tick, .from = (uint8_t)(er.Slave > 255 ? 255 : er.Slave) };
+        switch (er.Etype) {
+        case EC_ERR_TYPE_EMERGENCY:
+            e.type = ECM_EV_EMCY;
+            e.a = (int32_t)((uint32_t)er.ErrorCode | (uint32_t)er.ErrorReg << 16 | (uint32_t)er.b1 << 24);
+            e.b = (int32_t)((uint32_t)er.w1 | (uint32_t)er.w2 << 16);
+            break;
+        case EC_ERR_TYPE_SDO_ERROR:
+            e.type = ECM_EV_SDO_ABORT;
+            e.a = er.AbortCode;
+            e.b = (int32_t)((uint32_t)er.Index << 8 | er.SubIdx);
+            break;
+        default:
+            e.type = ECM_EV_SOEM_ERR;
+            e.a = (int32_t)er.Etype;
+            e.b = (int32_t)er.ErrorCode;
+            break;
+        }
+        if (!ecm_evring_push(&g_ev, &e) && e.type == ECM_EV_EMCY) {
+            g_emcy_ev_drops++;
+            atomic_store_explicit(&g_emcy_ev_drops_pub, g_emcy_ev_drops, memory_order_relaxed);
+        }
+    }
 }
 
 static void print_stats(const group_stats_t *g)
@@ -1240,6 +1286,31 @@ static void *mailbox_thread_fn(void *arg)
  * telemetry's ring-draining -- see the Giai doan 4 review note on this. */
 static const char *al_code_str(uint16_t code) { return ec_ALstatuscode2string(code); }
 
+/* GD9.7: a requested state was not reached at startup -> say which slaves,
+ * with their AL status code and its class, instead of one line. */
+static void report_state_failure(int target, const char *name)
+{
+    int ncfg = 0;
+    for (int s = 1; s <= ctx.slavecount; s++) {
+        uint8_t b[6] = { 0 };       /* 0x0130 AL status, 0x0134 AL status code: one read */
+        if (ecx_FPRD(&ctx.port, ctx.slavelist[s].configadr, ECT_REG_ALSTAT, sizeof(b), b, EC_TIMEOUTRET) <= 0) {
+            fprintf(stderr, "ecm_run:   slave %d (%s): no answer\n", s, ctx.slavelist[s].name);
+            continue;
+        }
+        uint16_t st = (uint16_t)(b[0] | b[1] << 8);
+        if ((st & 0x0F) == target && !(st & EC_STATE_ERROR)) continue;
+        uint16_t code = (uint16_t)(b[4] | b[5] << 8);
+        ecm_al_class_t cl = (st & EC_STATE_ERROR) ? ecm_al_code_class(code) : ECM_AL_OK;
+        if (cl == ECM_AL_CONFIG) ncfg++;
+        fprintf(stderr, "ecm_run:   slave %d (%s): AL 0x%02X%s, code 0x%04X (%s)%s\n", s, ctx.slavelist[s].name,
+                st, (st & EC_STATE_ERROR) ? " +ERR" : "", code, al_code_str(code),
+                cl == ECM_AL_CONFIG ? " -- CONFIGURATION error" : cl == ECM_AL_TRANSIENT ? " -- transient" : "");
+    }
+    if (ncfg)
+        fprintf(stderr, "ecm_run: %d slave(s) refuse their configuration for %s: retrying would send the same "
+                "configuration again; fix the ENI/ESI or the slave\n", ncfg, name);
+}
+
 /* Findings identity without counts/activity, so a steadily counting fault
  * is reported once, not every second. */
 static size_t finding_signature(const ecm_diag_finding_t *f, int nf, char *buf, size_t cap)
@@ -1439,14 +1510,19 @@ static void recovery_step(void)
         const ecm_diag_slave_t *ds = &g_diag.s[i];
         if (ds->seen_read != g_diag.reads) continue;      /* not in the last (chunked) read */
         ecm_srec_input_t in = { .in_reach = i < g_diag.brd_count, .answered = ds->answered,
-                                .al_status = ds->al_status };
+                                .al_status = ds->al_status, .al_code = ds->al_code };
         int rec = 0, gu = 0;
         ecm_sact_t a = ecm_srec_decide(&g_srec, i, &in, now_ns, &rec, &gu);
         int s = i + 1;
         if (rec)
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d back in OP (recovery #%llu)\n",
                     s, (unsigned long long)g_srec.s[i].recoveries);
-        if (gu)
+        if (gu && g_srec.s[i].failed_config)      /* GD9.7 */
+            fprintf(stderr, "ecm_run: [RECOVERY] slave %d: AL 0x%02x code 0x%04x (%s) is a CONFIGURATION "
+                    "error -> FAILED(config) at once, no retry (the same configuration would be refused "
+                    "again; fix the ENI/ESI or the slave), needs an operator\n",
+                    s, ds->al_status, ds->al_code, al_code_str(ds->al_code));
+        else if (gu)
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d: gave up after %u attempts -> FAILED "
                     "(AL 0x%02x code 0x%04x), needs an operator\n",
                     s, g_srec.max_attempts, ds->al_status, ds->al_code);
@@ -1480,6 +1556,7 @@ static void recovery_step(void)
 
 static void print_events(void)
 {
+    g_diag.emcy_lost = atomic_load_explicit(&g_emcy_ev_drops_pub, memory_order_relaxed);   /* GD9.7 */
     ecm_event_t e;
     while (ecm_evring_pop(&g_ev, &e)) {
         if (e.type == ECM_EV_BUS) {
@@ -1503,6 +1580,26 @@ static void print_events(void)
         } else if (e.type == ECM_EV_CMD_DONE) {
             if (e.b <= 0)
                 fprintf(stderr, "ecm_run: [RECOVERY] slave %d: AL control write not acknowledged (wkc=%d)\n", e.a, e.b);
+        } else if (e.type == ECM_EV_EMCY) {   /* GD9.7 */
+            ecm_emcy_t m = { .t_ns = (uint64_t)(mono_now_s() * 1e9), .tick = e.tick,
+                             .code = (uint16_t)((uint32_t)e.a & 0xFFFF), .reg = (uint8_t)((uint32_t)e.a >> 16),
+                             .data = { (uint8_t)((uint32_t)e.a >> 24), (uint8_t)e.b, (uint8_t)((uint32_t)e.b >> 8),
+                                       (uint8_t)((uint32_t)e.b >> 16), (uint8_t)((uint32_t)e.b >> 24) } };
+            ecm_diag_add_emcy(&g_diag, e.from, &m);
+            uint64_t k = (e.from >= 1 && e.from <= g_diag.n) ? g_diag.s[e.from - 1].emcy_count : 0;
+            if (k <= (uint64_t)g_emcy_print_max)
+                fprintf(stderr, "ecm_run: [EMCY] tick=%llu slave %u: code 0x%04X (%s) reg 0x%02X "
+                        "data %02X %02X %02X %02X %02X%s\n", (unsigned long long)e.tick, e.from, m.code,
+                        ecm_emcy_class_name(m.code), m.reg, m.data[0], m.data[1], m.data[2], m.data[3], m.data[4],
+                        k == (uint64_t)g_emcy_print_max ? " -- further EMCY of this slave only counted "
+                        "(diag snapshot)" : "");
+        } else if (e.type == ECM_EV_SDO_ABORT) {
+            fprintf(stderr, "ecm_run: [SDO] tick=%llu slave %u 0x%04X:%02X abort 0x%08X (%s)\n",
+                    (unsigned long long)e.tick, e.from, (unsigned)((uint32_t)e.b >> 8), (unsigned)(e.b & 0xFF),
+                    (unsigned)e.a, ec_sdoerror2string((uint32)e.a));
+        } else if (e.type == ECM_EV_SOEM_ERR) {
+            fprintf(stderr, "ecm_run: [SOEM] tick=%llu slave %u: error type %d code 0x%04X\n",
+                    (unsigned long long)e.tick, e.from, e.a, (unsigned)e.b);
         }
     }
 }
@@ -1840,7 +1937,7 @@ int main(int argc, char **argv)
 
     /* ---- Bring the whole bus up to SAFEOP ---- */
     if (!request_all_state(EC_STATE_PRE_OP, state_timeout_us(ECM_ENI_ST_PREOP))) {
-        fprintf(stderr, "Failed to reach PREOP\n"); ecx_close(&ctx); return 1;
+        fprintf(stderr, "Failed to reach PREOP\n"); report_state_failure(EC_STATE_PRE_OP, "PREOP"); ecx_close(&ctx); return 1;
     }
 
     /* ---- Giai doan 5: enable SOEM's cyclic mailbox handler now that
@@ -2047,7 +2144,7 @@ int main(int argc, char **argv)
         ecx_close(&ctx); return 1;
     }
     if (!request_all_state(EC_STATE_SAFE_OP, state_timeout_us(ECM_ENI_ST_SAFEOP))) {
-        fprintf(stderr, "Failed to reach SAFEOP\n"); ecx_close(&ctx); return 1;
+        fprintf(stderr, "Failed to reach SAFEOP\n"); report_state_failure(EC_STATE_SAFE_OP, "SAFEOP"); ecx_close(&ctx); return 1;
     }
 
     /* ---- One real cycle per group BEFORE requesting OP -- satisfies each
@@ -2055,7 +2152,7 @@ int main(int argc, char **argv)
     pd_exchange_all(EC_TIMEOUTRET);
 
     if (!request_op_keepalive(state_timeout_us(ECM_ENI_ST_OP))) {
-        fprintf(stderr, "Failed to reach OPERATIONAL\n"); ecx_close(&ctx); return 1;
+        fprintf(stderr, "Failed to reach OPERATIONAL\n"); report_state_failure(EC_STATE_OPERATIONAL, "OPERATIONAL"); ecx_close(&ctx); return 1;
     }
 
     /* ---- Giai doan 4: bring up the two rings and the four non-RT threads
@@ -2118,6 +2215,18 @@ int main(int argc, char **argv)
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setstacksize(&attr, NON_RT_STACK_BYTES);
+        /* GD9.7: from here the RT thread is the only reader of SOEM's error
+         * list. What configuration left in it was reported already (InitCmd
+         * failures) or is SOEM's own probing (e.g. 0x1C00 read aborts). */
+        {
+            ec_errort er;
+            int left = 0, emcy = 0;
+            while (ecx_poperror(&ctx, &er)) { left++; if (er.Etype == EC_ERR_TYPE_EMERGENCY) emcy++; }
+            if (left)
+                fprintf(stderr, "ecm_run: %d SOEM error list entr%s from configuration discarded (%d EMCY)\n",
+                        left, left == 1 ? "y" : "ies", emcy);
+            if (g_eni_on) ecm_eni_soem_elist_foreign(1);
+        }
         pthread_create(&telemetry_tid, &attr, telemetry_thread_fn, NULL);
         pthread_create(&app_tid,       &attr, app_thread_fn,       NULL);
         pthread_create(&mailbox_tid,   &attr, mailbox_thread_fn,   NULL);
@@ -2232,6 +2341,7 @@ int main(int argc, char **argv)
             if (motion.wkc_mismatch != motion_mismatch_before) any_wkc_mismatch = 1;
             motion_mismatch_before = motion.wkc_mismatch;
         }
+        elist_drain(tick);   /* GD9.7: EMCY / SDO aborts -> monitor */
 
         /* ---- Giai doan 6: DC(b). ctx.DCtime was refreshed by the motion
          * receive (only GROUP_MOTION carries the FRMW), so read it before
@@ -2529,7 +2639,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "  [POLICY] slave %d: recoveries=%" PRIu64 " ack=%" PRIu64 " op=%" PRIu64
                 " reconfig=%" PRIu64 "%s%s\n", i + 1, r->recoveries, r->actions[ECM_SACT_ACK],
                 r->actions[ECM_SACT_OP], r->actions[ECM_SACT_RECONFIG],
-                r->unhealthy ? " UNHEALTHY at exit" : "", r->failed ? " FAILED" : "");
+                r->unhealthy ? " UNHEALTHY at exit" : "",
+                r->failed_config ? " FAILED(config)" : r->failed ? " FAILED" : "");
     }
 
     request_all_state(EC_STATE_INIT, EC_TIMEOUTSTATE);

@@ -245,6 +245,53 @@ static void p7_fresh(void)
     check("P7o 8-bit 4 -> 200 is backward", ecm_fresh_update(&g, 200), ECM_FRESH_REGRESSION);
 }
 
+/* GD9.7 P-03: AL status code classes and the planner */
+static void p8_alclass(void)
+{
+    printf("P8 AL status code classes (GD9.7)\n");
+    check("P8a 0x0000 -> ok", ecm_al_code_class(0x0000), ECM_AL_OK);
+    check("P8b 0x001A sync error -> transient (L5-05)", ecm_al_code_class(0x001A), ECM_AL_TRANSIENT);
+    check("P8c 0x001B SM watchdog -> transient (L5-13)", ecm_al_code_class(0x001B), ECM_AL_TRANSIENT);
+    check("P8d 0x0036 DC invalid sync0 cycle -> config", ecm_al_code_class(0x0036), ECM_AL_CONFIG);
+    check("P8e 0x001E invalid input config (IS620N, PDO mismatch) -> config",
+          ecm_al_code_class(0x001E), ECM_AL_CONFIG);
+    check("P8f 0x0017 invalid SM config -> config", ecm_al_code_class(0x0017), ECM_AL_CONFIG);
+    check("P8g 0x0021 slave needs INIT -> transient", ecm_al_code_class(0x0021), ECM_AL_TRANSIENT);
+    check("P8h 0x8001 vendor code -> transient (bounded retry as before)",
+          ecm_al_code_class(0x8001), ECM_AL_TRANSIENT);
+
+    ecm_srec_plan_t Q;
+    ecm_srec_init(&Q, 4, 5, S(1));
+    int rec = 0, gu = 0;
+    ecm_srec_input_t in = { .in_reach = 1, .answered = 1, .al_status = 0x14, .al_code = 0x0036 };
+    ecm_sact_t a = ecm_srec_decide(&Q, 2, &in, S(10), &rec, &gu);
+    check("P8i SAFEOP+ERR 0x0036: no action", a, ECM_SACT_NONE);
+    check("P8j   gave_up at once", gu, 1);
+    check("P8k   failed_config, code kept", Q.s[2].failed_config && Q.s[2].failed_code == 0x0036, 1);
+    check("P8l   0 attempts counted", Q.s[2].attempts, 0);
+    int acts = 0, gus = 0;
+    for (int k = 0; k < 20; k++) {
+        acts += ecm_srec_decide(&Q, 2, &in, S(20 + 10 * k), &rec, &gu) != ECM_SACT_NONE;
+        gus += gu;
+    }
+    check("P8m   stays failed: 0 actions, gave_up not repeated", acts + gus, 0);
+    in.al_status = 0x08; in.al_code = 0;
+    ecm_srec_decide(&Q, 2, &in, S(500), &rec, &gu);
+    check("P8n   back in OP by itself -> failed cleared", Q.s[2].failed + Q.s[2].failed_config, 0);
+    check("P8o   counted as recovered", rec, 1);
+
+    ecm_srec_input_t tr = { .in_reach = 1, .answered = 1, .al_status = 0x14, .al_code = 0x001A };
+    a = ecm_srec_decide(&Q, 1, &tr, S(10), &rec, &gu);
+    check("P8p SAFEOP+ERR 0x001A (transient): ACK as before", a, ECM_SACT_ACK);
+    check("P8q   not failed", Q.s[1].failed, 0);
+    ecm_srec_input_t pe = { .in_reach = 1, .answered = 1, .al_status = 0x12, .al_code = 0x001E };
+    a = ecm_srec_decide(&Q, 3, &pe, S(10), &rec, &gu);
+    check("P8r PREOP+ERR 0x001E (refused SAFEOP after a reconfig): FAILED, no reconfig loop",
+          a == ECM_SACT_NONE && gu == 1 && Q.s[3].failed_config, 1);
+    ecm_srec_reset(&Q, 3);
+    check("P8s operator reset clears failed_config", Q.s[3].failed_config + Q.s[3].failed, 0);
+}
+
 int main(void)
 {
     p1_timeout();
@@ -254,6 +301,7 @@ int main(void)
     p5_rings();
     p6_planner();
     p7_fresh();
+    p8_alclass();
     printf("\nRESULT: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

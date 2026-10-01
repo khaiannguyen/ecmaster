@@ -503,6 +503,38 @@ static void test_coe_delay(void)
           !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
 }
 
+/* GD9.7: EMCY layout as SOEM's ec_emcyt reads it, and queueing behind a
+ * response the master has not fetched yet. */
+static void test_emcy(void)
+{
+    printf("\n[GD9.7] CoE Emergency injection\n");
+    static esc_fault_bus_t fb;
+    esc_fault_init(&fb, NULL, 0);
+    uint8_t frame[64] = { 0 };
+    node_reset(4, 0, 0);
+    check("ctl 'emcy 0 0x2310 0x03 3' accepted", esc_fault_command(&fb, &g_esc, 1, "emcy 0 0x2310 0x03 3", 0), 0);
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 1000);
+    uint8_t *m = resp();
+    check("mailbox length 10", rd16(m + 0), 10);
+    check("type CoE, Cnt 1", m[5], 0x13);
+    check("CoE service 1 (emergency)", rd16(m + 6) >> 12, 1);
+    check("error code 0x2310", rd16(m + 8), 0x2310);
+    check("error register 0x03", m[10], 0x03);
+    check("data[0..1] = seq 0", rd16(m + 11), 0);
+    check("data[2..4] = A5 5A C3", m[13] == 0xA5 && m[14] == 0x5A && m[15] == 0xC3, 1);
+    check("mailbox full", !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 2000);
+    check("not read yet: second EMCY waits (seq still 0)", rd16(m + 11), 0);
+    g_esc.regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;   /* master read it */
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 3000);
+    check("after the read: seq 1, Cnt 2", rd16(m + 11) == 1 && (m[5] >> 4) == 2, 1);
+    check("2 left -> 1 left", g_esc.fault.emcy_left, 1);
+    g_esc.regs[REG_AL_STATUS] = ESM_INIT;
+    g_esc.regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 4000);
+    check("INIT (no mailbox): nothing posted", g_esc.fault.emcy_left, 1);
+}
+
 int main(void)
 {
     printf("=========================================================\n");
@@ -515,6 +547,7 @@ int main(void)
     test_ca();
     test_ca_negative();
     test_coe_delay();
+    test_emcy();
 
     printf("\n=========================================================\n");
     printf(" RESULT: %d pass, %d fail\n", g_pass, g_fail);

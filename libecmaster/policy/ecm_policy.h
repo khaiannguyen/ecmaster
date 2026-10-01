@@ -33,6 +33,10 @@ typedef enum {
     ECM_EV_CMD_DONE,       /* a = slave, b = WKC of the command write                         */
     ECM_EV_CMD_SKIPPED,    /* a = slave, b = reason (1 = no budget this tick, retried later)  */
     ECM_EV_FRESH,          /* Giai doan 7.4: a = slave, b = ecm_fresh_ev_t                    */
+    ECM_EV_EMCY,           /* GD9.7: from = slave, a = code | reg << 16 | data0 << 24,
+                            *        b = data1..4 (little endian)                             */
+    ECM_EV_SDO_ABORT,      /* GD9.7: from = slave, a = abort code, b = index << 8 | sub        */
+    ECM_EV_SOEM_ERR,       /* GD9.7: from = slave, a = SOEM ec_err_type, b = error code       */
 } ecm_ev_type_t;
 
 typedef struct {
@@ -132,12 +136,29 @@ typedef struct {
     int      in_reach;     /* slave position < BRD count (not behind a break) */
     int      answered;     /* configured-address read answered (WKC > 0)      */
     uint16_t al_status;    /* 0x0130                                          */
+    uint16_t al_code;      /* 0x0134 (GD9.7: configuration errors are final)  */
 } ecm_srec_input_t;
+
+/* ---- GD9.7: AL status code classes ---------------------------------------
+ * Codes from ETG.1000.6 / ETG.1020 as listed by SOEM's ec_ALstatuscodelist
+ * (ec_print.c); the ESC datasheet (Section I §10.1.3) only defines 0x0134
+ * and points there. CONFIG = the slave refuses the configuration the master
+ * gave it (SM, FMMU, PDO mapping, mailbox, watchdog, DC SYNC settings,
+ * revision, firmware): acknowledging and asking again sends the same
+ * configuration, so it can only fail again -> FAILED at once, no retry.
+ * Everything else (sync lost, SM watchdog, no valid inputs/outputs, "needs
+ * INIT", supply voltage, vendor codes 0x8000+ ...) keeps the bounded retry
+ * of GD7.3. */
+typedef enum { ECM_AL_OK = 0, ECM_AL_TRANSIENT, ECM_AL_CONFIG } ecm_al_class_t;
+ecm_al_class_t ecm_al_code_class(uint16_t code);
+const char    *ecm_al_class_name(ecm_al_class_t c);
 
 typedef struct {
     uint32_t   attempts;       /* ACK/RECONFIG actions since the slave was last healthy */
     uint64_t   next_try_ns;
     int        failed;         /* gave up after max_attempts                   */
+    int        failed_config;  /* GD9.7: failed at once on a CONFIG AL code    */
+    uint16_t   failed_code;    /* that code                                    */
     int        unhealthy;      /* was not healthy at the last decision         */
     ecm_sact_t last;
     uint64_t   recoveries;     /* times it went unhealthy -> healthy           */
@@ -155,7 +176,9 @@ void ecm_srec_init(ecm_srec_plan_t *p, int n, uint32_t max_attempts, uint64_t ba
 
 /* Decide for slave i (0-based) from a fresh diagnostic read. *recovered is
  * set to 1 when this read shows it healthy again after being unhealthy.
- * *gave_up is set to 1 on the decision that marks it failed. */
+ * *gave_up is set to 1 on the decision that marks it failed: after
+ * max_attempts, or (GD9.7) at once when the slave reports an error with a
+ * CONFIG class AL status code (then s[i].failed_config = 1, no action). */
 ecm_sact_t ecm_srec_decide(ecm_srec_plan_t *p, int i, const ecm_srec_input_t *in,
                            uint64_t now_ns, int *recovered, int *gave_up);
 

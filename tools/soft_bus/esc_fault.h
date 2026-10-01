@@ -53,8 +53,16 @@
  *   coe_delay <node|all> <ms> SDO download responses of the node(s) become
  *                             visible in SM1 only <ms> after the request
  *                             (GD9.6 E-09; uploads unaffected; 0 = off)
- *   reject_al <node|all>      reject the next AL Control request (L2-05;
- *                             same as SIGUSR1 for all nodes)
+ *   reject_al <node|all> [code] [state] [sticky]
+ *                             reject the next AL Control request (L2-05;
+ *                             same as SIGUSR1 for all nodes). GD9.7: with
+ *                             AL status code <code> (default 0x0012), only
+ *                             a request TO <state> (1/2/4/8), and "sticky":
+ *                             every such request until "clear"
+ *   emcy <node> <code> [reg] [count]
+ *                             node posts <count> CoE Emergency messages
+ *                             (default 1, reg 0x01), one per frame while
+ *                             SM1 is free; data = seq LE16, A5 5A C3 (GD9.7)
  *   clear                     cancel all pending injections (does not
  *                             restore dropped nodes)
  *   status                    print injection state and error counters

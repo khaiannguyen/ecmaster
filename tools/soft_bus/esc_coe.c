@@ -832,3 +832,24 @@ void coe_on_mailbox_out_write(esc_t *esc)
     }
     esc->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
 }
+
+/* ==========================================================================
+ * GD9.7: Emergency message (fault injection only).
+ * ========================================================================== */
+#define COES_EMERGENCY 0x01u   /* ECT_COES_EMERGENCY */
+
+int coe_post_emcy(esc_t *esc, uint16_t code, uint8_t reg, const uint8_t data[5])
+{
+    if ((esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL) || esc->fault.mbx_held)
+        return 0;
+    uint8_t *resp = esc->regs + SII_SM1_OFFSET;
+    memset(resp, 0, 16);
+    resp_header(resp, 0x000a, COES_EMERGENCY);
+    wr_le16(resp + 8, code);           /* error code         */
+    resp[10] = reg;                    /* error register     */
+    memcpy(resp + 11, data, 5);        /* manufacturer data  */
+    esc->coe_od.resp_cnt = (uint8_t)(esc->coe_od.resp_cnt % 7u + 1u);
+    resp[OFF_MBX_TYPE] = (uint8_t)((resp[OFF_MBX_TYPE] & 0x0Fu) | (esc->coe_od.resp_cnt << 4));
+    esc->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
+    return 1;
+}

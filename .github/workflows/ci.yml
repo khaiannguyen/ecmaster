@@ -68,7 +68,7 @@ jobs:
         run: make -C libecmaster/core test test_asan
       - name: libecmaster/diag
         run: make -C libecmaster/diag test test_asan
-      - name: libecmaster/policy (bus state machine, recovery planner, freshness)
+      - name: libecmaster/policy (bus state machine, recovery planner, freshness, GD9.7 AL code classes)
         run: make -C libecmaster/policy test test_asan
       - name: libecmaster/config (ENI loader, identity/layout checks, GD8 8.4; GD9.6 register InitCmd table, LRD/LWR, state timeouts)
         run: make -C libecmaster/config test
@@ -127,6 +127,8 @@ jobs:
         run: sudo -E env CASES="e06 e07 e08 e09" LOG=/tmp/log_gd9_eni tools/gd9/run_eni_9_6.sh
       - name: DC per slave from the ENI (GD9.5 DC-01..DC-04b; L6 is run on the Jetson, not here)
         run: sudo -E env CASES="dc01 dc02 dc02n dc03 dc03n dc04 dc04b" LOG=/tmp/log_gd9_dc tools/gd9/run_dc_9_5.sh
+      - name: EMCY + AL status code classes (GD9.7 M-01..M-03, P-01a/b, P-03)
+        run: sudo -E env CASES="m01 m02 m03 p01a p01b p03" LOG=/tmp/log_gd9_emcy tools/gd9/run_emcy_9_7.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -136,6 +138,7 @@ jobs:
             /tmp/golden_now.pcap
             /tmp/log_gd9_eni
             /tmp/log_gd9_dc
+            /tmp/log_gd9_emcy
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

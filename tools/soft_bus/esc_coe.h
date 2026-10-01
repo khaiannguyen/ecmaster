@@ -28,8 +28,8 @@
  * Explicitly OUT of scope here:
  *  - SDO Info (ECT_COES_SDOINFO) -- ecx_readODlist/readOE would get no
  *    reply. Not used by ecm_run.c today.
- *  - Emergency messages (ECT_COES_EMERGENCY) -- soft_bus never spontaneously
- *    reports one; nothing generates them yet.
+ *  - Emergency messages (ECT_COES_EMERGENCY): only on request, from the
+ *    fault injection (GD9.7, ctl "emcy"), never spontaneously.
  *  - Changing the process data layout: 0x1C12/0x1C13 only accept the one
  *    fixed PDO (0x1600/0x1A00), mapping objects are read-only.
  *
@@ -58,5 +58,13 @@ void coe_od_init(coe_od_t *od);
  * response placed, no full-bit set) -- this soft_bus implements CoE
  * only, matching the scope above. */
 void coe_on_mailbox_out_write(esc_t *esc);
+
+/* GD9.7: put one CoE Emergency message (ETG.1000.6: CoE service 1, error
+ * code, error register, 5 byte manufacturer data; mailbox length 10) into
+ * SM1 and set "mailbox full", with the next Cnt like any response.
+ * Returns 0 if SM1 is still full (or a held response waits): nothing
+ * written, try again on a later frame -- a real slave queues its EMCY
+ * behind the response the master has not read yet. */
+int coe_post_emcy(esc_t *esc, uint16_t code, uint8_t reg, const uint8_t data[5]);
 
 #endif /* ESC_COE_H */
