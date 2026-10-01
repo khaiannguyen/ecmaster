@@ -85,7 +85,7 @@ gro=$(ethtool -k $I226 2>/dev/null | awk '/^generic-receive-offload:/{print $2}'
 
 # ---- force 100 Mbit/s
 echo "=== force $ONB to 100/Full (the i226 negotiates down)"
-ethtool -s $ONB speed 100 duplex full autoneg off
+ethtool -s $ONB autoneg on advertise 0x008   # 100baseT/Full only: autoneg stays on, the i226 gets Full (autoneg off -> i226 falls back to half)
 for _ in $(seq 30); do [ "$(speed $I226)" = 100 ] && [ "$(speed $ONB)" = 100 ] && break; sleep 1; done
 echo "    $I226: $(speed $I226) Mb/s $(duplex $I226)   $ONB: $(speed $ONB) Mb/s $(duplex $ONB)"
 chk "both ends 100 Mbit/s Full" "[ '$(speed $I226)$(duplex $I226)' = 100full ] && [ '$(speed $ONB)$(duplex $ONB)' = 100full ]"
@@ -142,7 +142,7 @@ h03)
     chrt -f 70 taskset -c $RT_CPU "$PROBE" -i $I226 -s "$H03_S" -l 200 -c "$LOG/probe_etf.csv" > "$LOG/probe_etf.txt" 2>&1
     grep -E "ETF drops|tx timestamps|late wake|launch_err" "$LOG/probe_etf.txt" | sed 's/^/    /'
     chk "H-03 etf offload on (after)" "offload_on"
-    miss=$(grep -oE "missed [0-9]+" "$LOG/probe_etf.txt" | awk '{print $2}'); inv=$(grep -oE "invalid_param [0-9]+" "$LOG/probe_etf.txt" | awk '{print $2}')
+    miss=$(grep "ETF drops:" "$LOG/probe_etf.txt" | head -1 | grep -oE "missed [0-9]+" | awk "{print \$2}"); inv=$(grep "ETF drops:" "$LOG/probe_etf.txt" | head -1 | grep -oE "invalid_param [0-9]+" | awk "{print \$2}")
     chk "H-03 ETF missed = 0 (got ${miss:-?})" "[ '${miss:-x}' = 0 ]"
     chk "H-03 ETF invalid <= 1 (got ${inv:-?}; 1 = a wake-tail > lead, GD8)" "[ '${inv:-9}' -le 1 ]"
     tc -s qdisc show dev $I226 > "$LOG/qdisc_h03.txt"
@@ -173,7 +173,7 @@ done
 
 if [ "$RESTORE" = 1 ]; then
     tc qdisc del dev $I226 root 2>/dev/null
-    ethtool -s $ONB autoneg on
+    ethtool -s $ONB autoneg on advertise 0x02f
     echo "restored: qdisc removed, $ONB autoneg on (i226 may need a replug if NO-CARRIER, i226.md)"
 fi
 for i in "${INFO[@]}"; do echo "INFO: $i"; done
