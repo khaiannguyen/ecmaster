@@ -26,7 +26,7 @@ Lớp CiA402 chưa làm, để GĐ10.
 | 9.8 | Độ tươi input theo từng slave (`--fresh`) | `run_fresh_9_8` 19/0; L5 io 18/0 |
 | 9.9 | soft_bus giả lập slave khác hãng từ ESI (`--profile`), bus hỗn hợp ảo | `run_mixed_9_9` 24/0/2 skip (profile rút gọn) |
 | 9.10 | Bind PDO theo (slave, index, sub), bảng từ ENI hoặc scan | `run_pdo_9_10` 27/0 |
-| 9.11 | Hồi quy toàn bộ, CI, tổng hợp, ETG.1500 503, `i226.md` 100 Mbit/s, N-03 | xem §4 |
+| 9.11 | Hồi quy toàn bộ, CI, tổng hợp, ETG.1500 503, `i226.md` 100 Mbit/s, N-03 | hồi quy 12/12 bước ok, ~12,5 phút (§7) |
 
 ## 3. DoD (`giai_doan_9_ke_hoach.md` §0)
 
@@ -42,7 +42,7 @@ Lớp CiA402 chưa làm, để GĐ10.
 | Kiểm độ tươi bật/tắt theo slave | ✅ 9.8 |
 | soft_bus giả lập servo ứng viên; bus hỗn hợp ảo lên OP | ✅ 9.9 |
 | API bind PDO, không hardcode trong `libecmaster` | ✅ 9.10 |
-| Hồi quy GĐ8 không đổi; CI xanh | ⏳ `run_regression_gd9.sh` trên Jetson + CI sau khi push |
+| Hồi quy GĐ8 không đổi; CI xanh | ✅ Jetson: `run_regression_gd9.sh` 12/12 bước ok (§7); CI: xem sau khi push |
 
 ## 4. Bước 9.11
 - `tools/gd9/run_regression_gd9.sh`: chạy toàn bộ hồi quy GĐ9 trong một lần (offline, golden 4+4/ENI/N=1/G-01b/CA + đối chứng âm, G, C+L4, E, DC+L6, M/P, F, V/N, B, L5 4+4, L5 N=1). Mỗi bước có log riêng; bảng kết quả ở `summary.md`. Không gồm: 9.2 (cần cáp loopback), X-04 (IgH), L1, soak.
@@ -65,7 +65,7 @@ Lớp CiA402 chưa làm, để GĐ10.
 ## 6. Còn treo, mang sang
 | Việc | Khi nào |
 |---|---|
-| Chạy `run_regression_gd9.sh` trên Jetson, dán `summary.md` vào §7; push; CI xanh; merge `gd9-3-complete-access` (và `gd9-bus-ready`) vào `main` | ngay |
+| Push; CI xanh; merge `gd9-3-complete-access` (và `gd9-bus-ready`) vào `main` | ngay |
 | Soak 8 h N=1 (xác nhận NOFRAME đơn lẻ của soak 30 phút 9.1) | qua đêm, trước GĐ10 |
 | Servo thật về: đọc 0x1018:03 (revision), 0x1702, 0x1B03, 0x1B04 qua SDO; sinh lại ENI nếu revision khác (kế hoạch §6.1) | khi có hàng |
 | `--pdo-scan` bắt buộc cho slave hãng khi bind theo (index, sub) | GĐ10 |
@@ -75,5 +75,22 @@ Lớp CiA402 chưa làm, để GĐ10.
 | `check_xsd.sh` đối chứng âm với file IS620N; X-04n lọc dmesg theo thời điểm | nhỏ |
 | V-04 (IgH trên bus hỗn hợp ảo) chưa chạy | tùy chọn |
 
-## 7. Hồi quy cuối trên Jetson
-_(dán `log_gd9_regression_*/summary.md` vào đây)_
+## 7. Hồi quy cuối trên Jetson (1/10/2026 16:52, `6.8.12-1021-rt-tegra`, `8f90142`)
+`IS620N_ESI=… sudo -E tools/gd9/run_regression_gd9.sh` — **12/12 bước ok, 0 fail**, tổng ~12,5 phút.
+
+| Bước | Kết quả | Thời gian |
+|---|---|---|
+| offline | 18 bộ test, 0 fail (soft_bus 105/116/115/54, eni 64, pdo 35, policy 116, diag 82, TSan 3, …) | 12 s |
+| golden | 547 / ENI 573 / N=1 89 / G-01b 547 / CA 548, hai đối chứng âm OK | 36 s |
+| groups (9.1) | 38/0 | 52 s |
+| coe (9.3 + L4) | 36/0 | 58 s |
+| eni (9.6) | 27/0 | 71 s |
+| dc (9.5 + L6 40 s) | 24/0 | 81 s |
+| emcy (9.7) | 27/0 | 52 s |
+| fresh (9.8) | 19/0 | 45 s |
+| pdo (9.10) | 27/0 | 25 s |
+| mixed (9.9, profile IS620N đầy đủ từ ESI) | 30/0, 1 skip (V-04 IgH) | 34 s |
+| l5 4+4 | policy 31/0, io 18/0, diag 10/0 | 160 s |
+| l5 N=1 | policy 21/0, io 17/0 | 114 s |
+
+Ngoài runner (đã chạy riêng trong GĐ9): 9.2 `run_100m` 20/0, X-04 IgH 12/0.
