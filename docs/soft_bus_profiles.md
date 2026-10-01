@@ -51,4 +51,5 @@ IS620N_ESI=~/esi/IS620N-Ecat_v2.6.9.xml sudo -E tools/gd9/run_mixed_9_9.sh
 | B-02m | bind trên bus hỗn hợp: ghi 0x607A (IS620N), 0x6040 (P1), đọc 0x6041 do soft_bus đặt |
 | N-01 | master map IS620N theo SII (profile bỏ 0x1C00), ENI gán 0x1B02 qua CoE → slave từ chối SAFE-OP 0x001E, ecm_run báo lỗi cấu hình, không thử lại; đối chứng giữ 0x1B01 → OP |
 | N-02 | ENI gán 0x1A00 hai lần cho P1 bằng CA → abort 0x06090030, từ chối SAFE-OP |
+| N-03 | mapping 0x1B01 lệch ESI nhưng cùng cỡ (0x60F4 ↔ 0x60FD): không `--pdo-scan` → OP, đọc sai im lặng; có `--pdo-scan` → từ chối, nêu hai entry |
 | V-04 | IgH `ethercat slaves`/`pdos` (tùy chọn, `IGH=1`) |

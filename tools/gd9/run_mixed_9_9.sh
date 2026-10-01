@@ -34,6 +34,12 @@
 #         n01c control: same profile, ENI keeps 0x1B01 -> OP
 #   n02   ENI with a CA assignment the ESI forbids (0x1A00 twice for P1):
 #         SDO abort 0x06090030, SAFE-OP refused by ecm_run
+#   n03   firmware != ESI with the SAME size (the IS620N ESI 0x1B04 kind of
+#         quirk, here on 0x1B01: 0x60F4 and 0x60FD swapped in the mapping
+#         object): without --pdo-scan the bus goes to OP and the data is
+#         silently misread (size checks cannot see it -- documented, not a
+#         pass condition of the master); with --pdo-scan the entry-by-entry
+#         check refuses and names both entries
 #   v04   IgH (optional, IGH=1 and the ethercat tool present): ethercat
 #         slaves / pdos on the mixed bus show both identities and the PDOs
 #
@@ -46,7 +52,7 @@ SOFT_BUS=${SOFT_BUS:-$ROOT/tools/soft_bus/soft_bus}
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 SB_PRIO=${SB_PRIO:-}; SB_CPU=${SB_CPU:-2}
-CASES=${CASES:-"v01 v02 v03 b02m n01 n02 v04"}
+CASES=${CASES:-"v01 v02 v03 b02m n01 n02 n03 v04"}
 IS620N_ESI=${IS620N_ESI:-}
 PROF=$ROOT/config/profiles
 P1=$PROF/p1_draft.prof; IS=$PROF/is620n_min.prof
@@ -185,6 +191,17 @@ n02)
     run n02 2 "--profile 1=$P1 --profile 2=$IS" "--eni $LOG/eni_n02.enicfg"
     chk "N-02 CoE download 0x1C13:00 refused (0x06090030), SAFE-OP refused" \
         "[ $RC != 0 ] && grep -q 'slave 1 CoE download 0x1C13:00 (complete access) FAILED' $E && grep -qi '06090030' $E && grep -q 'refusing SAFE-OP' $E"
+    ;;
+n03)
+    echo "=== N-03 mapping differs from the ESI, same size (0x60F4 <-> 0x60FD in 0x1B01)"
+    sed -e 's/^sub 0x1B01 5 bits 32 ro 2000f460$/sub 0x1B01 5 bits 32 ro 2000fd60/' \
+        -e 's/^sub 0x1B01 9 bits 32 ro 2000fd60$/sub 0x1B01 9 bits 32 ro 2000f460/' "$IS" > "$LOG/is620n_swap.prof"
+    chk "N-03 test file really edited (2 lines)" "[ \$(diff $IS $LOG/is620n_swap.prof | grep -c '^>') = 2 ]"
+    run n03a 2 "--profile 1=$P1 --profile 2=$LOG/is620n_swap.prof" "--eni $ENI"
+    chk "N-03a without --pdo-scan: OP (sizes match, the swap is invisible)" "[ $RC = 0 ] && grep -q 'all slaves in OPERATIONAL' $E"
+    run n03b 2 "--profile 1=$P1 --profile 2=$LOG/is620n_swap.prof" "--eni $ENI --pdo-scan"
+    chk "N-03b with --pdo-scan: refused, 0x60F4/0x60FD named" \
+        "[ $RC != 0 ] && grep -q 'PDO table of the ENI differs from the bus' $E && grep -q '0x60F4:00' $E && grep -q '0x60FD:00' $E"
     ;;
 v04)
     echo "=== V-04 IgH on the mixed bus (optional)"
