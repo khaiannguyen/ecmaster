@@ -100,3 +100,18 @@ Transition `OP` (OP→PREOP) được thêm vào bộ transition hợp lệ (reg
 `enicfg 1` (file viết tay, ví dụ `tools/gd9/eni_8node_ca_test.enicfg`) vẫn nạp được, kèm cảnh báo "not checked". Mọi `.enicfg` trong `config/eni/` là enicfg 2; `tools/eni/check_enicfg.sh` (CI offline) kiểm chúng khớp với `eni2cfg.py` hiện tại.
 
 Test: `libecmaster/config/test_eni_offline` (offline), `tools/gd9/run_eni_9_6.sh` (veth: E-06, E-07, E-08, E-09, E-10). `soft_bus --coe-delay-ms MS` / lệnh ctl `coe_delay <node|all> <ms>` giữ phản hồi SDO download MS ms (upload không bị trễ).
+
+## 8. GĐ9.5 — DC theo từng slave từ ENI
+
+| ENI | ecm_run làm gì |
+|---|---|
+| Slave có `DC` (TwinCAT: DC-Synchron) | SYNC0 = chu kỳ motion, `ShiftTime` của slave đó (0x0990 = bội số chu kỳ + shift) |
+| Slave không có `DC` (FreeRun) | Không ghi thanh ghi DC nào |
+| `AssignActivate` 0x0700 + `CycleTime1` | `ecx_dcsync01`: 0x0981 = 0x07, 0x09A4 = CycleTime1 (SYNC1 so với SYNC0) |
+| `ReferenceClock` | Phải là slave **DC-capable đầu tiên** trên bus (SOEM `ecx_configdc` dùng slave đó, delay đo từ nó xuống). TwinCAT mặc định chọn đúng slave này |
+
+Từ chối trước SAFE-OP, kèm tên slave: AssignActivate khác 0x0300/0x0700; sync0 ≠ chu kỳ motion; CycleTime1 ≠ 0 mà không bật SYNC1; slave có DC trong ENI nhưng trên bus không có DC (0x0008 bit 2); ref của ENI không phải slave DC đầu tiên; ENI cấu hình DC nhưng DC không bật được. Loader kiểm thêm: dữ liệu của register InitCmd 0x0980/0x09A0/0x09A4 phải khớp phần tử `DC` (ENI "nói hai điều" → từ chối). 0x09A4 vào bảng `KNOWN_REGS`.
+
+Recovery (power cycle một slave) dùng cùng `dc_arm_slave()`, nên slave được đặt lại đúng như ENI.
+
+Test: `tools/gd9/run_dc_9_5.sh` (DC-01…DC-05). Biến thể ENI tạo bằng `tools/gd9/eni_dc_variant.py` (sửa cả phần tử DC lẫn InitCmd như TwinCAT). Đọc lại từ dây bằng `tools/gd9/pcap_dc.py`. `soft_bus --no-dc-nodes LIST` giả lập slave không có DC (ví dụ coupler).

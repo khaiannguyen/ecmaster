@@ -98,6 +98,13 @@
  *    (no SYNC0): their clocks are still disciplined by the FRMW that
  *    travels in the motion frame, but an 8 ms SYNC0 would need the IO
  *    round-robin tick aligned to the DC grid -- deliberately out of scope.
+ *    Giai doan 9.5: with --eni the DC configuration is the ENI's, per slave
+ *    (dc_arm_slave): which slaves get SYNC0, SYNC1 (AssignActivate 0x0700,
+ *    CycleTime1), ShiftTime, and the reference clock -- which must be the
+ *    first DC-capable slave on the bus, the one SOEM's ecx_configdc() uses.
+ *    Anything else (AssignActivate other than 0x0300/0x0700, sync0 != the
+ *    motion cycle, a DC slave that is not DC capable, ENI ref elsewhere) is
+ *    refused before SAFE-OP. Without --eni nothing changes.
  *    DC(b) each motion tick: ecm_dc_update(ctx.DCtime, t_wake) returns an
  *    adjustment added to the next absolute deadline. wake_jitter keeps
  *    its meaning because it is measured against that adjusted deadline.
@@ -743,6 +750,20 @@ static int write_sm_watchdog(int slave)
 
 static uint16_t g_dc_ref;           /* reference clock slave (1-based)   */
 static int64_t  g_dc_cyc_ns;        /* SYNC0 cycle                        */
+
+/* Giai doan 9.5: arm SYNC0 (or SYNC0 + SYNC1) of one slave. Without --eni:
+ * SYNC0 = motion cycle, shift 0, as since GD6. With --eni: the slave's own
+ * AssignActivate (0x0300 SYNC0, 0x0700 SYNC0 + SYNC1), CycleTime1 (0x09A4,
+ * SYNC1 relative to SYNC0) and ShiftTime. Startup and RECOVERY both come
+ * here, so a power-cycled slave gets back exactly what the ENI asked. */
+static void dc_arm_slave(int s)
+{
+    int32 shift = g_eni_on ? g_eni.slave[s - 1].shift_ns : 0;
+    if (g_eni_on && (g_eni.slave[s - 1].assign & 0x0400))
+        ecx_dcsync01(&ctx, (uint16)s, TRUE, (uint32)g_dc_cyc_ns, g_eni.slave[s - 1].sync1_ns, shift);
+    else
+        ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)g_dc_cyc_ns, shift);
+}
 static int64_t  g_dc_setpoint_ns;   /* wanted phase after SYNC0           */
 
 /* anchor: 0x0910 (system time) and 0x0990 (next SYNC0) of the reference
@@ -1321,8 +1342,7 @@ static void dc_restore_slave(int s)
     int64_t delta = (int64_t)(t_ref - t_sl) + (sl->pdelay - rf->pdelay);
     int64_t new_off = (int64_t)htoell((uint64_t)(old_off + delta));
     ecx_FPWR(&ctx.port, sl->configadr, ECT_REG_DCSYSOFFSET, sizeof(new_off), &new_off, EC_TIMEOUTRET);
-    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)g_dc_cyc_ns,
-                g_eni_on ? g_eni.slave[s - 1].shift_ns : 0);
+    dc_arm_slave(s);
     fprintf(stderr, "ecm_run: [RECOVERY] slave %d: DC restored (delay %d ns, offset step %+lld ns), SYNC0 re-armed\n",
             s, sl->pdelay, (long long)delta);
 }
@@ -1913,34 +1933,68 @@ int main(int argc, char **argv)
      * they go here with the SM watchdog writes: before any thread exists
      * (Giai doan 5 lesson: a blocking frame from another thread while the
      * RT loop runs desyncs g_tx_order), and in PREOP, before SAFEOP. ---- */
+    /* Giai doan 9.5: with --eni the DC configuration is the ENI's, slave by
+     * slave: reference clock, which slaves get SYNC0, SYNC1, shift. What
+     * SOEM / ecm_run cannot do is refused here, before SAFE-OP. */
+    int first_dc = 0;                       /* first DC-capable slave on the bus */
+    for (int s = 1; s <= ctx.slavecount && !first_dc; s++)
+        if (ctx.slavelist[s].hasdc) first_dc = s;
     if (g_eni_on && !no_dc) {
         int ref = ecm_eni_refclock(&g_eni);
+        int bad = 0;
         if (ref == 0) {
             fprintf(stderr, "ecm_run: ENI has no DC slave -> DC off\n");
             no_dc = 1;
-        } else if (ref != 1) {
-            fprintf(stderr, "ecm_run: ENI reference clock is slave %d; ecm_run needs slave 1\n", ref);
-            ecx_close(&ctx); return 1;
         } else {
-            for (int i = 0; i < g_eni.nslaves; i++) {
+            for (int i = 0; i < g_eni.nslaves && i < ctx.slavecount; i++) {
                 const ecm_eni_slave_t *e = &g_eni.slave[i];
-                if (e->dc && (e->sync0_ns != (uint32_t)(motion_cycle_us * 1000L) ||
-                              e->assign != 0x0300 || e->sync1_ns != 0)) {
-                    fprintf(stderr, "ecm_run: ENI slave %d DC (sync0 %u ns, sync1 %u, assign 0x%04X) "
-                            "not supported with motion cycle %ld us (need sync0 = cycle, SYNC0 only, 0x0300)\n",
-                            i + 1, e->sync0_ns, e->sync1_ns, e->assign, motion_cycle_us);
-                    ecx_close(&ctx); return 1;
+                int s = i + 1;
+                if (!e->dc)
+                    continue;
+                if (!ctx.slavelist[s].hasdc) {
+                    fprintf(stderr, "ecm_run: ENI slave %d (%s) uses DC%s, but the slave on the bus is not "
+                            "DC capable (0x0008 bit2 = 0)\n", s, e->name, e->refclock ? " as reference clock" : "");
+                    bad++;
+                }
+                if (e->sync0_ns != (uint32_t)(motion_cycle_us * 1000L)) {
+                    fprintf(stderr, "ecm_run: ENI slave %d DC (sync0 %u ns) not supported with motion cycle "
+                            "%ld us (need sync0 = cycle)\n", s, e->sync0_ns, motion_cycle_us);
+                    bad++;
+                }
+                if (e->assign != 0x0300 && e->assign != 0x0700) {
+                    fprintf(stderr, "ecm_run: ENI slave %d DC AssignActivate 0x%04X not supported "
+                            "(0x0300 SYNC0, 0x0700 SYNC0 + SYNC1)\n", s, e->assign);
+                    bad++;
+                } else if (e->assign == 0x0300 && e->sync1_ns != 0) {
+                    fprintf(stderr, "ecm_run: ENI slave %d: CycleTime1 %u ns but SYNC1 not activated "
+                            "(AssignActivate 0x0300)\n", s, e->sync1_ns);
+                    bad++;
                 }
             }
+            /* SOEM's ecx_configdc() makes the FIRST DC-capable slave the
+             * reference clock (delays are measured from it downstream, the
+             * FRMW reads it). TwinCAT picks the same one by default. */
+            if (!bad && ref != first_dc) {
+                fprintf(stderr, "ecm_run: ENI reference clock is slave %d, but the first DC-capable slave "
+                        "on the bus is slave %d; SOEM uses the first one (TwinCAT: Device > EtherCAT > "
+                        "Advanced Settings > Distributed Clock > reference clock)\n", ref, first_dc);
+                bad++;
+            }
+        }
+        if (bad) {
+            fprintf(stderr, "ecm_run: --eni: %d DC setting(s) cannot be applied, refusing SAFE-OP\n", bad);
+            ecx_close(&ctx); return 1;
         }
     }
     if (!no_dc) {
         ecx_configdc(&ctx);
         uint16_t ref = ctx.grouplist[GROUP_MOTION].DCnext;
 
-        if (!ctx.slavelist[1].hasdc) {
-            fprintf(stderr, "ecm_run: DC off -- slave 1 is not DC-capable (0x0008 bit2 = 0)\n");
-        } else if (!ctx.grouplist[GROUP_MOTION].hasdc || ctx.grouplist[GROUP_IO].hasdc || ref != 1) {
+        /* without --eni the reference must be slave 1, as since GD6 */
+        int want_ref = g_eni_on ? first_dc : 1;
+        if (!want_ref || !ctx.slavelist[want_ref].hasdc) {
+            fprintf(stderr, "ecm_run: DC off -- slave %d is not DC-capable (0x0008 bit2 = 0)\n", want_ref ? want_ref : 1);
+        } else if (!ctx.grouplist[GROUP_MOTION].hasdc || ctx.grouplist[GROUP_IO].hasdc || ref != want_ref) {
             /* ecx_configdc() gives the FRMW datagram only to the group that
              * owns the FIRST DC slave. If that is not GROUP_MOTION the PI
              * would get a sample only every io cycle -- refuse. */
@@ -1956,12 +2010,16 @@ int main(int argc, char **argv)
                 int want_sync0 = g_eni_on
                     ? (g_eni.slave[s - 1].dc && ctx.slavelist[s].hasdc)
                     : (ctx.slavelist[s].group == GROUP_MOTION && ctx.slavelist[s].hasdc);
-                int32 shift = g_eni_on ? g_eni.slave[s - 1].shift_ns : 0;
-                fprintf(stderr, "ecm_run: dc slave %d hasdc=%d pdelay=%d ns%s\n", s,
+                int sync1 = g_eni_on && want_sync0 && (g_eni.slave[s - 1].assign & 0x0400);
+                fprintf(stderr, "ecm_run: dc slave %d hasdc=%d pdelay=%d ns%s%s\n", s,
                         ctx.slavelist[s].hasdc, ctx.slavelist[s].pdelay,
-                        want_sync0 ? " SYNC0" : "");
+                        want_sync0 ? " SYNC0" : "", sync1 ? " SYNC1" : "");
+                if (want_sync0 && g_eni_on && (g_eni.slave[s - 1].shift_ns || sync1))
+                    fprintf(stderr, "ecm_run: dc slave %d from the ENI: shift %d ns%s\n", s,
+                            g_eni.slave[s - 1].shift_ns, sync1 ? ", SYNC1 too" : "");
                 if (want_sync0) {
-                    ecx_dcsync0(&ctx, (uint16)s, TRUE, (uint32)cyc, shift);
+                    g_dc_cyc_ns = cyc;          /* dc_arm_slave() reads it */
+                    dc_arm_slave(s);
                     sync0_n++;
                 }
             }
@@ -1981,6 +2039,13 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Giai doan 9.5: the ENI asked for DC (and --no-dc was not given): a bus
+     * that ends up without it would run, but not as configured -> refuse */
+    if (g_eni_on && !no_dc && !g_dc_enabled) {
+        fprintf(stderr, "ecm_run: --eni: the ENI configures DC but DC could not be enabled (see above), "
+                "refusing SAFE-OP\n");
+        ecx_close(&ctx); return 1;
+    }
     if (!request_all_state(EC_STATE_SAFE_OP, state_timeout_us(ECM_ENI_ST_SAFEOP))) {
         fprintf(stderr, "Failed to reach SAFEOP\n"); ecx_close(&ctx); return 1;
     }

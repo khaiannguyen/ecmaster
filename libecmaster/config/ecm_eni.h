@@ -14,6 +14,8 @@
  *   - CoE InitCmds with their transitions        -> run by ecm_eni_soem.c,
  *                                                   any failure aborts (E-04)
  *   - DC: which slaves, reference clock, SYNC0/1 cycle, shift, AssignActivate
+ *     (GD9.5: applied per slave by ecm_run; the DC register InitCmds of the
+ *     ENI must say the same as the DC element, ecm_eni_check_supported)
  * What it does NOT decide: SM/FMMU/logical layout, station addresses, DC
  * delay/offset/start time -- SOEM and libecmaster compute those at runtime.
  *

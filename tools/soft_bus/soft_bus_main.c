@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     const char *ifname = NULL;
     int n = 1;
     int pdo_size = 4;
-    esc_dc_cfg_t dc_cfg = { 0, 800, 0, 20000 };   /* width, hop_ns, ref ppb, other ppb */
+    esc_dc_cfg_t dc_cfg = { 0, 800, 0, 20000, 0 };   /* width, hop_ns, ref ppb, other ppb, no-DC nodes */
     double dc_report_s = 10.0;
     const char *ctl_path = CTL_DEFAULT;
     int app_seq_offset = -1;
@@ -97,6 +97,14 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--dc") == 0 && i + 1 < argc) {
             const char *v = argv[++i];                 /* off | 32 | 64 */
             dc_cfg.width = (strcmp(v, "off") == 0) ? 0 : atoi(v);
+        } else if (strcmp(argv[i], "--no-dc-nodes") == 0 && i + 1 < argc) {
+            /* GD9.5: SOEM slave numbers (1-based) without a DC unit, "1" or "1,3" */
+            char *list = argv[++i], *save = NULL;
+            for (char *t = strtok_r(list, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+                int k = atoi(t);
+                if (k < 1 || k > 64) { fprintf(stderr, "--no-dc-nodes: %s: 1..64\n", t); return 1; }
+                dc_cfg.no_dc_mask |= 1ull << (k - 1);
+            }
         } else if (strcmp(argv[i], "--dc-hop-ns") == 0 && i + 1 < argc) {
             dc_cfg.hop_ns = atoll(argv[++i]);
         } else if (strcmp(argv[i], "--dc-drift-ppm") == 0 && i + 1 < argc) {
@@ -135,7 +143,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s --iface <veth_s> --n <node_count> [--pdo-size <bytes>]\n"
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
-                "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n",
+                "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n"
+                "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, GD9.5)\n",
                 argv[0]);
         return 1;
     }

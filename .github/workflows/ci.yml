@@ -125,6 +125,8 @@ jobs:
           sudo -E env GOLDEN=tools/golden/golden_ecm_run_ca.txt EXPECT_DIFF=1 tools/golden/check_golden.sh
       - name: ENI loader for vendor ENIs (GD9.6 E-06 LRD/LWR, E-07 TwinCAT IS620N, E-08 unknown register InitCmd, E-09 slow SDO)
         run: sudo -E env CASES="e06 e07 e08 e09" LOG=/tmp/log_gd9_eni tools/gd9/run_eni_9_6.sh
+      - name: DC per slave from the ENI (GD9.5 DC-01..DC-04b; L6 is run on the Jetson, not here)
+        run: sudo -E env CASES="dc01 dc02 dc02n dc03 dc03n dc04 dc04b" LOG=/tmp/log_gd9_dc tools/gd9/run_dc_9_5.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -133,6 +135,7 @@ jobs:
           path: |
             /tmp/golden_now.pcap
             /tmp/log_gd9_eni
+            /tmp/log_gd9_dc
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

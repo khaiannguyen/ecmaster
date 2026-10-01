@@ -199,6 +199,38 @@ int main(void)
     check("transition OP (OP -> PREOP) parses",
           ecm_eni_trans_parse("SP,OP") == (ECM_ENI_T_SP | ECM_ENI_T_OP));
 
+    /* ------------------------------------------------------------ GD9.5 */
+    printf("[GD9.5: DC register InitCmds agree with the DC element]\n");
+    const char *s3 =
+        "enicfg 2\npd_cmd lrw\nslaves 1\n"
+        "slave 1 name \"a\" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03E9 "
+        "osize_bits 32 isize_bits 32 dc 1 refclock 1 sync0_ns 1000000 sync1_ns 0 shift_ns 0 assign 0x0300\n"
+        "reg 1 trans PS cmd 5 ado 0x0980 len 2 data 0003\n";
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A0 len 8 data 40420f0000000000\n", s3);
+    rc = ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("coherent DC InitCmds accepted", rc == 0 && ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 0);
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A0 len 8 data 40420f00400d0300\n", s3);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    rc = ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err));
+    check("0x09A0 write with SYNC1 200000 vs DC element 0 -> refused, names 0x09A4",
+          rc == 1 && strstr(err, "slave 1: DC register InitCmd 0x09A4") && strstr(err, "writes 200000"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A0 len 4 data 20a10700\n", s3);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("0x09A0 = 500000 vs sync0 1000000 -> refused",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "0x09A0"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x0980 len 2 data 0007\n", s3);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("second 0x0980 write 0x0700 vs assign 0x0300 -> refused",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "AssignActivate"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans SP cmd 5 ado 0x0980 len 2 data 0000\n", s3);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("SP 'clear DC activation' (0x0980 = 0) is not compared",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 0);
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A4 len 4 data 400d0300\n", s3);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("separate 0x09A4 write vs sync1 0 -> refused",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "SYNC1 cycle"));
+
     printf("\nRESULT: %d pass, %d fail\n", npass, nfail);
     return nfail ? 1 : 0;
 }

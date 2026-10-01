@@ -52,6 +52,12 @@ chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 for f in "$SOFT_BUS" "$ECM_RUN"; do [ -x "$f" ] || { echo "missing $f"; exit 2; }; done
 command -v tshark >/dev/null || { echo "tshark not installed"; exit 2; }
+for i in "$IF_M" "$IF_S"; do      # GD9.5: the 14/13 run of 1/10 was a lost veth pair
+    ip link show "$i" >/dev/null 2>&1 || {
+        echo "interface $i missing (veth pairs do not survive a reboot):"
+        echo "  sudo ip link add $IF_M type veth peer name $IF_S && sudo ip link set $IF_M up && sudo ip link set $IF_S up"
+        exit 2; }
+done
 
 SB_WRAP=()
 [ -n "$SB_PRIO" ] && SB_WRAP+=(chrt -f "$SB_PRIO")

@@ -497,8 +497,11 @@ static unsigned cmd_kind(uint8_t cmd)
  * step 9.4 (config/eni/known_regs.txt, docs/eni_audit_9_4*.md): all of
  * them use only these. Deliberately NOT here (an ENI with them is refused
  * until someone decides): 0x0400-0x0420 watchdogs (ecm_run sets 0x0420
- * itself, an ENI value would be ignored), 0x09A4 SYNC1 cycle and 0x0982
- * pulse length (step 9.5), EEPROM writes, anything vendor specific. */
+ * itself, an ENI value would be ignored), 0x0982 pulse length (an ESI
+ * value, SOEM never writes it), EEPROM writes, anything vendor specific.
+ * The DC writes (0x0980, 0x09A0, 0x09A4) are known because ecm_run does
+ * them from the slave record; ecm_eni_check_supported() also checks that
+ * their data says the same as that record (GD9.5). */
 static const struct {
     uint16_t ado;
     unsigned kinds;
@@ -531,7 +534,8 @@ static const struct {
     { 0x0980, K_WR, 0, "DC AssignActivate: ecm_run from the ENI (assign)" },
     { 0x0981, K_WR, 0, "DC activation: ecm_run DC setup" },
     { 0x0990, K_WR, 0, "DC start time: ecm_run DC setup" },
-    { 0x09A0, K_WR, 0, "SYNC0 cycle: ecm_run from the ENI (sync0_ns)" },
+    { 0x09A0, K_WR, 0, "SYNC0 (+ SYNC1) cycle: ecm_run from the ENI (sync0_ns, sync1_ns)" },
+    { 0x09A4, K_WR, 0, "SYNC1 cycle: ecm_run from the ENI (sync1_ns, GD9.5)" },
     { 0x09A8, K_WR, 1, "latch control left at reset (0): latch not used by ecm_run" },
 };
 
@@ -609,6 +613,49 @@ int ecm_eni_check_supported(const ecm_eni_t *eni, int allow_unknown_reg, int *nw
             warn++;
         else
             bad++;
+    }
+    /* GD9.5: the DC register InitCmds must agree with the slave record that
+     * ecm_run applies (assign, sync0_ns, sync1_ns). They come from different
+     * parts of the ENI (InitCmds vs the DC element); a hand-edited ENI can
+     * make them disagree, and then the ENI says two things. */
+    for (int i = 0; i < eni->nreg; i++) {
+        const ecm_eni_reg_t *r = &eni->reg[i];
+        if (!r->pos || !(r->trans & ECM_ENI_T_PS) || cmd_kind(r->cmd) != K_WR)
+            continue;
+        const ecm_eni_slave_t *s = &eni->slave[r->pos - 1];
+        if (!s->dc)
+            continue;
+        uint32_t want[3], got[3];
+        int nchk = 0;
+        const char *what = NULL;
+        if (r->ado == 0x0980 && r->nkept >= 2) {
+            want[0] = s->assign; got[0] = (uint32_t)(r->data[0] | r->data[1] << 8); nchk = 1;
+            what = "AssignActivate";
+        } else if (r->ado == 0x09A0 && r->nkept >= 4) {
+            want[0] = s->sync0_ns;
+            got[0] = (uint32_t)r->data[0] | (uint32_t)r->data[1] << 8 | (uint32_t)r->data[2] << 16 |
+                     (uint32_t)r->data[3] << 24;
+            nchk = 1;
+            if (r->nkept >= 8) {
+                want[1] = s->sync1_ns;
+                got[1] = (uint32_t)r->data[4] | (uint32_t)r->data[5] << 8 | (uint32_t)r->data[6] << 16 |
+                         (uint32_t)r->data[7] << 24;
+                nchk = 2;
+            }
+            what = "SYNC0/SYNC1 cycle";
+        } else if (r->ado == 0x09A4 && r->nkept >= 4) {
+            want[0] = s->sync1_ns;
+            got[0] = (uint32_t)r->data[0] | (uint32_t)r->data[1] << 8 | (uint32_t)r->data[2] << 16 |
+                     (uint32_t)r->data[3] << 24;
+            nchk = 1;
+            what = "SYNC1 cycle";
+        }
+        for (int k = 0; k < nchk; k++)
+            if (want[k] != got[k]) {
+                adderr(err, errlen, "slave %u: DC register InitCmd 0x%04X (%s) writes %u, the DC element says %u\n",
+                       r->pos, r->ado + 4 * k, what, got[k], want[k]);
+                bad++;
+            }
     }
     if (nwarn)
         *nwarn = warn;

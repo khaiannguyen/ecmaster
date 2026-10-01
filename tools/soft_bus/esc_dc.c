@@ -114,8 +114,12 @@ void esc_dc_node_reset(esc_t *e, int i)
         memset(&e->dc, 0, sizeof(e->dc));
 
         uint16_t feat = (uint16_t)(e->regs[0x0008] | (e->regs[0x0009] << 8));
-        feat |= FEAT_DC_AVAILABLE;
-        if (g_cfg.width == 64) feat |= FEAT_DC_64BIT;
+        if (i < 64 && (g_cfg.no_dc_mask >> i) & 1) {
+            feat &= (uint16_t)~(FEAT_DC_AVAILABLE | FEAT_DC_64BIT);   /* --no-dc-nodes */
+        } else {
+            feat |= FEAT_DC_AVAILABLE;
+            if (g_cfg.width == 64) feat |= FEAT_DC_64BIT;
+        }
         e->regs[0x0008] = (uint8_t)feat;
         e->regs[0x0009] = (uint8_t)(feat >> 8);
 
@@ -174,7 +178,8 @@ void esc_dc_frame_end(esc_t *chain, int n, int has_pd)
         if (chain[i].dc.read_systime && ref < 0) ref = i;
         chain[i].dc.read_systime = 0;
     }
-    if (has_pd && ref >= 0 && chain[0].dc.sync0_active) {
+    /* GD9.5: the ref need not be node 0 (--no-dc-nodes 1 makes it node 1) */
+    if (has_pd && ref >= 0 && chain[ref].dc.sync0_active) {
         if (ref != g_ref_idx) { if (g_ref_idx >= 0) g_ref_changes++; g_ref_idx = ref; }
         int64_t mn = 0, mx = 0;                  /* the ref itself: offset 0 */
         for (int i = 0; i < n; i++) {
