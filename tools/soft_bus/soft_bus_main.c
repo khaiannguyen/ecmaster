@@ -16,6 +16,8 @@
  * unchanged -- golden_ecm_run.txt):
  *   --coe-pdo-od  object dictionary gets 0x1C00/0x1C12/0x1C13/0x1600/0x1A00,
  *                 SOEM maps process data over CoE (ecx_readPDOmap)
+ *   --coe-delay-ms MS  SDO download responses posted MS ms late (GD9.6 E-09;
+ *                 same as the ctl command "coe_delay all MS")
  *   --coe-ca      SDO Complete Access + SII General category (CoE details
  *                 0x25), implies --coe-pdo-od; SOEM uses ecx_readPDOmapCA.
  *                 ESI: config/esi/softbus_esi_ca.xml
@@ -83,6 +85,7 @@ int main(int argc, char **argv)
 
     int sii_poke_word[8], sii_poke_val[8], n_poke = 0;   /* --sii-poke W=V (negative controls) */
     int coe_pdo_od = 0, coe_ca = 0;                      /* GD9.3, both off by default */
+    int coe_delay_ms = 0;                                /* GD9.6, off by default */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -110,6 +113,8 @@ int main(int argc, char **argv)
             sm_wd_react = 0;
         } else if (strcmp(argv[i], "--coe-pdo-od") == 0) {
             coe_pdo_od = 1;                            /* 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
+        } else if (strcmp(argv[i], "--coe-delay-ms") == 0 && i + 1 < argc) {
+            coe_delay_ms = atoi(argv[++i]);            /* GD9.6 E-09: slow SDO download responses */
         } else if (strcmp(argv[i], "--coe-ca") == 0) {
             coe_ca = 1;                                /* SDO Complete Access, implies --coe-pdo-od */
         } else if (strcmp(argv[i], "--sii-poke") == 0 && i + 1 < argc) {
@@ -130,7 +135,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s --iface <veth_s> --n <node_count> [--pdo-size <bytes>]\n"
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
-                "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca]\n",
+                "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n",
                 argv[0]);
         return 1;
     }
@@ -171,6 +176,10 @@ int main(int argc, char **argv)
     esc_chain_wire(chain, n);
     esc_dc_setup(chain, n, &dc_cfg);   /* after esc_init: ORs DC bits into 0x0008 */
     for (int i = 0; i < n; i++) chain[i].wd.react = (uint8_t)sm_wd_react;
+    if (coe_delay_ms > 0) {
+        for (int i = 0; i < n; i++) chain[i].fault.coe_delay_ms = (uint32_t)coe_delay_ms;
+        printf("soft_bus: SDO download responses delayed %d ms (--coe-delay-ms)\n", coe_delay_ms);
+    }
     esc_fault_init(&g_fault, stdout, app_seq_offset);
 
     g_chain = chain;

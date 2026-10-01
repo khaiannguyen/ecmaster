@@ -9,10 +9,29 @@
 
 static const ecm_eni_t *g_hook_eni;
 static int g_hook_failures;
+static int g_sdo_timeout_us = EC_TIMEOUTRXM;
 
-int ecm_eni_soem_supported(const ecm_eni_t *eni)
+void ecm_eni_soem_set_sdo_timeout_us(int us)
 {
-    int bad = 0;
+    g_sdo_timeout_us = us > 0 ? us : EC_TIMEOUTRXM;
+}
+
+int ecm_eni_soem_supported(const ecm_eni_t *eni, int allow_unknown_reg)
+{
+    int bad = 0, warn = 0;
+    static char msg[16384];
+    bad += ecm_eni_check_supported(eni, allow_unknown_reg, &warn, msg, sizeof(msg));
+    if (msg[0]) {
+        /* one line per finding, each prefixed so a log grep finds them */
+        for (char *save = NULL, *l = strtok_r(msg, "\n", &save); l; l = strtok_r(NULL, "\n", &save))
+            fprintf(stderr, "ecm_eni: %s\n", l);
+    }
+    if (allow_unknown_reg && warn)
+        fprintf(stderr,
+                "ecm_eni: ***************************************************************\n"
+                "ecm_eni: *** --eni-allow-unknown-regcmd: %d register InitCmd(s) of the ENI\n"
+                "ecm_eni: *** are NOT executed. Experiments only, never in CI.\n"
+                "ecm_eni: ***************************************************************\n", warn);
     for (int i = 0; i < eni->ncoe; i++) {
         const ecm_eni_coe_t *c = &eni->coe[i];
         uint16_t other = (uint16_t)(c->trans & ~ECM_ENI_SOEM_TRANS);
@@ -94,7 +113,7 @@ static int print_errors(ecx_contextt *ctx)
 
 static int run_one(ecx_contextt *ctx, const ecm_eni_coe_t *c)
 {
-    int timeout = c->timeout_ms ? (int)c->timeout_ms * 1000 : EC_TIMEOUTRXM;
+    int timeout = c->timeout_ms ? (int)c->timeout_ms * 1000 : g_sdo_timeout_us;
     ec_errort stale;
     while (ecx_poperror(ctx, &stale)) { }
     int wkc;

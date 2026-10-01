@@ -29,9 +29,17 @@
  * ecm_eni_soem_supported(), never silently skipped. */
 #define ECM_ENI_SOEM_TRANS (ECM_ENI_T_IP | ECM_ENI_T_PS)
 
-/* 0 if every CoE InitCmd can be executed, else the count of those that
- * cannot (each printed). Call right after loading. */
-int ecm_eni_soem_supported(const ecm_eni_t *eni);
+/* 0 if ecm_run can do everything the ENI asks for, else the number of
+ * refusals, each printed: CoE InitCmds of other transitions than IP/PS,
+ * and (GD9.6) ecm_eni_check_supported(): LRD/LWR process data (E-06) and
+ * register InitCmds outside the known table (E-08; with allow_unknown_reg
+ * they are printed as warnings and not counted). Call right after loading,
+ * before the bus is touched. */
+int ecm_eni_soem_supported(const ecm_eni_t *eni, int allow_unknown_reg);
+
+/* GD9.6: SDO timeout of a CoE InitCmd whose ENI Timeout is 0 (default
+ * EC_TIMEOUTRXM). ecm_run --sdo-timeout-ms. */
+void ecm_eni_soem_set_sdo_timeout_us(int us);
 
 /* E-03. Returns number of mismatches, prints each. */
 int ecm_eni_soem_check_identity(ecx_contextt *ctx, const ecm_eni_t *eni);

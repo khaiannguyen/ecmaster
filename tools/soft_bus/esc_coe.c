@@ -819,5 +819,16 @@ void coe_on_mailbox_out_write(esc_t *esc)
     esc->coe_od.resp_cnt = (uint8_t)(esc->coe_od.resp_cnt % 7u + 1u);
     resp[OFF_MBX_TYPE] = (uint8_t)((resp[OFF_MBX_TYPE] & 0x0Fu) | (esc->coe_od.resp_cnt << 4));
 
+    /* GD9.6 (E-09): a slow slave -- e.g. a drive that stores a parameter
+     * before it answers -- posts its download response only after
+     * coe_delay_ms. The bytes are in SM1 already; "mailbox full" is set by
+     * esc_fault_frame_begin() at the first frame after the release time.
+     * Uploads (SOEM's own configuration reads) are never delayed. */
+    int is_download = (command & 0xE0u) == 0x20u || (command & 0xE0u) == 0x00u;
+    if (esc->fault.coe_delay_ms && is_download) {
+        esc->fault.mbx_held = 1;
+        esc->fault.mbx_release_ns = esc->wd.now_ns + (uint64_t)esc->fault.coe_delay_ms * 1000000ull;
+        return;
+    }
     esc->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;
 }

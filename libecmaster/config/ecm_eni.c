@@ -14,7 +14,7 @@
 #include <string.h>
 
 static const char *const TRANS_NAMES[] = {
-    "IP", "PI", "PS", "SP", "SO", "OS", "SI", "OI", "IB", "BI", "II", "PP", "SS", "OO",
+    "IP", "PI", "PS", "SP", "SO", "OS", "SI", "OI", "IB", "BI", "II", "PP", "SS", "OO", "OP",
 };
 #define NTRANS (sizeof(TRANS_NAMES) / sizeof(TRANS_NAMES[0]))
 
@@ -174,6 +174,15 @@ static int parse_slave(char **tok, int n, int lineno, ecm_eni_t *eni, char *err,
         seterr(err, errlen, "line %d: slave: bad or missing 'shift_ns'", lineno);
         return -1;
     }
+    /* GD9.6: optional (enicfg 1 has none) */
+    static const char *const st_key[ECM_ENI_ST_COUNT] = { "preop_ms", "safeop_ms", "op_ms" };
+    for (int k = 0; k < ECM_ENI_ST_COUNT; k++) {
+        const char *sv = kv(tok, n, 2, st_key[k]);
+        if (sv && (parse_u32(sv, &s->state_ms[k]) || s->state_ms[k] > 600000)) {
+            seterr(err, errlen, "line %d: slave: bad '%s'", lineno, st_key[k]);
+            return -1;
+        }
+    }
     if (s->dc && (s->sync0_ns == 0 || s->assign == 0)) {
         seterr(err, errlen, "line %d: slave %u: dc 1 needs sync0_ns and assign", lineno, pos);
         return -1;
@@ -202,6 +211,39 @@ static int hexbytes(const char *s, uint8_t *out, size_t max, uint16_t *len)
         out[i] = (uint8_t)strtoul(b, NULL, 16);
     }
     *len = (uint16_t)(n / 2);
+    return 0;
+}
+
+static int parse_reg(char **tok, int n, int lineno, ecm_eni_t *eni, char *err, size_t errlen)
+{
+    uint32_t pos, v;
+    if (n < 2 || parse_u32(tok[1], &pos) || (int)pos > eni->nslaves) {
+        seterr(err, errlen, "line %d: reg: position not 0 (master) or a declared slave", lineno);
+        return -1;
+    }
+    if (eni->nreg >= ECM_ENI_MAX_REG) {
+        seterr(err, errlen, "line %d: more than %d register InitCmds", lineno, ECM_ENI_MAX_REG);
+        return -1;
+    }
+    ecm_eni_reg_t *r = &eni->reg[eni->nreg];
+    memset(r, 0, sizeof(*r));
+    r->pos = (uint16_t)pos;
+    r->trans = ecm_eni_trans_parse(kv(tok, n, 2, "trans"));
+    if (!r->trans) {
+        seterr(err, errlen, "line %d: reg: bad 'trans'", lineno);
+        return -1;
+    }
+    NEED_U32("cmd", v, 14); r->cmd = (uint8_t)v;
+    NEED_U32("ado", v, 0xFFFF); r->ado = (uint16_t)v;
+    NEED_U32("len", v, 0x7FF); r->len = (uint16_t)v;
+    const char *d = kv(tok, n, 2, "data");
+    uint16_t kept;
+    if (!d || hexbytes(d, r->data, sizeof(r->data), &kept)) {
+        seterr(err, errlen, "line %d: reg: bad 'data' (hex, max %d byte)", lineno, ECM_ENI_REG_DATA);
+        return -1;
+    }
+    r->nkept = (uint8_t)kept;
+    eni->nreg++;
     return 0;
 }
 
@@ -273,10 +315,11 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
             continue;
 
         if (strcmp(tok[0], "enicfg") == 0) {
-            if (n != 2 || strcmp(tok[1], "1") != 0) {
+            if (n != 2 || (strcmp(tok[1], "1") != 0 && strcmp(tok[1], "2") != 0)) {
                 seterr(err, errlen, "line %d: unsupported enicfg version", lineno);
                 return -1;
             }
+            eni->version = tok[1][0] - '0';
             have_version = 1;
         } else if (!have_version) {
             seterr(err, errlen, "line %d: missing 'enicfg 1' header", lineno);
@@ -301,6 +344,17 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
         } else if (strcmp(tok[0], "coe") == 0) {
             if (parse_coe(tok, n, lineno, eni, err, errlen))
                 return -1;
+        } else if (strcmp(tok[0], "reg") == 0 && eni->version >= 2) {
+            if (parse_reg(tok, n, lineno, eni, err, errlen))
+                return -1;
+        } else if (strcmp(tok[0], "pd_cmd") == 0 && eni->version >= 2 && n == 2) {
+            if (strcmp(tok[1], "lrw") == 0)          eni->pd_cmd = ECM_ENI_PD_LRW;
+            else if (strcmp(tok[1], "lrd_lwr") == 0) eni->pd_cmd = ECM_ENI_PD_LRD_LWR;
+            else if (strcmp(tok[1], "none") == 0)    eni->pd_cmd = ECM_ENI_PD_NONE;
+            else {
+                seterr(err, errlen, "line %d: bad pd_cmd '%s'", lineno, tok[1]);
+                return -1;
+            }
         } else {
             seterr(err, errlen, "line %d: unknown record '%s'", lineno, tok[0]);
             return -1;
@@ -309,6 +363,10 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
 
     if (!have_version) {
         seterr(err, errlen, "empty file or missing 'enicfg 1' header");
+        return -1;
+    }
+    if (eni->version >= 2 && eni->pd_cmd == ECM_ENI_PD_UNKNOWN) {
+        seterr(err, errlen, "enicfg 2 without a 'pd_cmd' record");
         return -1;
     }
     if (declared != eni->nslaves) {
@@ -409,4 +467,161 @@ int ecm_eni_refclock(const ecm_eni_t *eni)
         if (eni->slave[i].refclock)
             return i + 1;
     return 0;
+}
+
+/* ---------------------------------------------------------------- GD9.6 */
+
+const char *ecm_eni_cmd_name(uint8_t cmd)
+{
+    static const char *const names[] = { "NOP", "APRD", "APWR", "APRW", "FPRD", "FPWR", "FPRW",
+                                         "BRD", "BWR", "BRW", "LRD", "LWR", "LRW", "ARMW", "FRMW" };
+    return cmd < sizeof(names) / sizeof(names[0]) ? names[cmd] : "?";
+}
+
+#define K_RD 1u   /* APRD FPRD BRD */
+#define K_WR 2u   /* APWR FPWR BWR */
+
+static unsigned cmd_kind(uint8_t cmd)
+{
+    switch (cmd) {
+    case 1: case 4: case 7: return K_RD;
+    case 2: case 5: case 8: return K_WR;
+    default: return 0;   /* RW, logical, ARMW/FRMW: never part of a slave configuration */
+    }
+}
+
+/* Register InitCmds that SOEM (ecx_config_init / ecx_config_map_group /
+ * ecx_configdc) and libecmaster (ecm_run state machine, DC SYNC0 setup)
+ * already do -- the table of kehoach §8 item 1. Seeded from the audit of
+ * the GD8 ENIs (giai_doan_8_nhat_ky_8_3.md §3) and of every TwinCAT ENI of
+ * step 9.4 (config/eni/known_regs.txt, docs/eni_audit_9_4*.md): all of
+ * them use only these. Deliberately NOT here (an ENI with them is refused
+ * until someone decides): 0x0400-0x0420 watchdogs (ecm_run sets 0x0420
+ * itself, an ENI value would be ignored), 0x09A4 SYNC1 cycle and 0x0982
+ * pulse length (step 9.5), EEPROM writes, anything vendor specific. */
+static const struct {
+    uint16_t ado;
+    unsigned kinds;
+    uint8_t  zero_only;   /* only an all-zero write is "known" */
+    const char *why;
+} KNOWN_REGS[] = {
+    { 0x0010, K_RD | K_WR, 0, "station address: SOEM ecx_config_init" },
+    { 0x0101, K_WR, 0, "DL control: SOEM ecx_config_init" },
+    { 0x0103, K_WR, 0, "DL control (loop): SOEM ecx_config_init" },
+    { 0x0120, K_WR, 0, "AL control: ecm_run state machine" },
+    { 0x0130, K_RD, 0, "AL status: ecm_run state machine" },
+    { 0x0200, K_WR, 0, "ECAT event mask: SOEM ecx_config_init" },
+    { 0x0300, K_WR, 0, "RX error counters: SOEM ecx_config_init" },
+    { 0x0500, K_WR, 0, "SII ownership: SOEM SII access" },
+    { 0x0502, K_RD | K_WR, 0, "SII control: SOEM SII access (identity check E-03)" },
+    { 0x0508, K_RD, 0, "SII data: SOEM SII access (identity check E-03)" },
+    { 0x0600, K_WR, 0, "FMMU 0: SOEM ecx_config_map_group" },
+    { 0x0610, K_WR, 0, "FMMU 1: SOEM ecx_config_map_group" },
+    { 0x0620, K_WR, 0, "FMMU 2: SOEM ecx_config_map_group" },
+    { 0x0630, K_WR, 0, "FMMU 3: SOEM ecx_config_map_group" },
+    { 0x0800, K_RD | K_WR, 0, "SM 0: SOEM (SII / CoE)" },
+    { 0x0808, K_WR, 0, "SM 1: SOEM (SII / CoE)" },
+    { 0x0810, K_WR, 0, "SM 2: SOEM (SII / CoE); size checked by the layout check" },
+    { 0x0818, K_WR, 0, "SM 3: SOEM (SII / CoE); size checked by the layout check" },
+    { 0x0820, K_WR, 0, "SM 4: SOEM (SII / CoE)" },
+    { 0x0828, K_WR, 0, "SM 5: SOEM (SII / CoE)" },
+    { 0x0910, K_WR, 0, "DC system time: SOEM ecx_configdc" },
+    { 0x0930, K_WR, 0, "DC speed counter start: SOEM ecx_configdc" },
+    { 0x0934, K_WR, 0, "DC filter: SOEM ecx_configdc" },
+    { 0x0980, K_WR, 0, "DC AssignActivate: ecm_run from the ENI (assign)" },
+    { 0x0981, K_WR, 0, "DC activation: ecm_run DC setup" },
+    { 0x0990, K_WR, 0, "DC start time: ecm_run DC setup" },
+    { 0x09A0, K_WR, 0, "SYNC0 cycle: ecm_run from the ENI (sync0_ns)" },
+    { 0x09A8, K_WR, 1, "latch control left at reset (0): latch not used by ecm_run" },
+};
+
+int ecm_eni_reg_known(const ecm_eni_reg_t *r, const char **why)
+{
+    unsigned kind = cmd_kind(r->cmd);
+    for (size_t i = 0; i < sizeof(KNOWN_REGS) / sizeof(KNOWN_REGS[0]); i++) {
+        if (KNOWN_REGS[i].ado != r->ado)
+            continue;
+        if (!(kind & KNOWN_REGS[i].kinds)) {
+            if (why) *why = "register known, but not with this command";
+            return 0;
+        }
+        if (KNOWN_REGS[i].zero_only && kind == K_WR) {
+            for (int b = 0; b < r->nkept; b++)
+                if (r->data[b]) {
+                    if (why) *why = "non-zero write; ecm_run only supports the reset value";
+                    return 0;
+                }
+        }
+        if (why) *why = KNOWN_REGS[i].why;
+        return 1;
+    }
+    if (why) *why = "not done by SOEM/ecm_run";
+    return 0;
+}
+
+static void trans_list(uint16_t mask, char *out, size_t outlen)
+{
+    out[0] = '\0';
+    for (uint16_t b = 1; b; b <<= 1)
+        if (mask & b) {
+            size_t u = strlen(out);
+            snprintf(out + u, outlen - u, "%s%s", u ? "," : "", ecm_eni_trans_name(b));
+        }
+}
+
+int ecm_eni_check_supported(const ecm_eni_t *eni, int allow_unknown_reg, int *nwarn,
+                            char *err, size_t errlen)
+{
+    int bad = 0, warn = 0;
+    if (err && errlen)
+        err[0] = '\0';
+    if (eni->version < 2) {
+        adderr(err, errlen, "warning: enicfg %d has no register InitCmds / process data command: "
+               "not checked (regenerate with tools/eni/eni2cfg.py)\n", eni->version);
+        warn++;
+    }
+    if (eni->pd_cmd == ECM_ENI_PD_LRD_LWR) {
+        adderr(err, errlen, "process data by LRD/LWR not supported, use LRW (SOEM maps one LRW; "
+               "TwinCAT: untick 'Use RD/WR instead of RW' in every Box)\n");
+        bad++;
+    }
+    for (int i = 0; i < eni->nreg; i++) {
+        const ecm_eni_reg_t *r = &eni->reg[i];
+        const char *why;
+        if (ecm_eni_reg_known(r, &why))
+            continue;
+        char tl[96], hex[2 * ECM_ENI_REG_DATA + 4];
+        trans_list(r->trans, tl, sizeof(tl));
+        hex[0] = '\0';
+        for (int b = 0; b < r->nkept; b++)
+            snprintf(hex + 2 * b, sizeof(hex) - 2 * (size_t)b, "%02x", r->data[b]);
+        if (r->len > r->nkept)
+            strcat(hex, "..");
+        char who[24];
+        if (r->pos)
+            snprintf(who, sizeof(who), "slave %u", r->pos);
+        else
+            snprintf(who, sizeof(who), "master");
+        adderr(err, errlen, "%s%s register InitCmd %s %s 0x%04X len %u data %s: %s\n",
+               allow_unknown_reg ? "warning: " : "", who, tl, ecm_eni_cmd_name(r->cmd), r->ado,
+               r->len, hex[0] ? hex : "-", why);
+        if (allow_unknown_reg)
+            warn++;
+        else
+            bad++;
+    }
+    if (nwarn)
+        *nwarn = warn;
+    return bad;
+}
+
+uint32_t ecm_eni_state_timeout_ms(const ecm_eni_t *eni, int st)
+{
+    uint32_t m = 0;
+    if (st < 0 || st >= ECM_ENI_ST_COUNT)
+        return 0;
+    for (int i = 0; i < eni->nslaves; i++)
+        if (eni->slave[i].state_ms[st] > m)
+            m = eni->slave[i].state_ms[st];
+    return m;
 }

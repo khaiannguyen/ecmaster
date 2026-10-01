@@ -81,3 +81,22 @@ Không `--eni`: hành vi không đổi (golden 547/547).
 | E-03d | ENI không kiểm revision | Chỉ kiểm offline (`test_eni_offline`); `ecm_run` yêu cầu motion_slaves < n nên không chạy bus 1 node |
 | E-04 | CoE InitCmd tới 0x8002 (`.enicfg` sửa tay) | `FAILED … 06020000` → `refusing SAFE-OP` (SOEM thuần sẽ bỏ qua) |
 | E-05 | Golden chế độ ENI | xem `tools/golden/` |
+
+## 7. GĐ9.6 — loader cho ENI thật của hãng (enicfg 2)
+
+ENI của TwinCAT cho servo thương mại chứa nhiều thứ ecm_run **không thực thi** (register InitCmd, cách gửi process data, timeout trạng thái). Từ 9.6 loader **kiểm tra** tất cả, để không có gì bị bỏ qua im lặng.
+
+| Nội dung ENI | `.enicfg 2` | Loader |
+|---|---|---|
+| Register InitCmd (slave + master) | `reg <pos> trans .. cmd .. ado .. len .. data ..` (pos 0 = master) | Phải nằm trong bảng `KNOWN_REGS` (`ecm_eni.c`), nếu không thì **từ chối trước khi chạm bus**, in từng lệnh (E-08). `--eni-allow-unknown-regcmd` chỉ để thử, in banner cảnh báo, không dùng trong CI |
+| Process data trong `Cyclic/Frame` | `pd_cmd lrw\|lrd_lwr\|none` (LRD trong `Master/MailboxStates` là poll mailbox, không tính) | `lrd_lwr` → luôn từ chối: "LRD/LWR not supported, use LRW" (E-06) |
+| Timeout của lệnh ghi AL Control 0x0120 ở IP/PS/SO | `preop_ms safeop_ms op_ms` trong dòng `slave` | ecm_run chờ trạng thái lâu nhất trong các slave, không bao giờ ngắn hơn `EC_TIMEOUTSTATE` 2 s (IS620N: SAFEOP/OP 9 s; ESI không khai báo → TwinCAT ghi 10 s) |
+| `Timeout` của CoE InitCmd | `timeout_ms` (đã có) | 0 → mặc định SOEM 700 ms, hoặc `--sdo-timeout-ms N` (E-09) |
+
+Bảng `KNOWN_REGS`: 0x0010, 0x0101, 0x0103, 0x0120, 0x0130, 0x0200, 0x0300, 0x0500/0502/0508, FMMU 0x0600–0x0630, SM 0x0800–0x0828, DC 0x0910/0930/0934/0980/0981/0990/09A0, 0x09A8 (chỉ khi ghi 0). Mỗi mục kèm lý do (SOEM hay ecm_run làm thay) và loại lệnh (đọc/ghi). Cố ý **chưa** có: watchdog 0x0400–0x0420, SYNC1 0x09A4, 0x0982 (bước 9.5), ghi EEPROM. ENI có các lệnh này sẽ bị từ chối cho tới khi quyết định từng lệnh.
+
+Transition `OP` (OP→PREOP) được thêm vào bộ transition hợp lệ (register InitCmd của TwinCAT dùng nó).
+
+`enicfg 1` (file viết tay, ví dụ `tools/gd9/eni_8node_ca_test.enicfg`) vẫn nạp được, kèm cảnh báo "not checked". Mọi `.enicfg` trong `config/eni/` là enicfg 2; `tools/eni/check_enicfg.sh` (CI offline) kiểm chúng khớp với `eni2cfg.py` hiện tại.
+
+Test: `libecmaster/config/test_eni_offline` (offline), `tools/gd9/run_eni_9_6.sh` (veth: E-06, E-07, E-08, E-09, E-10). `soft_bus --coe-delay-ms MS` / lệnh ctl `coe_delay <node|all> <ms>` giữ phản hồi SDO download MS ms (upload không bị trễ).

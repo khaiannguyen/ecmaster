@@ -99,7 +99,7 @@ int main(void)
         "osize_bits 32 isize_bits 32 dc 0 refclock 0 sync0_ns 0 sync1_ns 0 shift_ns 0 assign 0x0000\n";
     check("quoted name with space parses", ecm_eni_parse_text(s1, &eni, err, sizeof(err)) == 0 &&
                                            strcmp(eni.slave[0].name, "a b") == 0);
-    char buf[1024];
+    char buf[2048];
     snprintf(buf, sizeof(buf), "%scoe 1 trans XX ccs 1 index 0x8000 sub 1 ca 0 timeout_ms 0 data 00\n", s1);
     check("bad transition", expect_parse_error(buf, "bad 'trans'"));
     snprintf(buf, sizeof(buf), "%scoe 2 trans PS ccs 1 index 0x8000 sub 1 ca 0 timeout_ms 0 data 00\n", s1);
@@ -111,6 +111,93 @@ int main(void)
     check("slave missing field",
           expect_parse_error("enicfg 1\nslaves 1\nslave 1 vendor 0x499\n", "missing 'product'"));
     check("trans list IP,PS -> 2 bits", ecm_eni_trans_parse("IP,PS") == (ECM_ENI_T_IP | ECM_ENI_T_PS));
+
+    /* ------------------------------------------------------------ GD9.6 */
+    printf("[GD9.6: every committed ENI loads as enicfg 2]\n");
+    static const char *const v2[] = { "eni_1node_1pdo", "eni_8node", "eni_8node_dc", "eni_8node_dc_sdo",
+                                      "eni_8node_ca", "eni_mixed", "eni_mixed_rev", "eni_2servo" };
+    for (size_t i = 0; i < sizeof(v2) / sizeof(v2[0]); i++) {
+        char path[128], what[160];
+        snprintf(path, sizeof(path), "config/eni/%s.enicfg", v2[i]);
+        rc = ecm_eni_load(path, &eni, err, sizeof(err));
+        int warn = -1;
+        int bad = rc ? -1 : ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err));
+        snprintf(what, sizeof(what), "%s: enicfg 2, LRW, %d register InitCmds all known", v2[i], eni.nreg);
+        if (bad) printf("    %s\n", err);
+        check(what, rc == 0 && eni.version == 2 && eni.pd_cmd == ECM_ENI_PD_LRW && eni.nreg > 0 &&
+                    bad == 0 && warn == 0);
+    }
+
+    printf("[E-06 offline: LRD/LWR ENI refused]\n");
+    rc = ecm_eni_load("config/eni/eni_8node_lrdlwr.enicfg", &eni, err, sizeof(err));
+    check("eni_8node_lrdlwr loads, pd_cmd lrd_lwr", rc == 0 && eni.pd_cmd == ECM_ENI_PD_LRD_LWR);
+    int warn = 0;
+    rc = ecm_eni_check_supported(&eni, 1, &warn, err, sizeof(err));
+    check("refused even with --eni-allow-unknown-regcmd, message names LRW",
+          rc == 1 && strstr(err, "LRD/LWR not supported, use LRW"));
+
+    printf("[state timeouts from the AL Control InitCmds]\n");
+    ecm_eni_load("config/eni/eni_2servo.enicfg", &eni, err, sizeof(err));
+    check("IS620N: PREOP 3000, SAFEOP 9000, OP 9000 ms (ESI timeouts)",
+          eni.slave[1].state_ms[ECM_ENI_ST_PREOP] == 3000 && eni.slave[1].state_ms[ECM_ENI_ST_SAFEOP] == 9000 &&
+          eni.slave[1].state_ms[ECM_ENI_ST_OP] == 9000);
+    ecm_eni_load("config/eni/eni_mixed_rev.enicfg", &eni, err, sizeof(err));
+    check("mixed_rev: bus timeout = longest slave (SAFEOP 10000 from P1 draft)",
+          ecm_eni_state_timeout_ms(&eni, ECM_ENI_ST_SAFEOP) == 10000 &&
+          eni.slave[0].state_ms[ECM_ENI_ST_SAFEOP] == 9000);
+    check("mixed_rev: ref clock is slave 1 (IS620N)", ecm_eni_refclock(&eni) == 1);
+
+    printf("[E-08 offline: unknown register InitCmd]\n");
+    const char *s2 =
+        "enicfg 2\npd_cmd lrw\nslaves 1\n"
+        "slave 1 name \"a\" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03E9 "
+        "osize_bits 32 isize_bits 32 dc 0 refclock 0 sync0_ns 0 sync1_ns 0 shift_ns 0 assign 0x0000 "
+        "preop_ms 3000 safeop_ms 10000 op_ms 10000\n"
+        "reg 0 trans IP cmd 8 ado 0x0800 len 0 data -\n"
+        "reg 1 trans IP,IB cmd 5 ado 0x0010 len 2 data e903\n";
+    rc = ecm_eni_parse_text(s2, &eni, err, sizeof(err));
+    check("known-only enicfg 2 parses", rc == 0 && eni.nreg == 2);
+    check("... and is accepted", ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 0 && warn == 0);
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x0420 len 2 data e803\n", s2);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    rc = ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err));
+    check("0x0420 (watchdog) refused, line names slave, transition, cmd, ADO, data",
+          rc == 1 && strstr(err, "slave 1 register InitCmd PS FPWR 0x0420 len 2 data e803"));
+    rc = ecm_eni_check_supported(&eni, 1, &warn, err, sizeof(err));
+    check("--eni-allow-unknown-regcmd: 0 refusals, 1 warning",
+          rc == 0 && warn == 1 && strstr(err, "warning: slave 1"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A8 len 2 data 0000\n", s2);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("0x09A8 latch = 0 is known", ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 0);
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x09A8 len 2 data 0300\n", s2);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("0x09A8 latch enabled is refused", ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 &&
+                                             strstr(err, "non-zero"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 3 ado 0x0120 len 2 data 0400\n", s2);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("known ADO with an RW command is refused",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "APRW"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x0F00 len 40 "
+             "data 0102030405060708091011121314151617181920212223242526272829303132\n", s2);
+    ecm_eni_parse_text(buf, &eni, err, sizeof(err));
+    check("long data printed truncated with '..'",
+          ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "32..: "));
+
+    printf("[GD9.6 parser]\n");
+    check("enicfg 2 without pd_cmd",
+          expect_parse_error("enicfg 2\nslaves 1\nslave 1 vendor 0x1 product 0x1 rev 0x1 check_rev 0 addr 1 "
+                             "osize_bits 0 isize_bits 0 dc 0 refclock 0 sync0_ns 0 sync1_ns 0 shift_ns 0 assign 0\n",
+                             "without a 'pd_cmd'"));
+    snprintf(buf, sizeof(buf), "%sreg 1 trans PS cmd 5 ado 0x0420 len 2 data e803\n", s1);
+    check("reg record in an enicfg 1 file is unknown", expect_parse_error(buf, "unknown record 'reg'"));
+    ecm_eni_parse_text(s1, &eni, err, sizeof(err));
+    rc = ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err));
+    check("enicfg 1 still accepted, with a 'not checked' warning",
+          eni.version == 1 && rc == 0 && warn == 1 && strstr(err, "not checked"));
+    snprintf(buf, sizeof(buf), "%sreg 2 trans PS cmd 5 ado 0x0010 len 2 data 0000\n", s2);
+    check("reg for undeclared slave", expect_parse_error(buf, "not 0 (master) or a declared slave"));
+    check("transition OP (OP -> PREOP) parses",
+          ecm_eni_trans_parse("SP,OP") == (ECM_ENI_T_SP | ECM_ENI_T_OP));
 
     printf("\nRESULT: %d pass, %d fail\n", npass, nfail);
     return nfail ? 1 : 0;

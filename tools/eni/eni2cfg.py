@@ -19,20 +19,35 @@ What is read, per Config/Slave:
   Mailbox/CoE/InitCmds/InitCmd (Disabled=1 skipped)
 And Config/Cyclic/CycleTime.
 
-Deliberately NOT used: register InitCmds (SOEM + libecmaster configure SM,
+GD9.6 (enicfg 2) also records, for the loader to CHECK (not to execute):
+  every register InitCmd of every slave and of the master (reg records):
+            the loader holds the table of the ones SOEM + libecmaster do
+            themselves and refuses an ENI with any other (E-08)
+  the AL Control (0x0120) write Timeout of the IP, PS and SO transitions
+            (-> preop_ms / safeop_ms / op_ms of the slave record): the
+            ESI's state machine timeouts, which TwinCAT copies there
+  the datagram command that carries the process data in Config/Cyclic
+            (pd_cmd lrw | lrd_lwr | none): mailbox-state polling (an LRD
+            inside Master/MailboxStates) is not process data (E-06)
+
+Deliberately NOT executed: register InitCmds (SOEM + libecmaster configure SM,
 FMMU, AL state and DC themselves), logical addresses / process image offsets
 (SOEM builds its own IOmap), cyclic frame layout. docs/eni.md explains why.
 
 Output format (one record per line, '#' comments, fields space separated,
 numbers in hex with 0x prefix except counts/times in decimal):
 
-  enicfg 1
+  enicfg 2
   source <file name> sha256 <hex>
   cycle_us <n>
+  pd_cmd lrw|lrd_lwr|none
   slaves <n>
   slave <pos> name <quoted> vendor 0x.. product 0x.. rev 0x.. check_rev 0|1
         addr 0x.. osize_bits <n> isize_bits <n>
         dc 0|1 refclock 0|1 sync0_ns <n> sync1_ns <n> shift_ns <n> assign 0x....
+        preop_ms <n> safeop_ms <n> op_ms <n>          (0 = not in the ENI)
+  reg <pos> trans <IP,..> cmd <n> ado 0x.... len <n> data <hex|->
+        (pos 0 = master InitCmd; data truncated to 32 byte, len is the real one)
   coe <pos> trans <IP,PS,..> ccs <1|2> index 0x.... sub 0x.. ca 0|1 timeout_ms <n> data <hex|->
 
 (the slave record is one physical line; wrapped here for reading)
@@ -47,7 +62,11 @@ import sys
 import xml.etree.ElementTree as ET
 
 REG_DC_ACTIVATION = 0x0980
-TRANSITIONS = {"IP", "PI", "PS", "SP", "SO", "OS", "SI", "OI", "IB", "BI", "II", "PP", "SS", "OO"}
+REG_AL_CONTROL = 0x0120
+REG_DATA_MAX = 32
+# AL Control state -> transition whose Timeout is that state's timeout
+AL_STATE_TIMEOUT = {"IP": ("preop", 0x02), "PS": ("safeop", 0x04), "SO": ("op", 0x08)}
+TRANSITIONS = {"IP", "PI", "PS", "SP", "SO", "OS", "OP", "SI", "OI", "IB", "BI", "II", "PP", "SS", "OO"}
 
 
 def num(text, default=None):
@@ -84,6 +103,66 @@ def pdo_bits(pd, tag):
     return total
 
 
+def reg_initcmds(inits, who):
+    """Every enabled register InitCmd under an InitCmds element."""
+    out = []
+    if inits is None:
+        return out
+    for ic in inits.findall("InitCmd"):
+        if (ic.findtext("Disabled") or "").strip() in ("1", "true"):
+            continue
+        trans = [t.text.strip() for t in ic.findall("Transition")]
+        bad = [t for t in trans if t not in TRANSITIONS]
+        if not trans or bad:
+            fail(f"{who}: register InitCmd with transitions {trans}")
+        data = (ic.findtext("Data") or "").strip()
+        raw = bytes.fromhex(data) if data else b""
+        length = num(ic.findtext("Len"), None)
+        if length is None:
+            length = len(raw)
+        out.append({
+            "trans": trans,
+            "cmd": num(ic.findtext("Cmd"), 0),
+            "ado": num(ic.findtext("Ado"), 0),
+            "len": length,
+            "raw": raw,
+            "timeout": num(ic.findtext("Timeout"), 0),
+        })
+    return out
+
+
+def pd_command(cfg):
+    """Datagram command of the cyclic process data: 'lrw', 'lrd_lwr' or 'none'.
+    An LRD inside Master/MailboxStates polls the mailbox state, it is not
+    process data (every TwinCAT ENI has one, GD9.4)."""
+    start = num(cfg.findtext("Master/MailboxStates/StartAddr"), None)
+    count = num(cfg.findtext("Master/MailboxStates/Count"), 0)
+    mbx = range(start, start + (count + 7) // 8) if start is not None else range(0)
+    kinds = set()
+    for c in cfg.findall("Cyclic/Frame/Cmd"):
+        cmd = num(c.findtext("Cmd"), -1)
+        if cmd not in (10, 11, 12):
+            continue
+        addr = num(c.findtext("Addr"), None)
+        if cmd == 10 and addr is not None and addr in mbx:
+            continue
+        kinds.add(cmd)
+    if not kinds:
+        return "none"
+    if kinds == {12}:
+        return "lrw"
+    return "lrd_lwr"
+
+
+def reg_lines(pos, regs):
+    out = []
+    for r in regs:
+        d = r["raw"][:REG_DATA_MAX].hex() or "-"
+        out.append(f'reg {pos} trans {",".join(r["trans"])} cmd {r["cmd"]} ado 0x{r["ado"]:04X} '
+                   f'len {r["len"]} data {d}')
+    return out
+
+
 def parse_slave(s, idx):
     info = s.find("Info")
     if info is None:
@@ -100,6 +179,16 @@ def parse_slave(s, idx):
     inits = s.find("InitCmds")
     rec["check_rev"] = 0
     rec["assign"] = 0
+    rec["preop"] = rec["safeop"] = rec["op"] = 0
+    rec["reg"] = reg_initcmds(inits, f"slave {rec['pos']}")
+    for r in rec["reg"]:
+        if r["ado"] != REG_AL_CONTROL or r["cmd"] not in (2, 5, 8) or len(r["raw"]) < 1:
+            continue
+        for t in r["trans"]:
+            if t in AL_STATE_TIMEOUT:
+                key, state = AL_STATE_TIMEOUT[t]
+                if (r["raw"][0] & 0x0F) == state:
+                    rec[key] = max(rec[key], r["timeout"])
     if inits is not None:
         for ic in inits.findall("InitCmd"):
             comment = (ic.findtext("Comment") or "").lower()
@@ -193,12 +282,14 @@ def convert(path):
         fail("DC slaves but no reference clock")
 
     cycle_us = num(cfg.findtext("Cyclic/CycleTime"), 0)
+    master_regs = reg_initcmds(cfg.find("Master/InitCmds"), "master")
 
     out = [
         "# generated by tools/eni/eni2cfg.py -- do not edit, regenerate from the ENI",
-        "enicfg 1",
+        "enicfg 2",
         f"source {os.path.basename(path)} sha256 {hashlib.sha256(raw).hexdigest()}",
         f"cycle_us {cycle_us}",
+        f"pd_cmd {pd_command(cfg)}",
         f"slaves {len(slaves)}",
     ]
     for r in slaves:
@@ -208,8 +299,12 @@ def convert(path):
             f'rev 0x{r["rev"]:X} check_rev {r["check_rev"]} addr 0x{r["addr"]:04X} '
             f'osize_bits {r["osize"]} isize_bits {r["isize"]} '
             f'dc {r["dc"]} refclock {r["refclock"]} sync0_ns {r["sync0"]} sync1_ns {r["sync1"]} '
-            f'shift_ns {r["shift"]} assign 0x{r["assign"]:04X}'
+            f'shift_ns {r["shift"]} assign 0x{r["assign"]:04X} '
+            f'preop_ms {r["preop"]} safeop_ms {r["safeop"]} op_ms {r["op"]}'
         )
+    out += reg_lines(0, master_regs)
+    for r in slaves:
+        out += reg_lines(r["pos"], r["reg"])
     for r in slaves:
         for c in r["coe"]:
             out.append(

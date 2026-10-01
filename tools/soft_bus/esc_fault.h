@@ -50,6 +50,9 @@
  *                             repeat request (L5-12)
  *   mbx_dup [node]            post node's next mailbox response twice, same
  *                             Cnt (L5-12)
+ *   coe_delay <node|all> <ms> SDO download responses of the node(s) become
+ *                             visible in SM1 only <ms> after the request
+ *                             (GD9.6 E-09; uploads unaffected; 0 = off)
  *   reject_al <node|all>      reject the next AL Control request (L2-05;
  *                             same as SIGUSR1 for all nodes)
  *   clear                     cancel all pending injections (does not

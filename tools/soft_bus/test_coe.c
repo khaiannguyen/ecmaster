@@ -19,6 +19,7 @@
 #include "esc_sii.h"
 #include "esc_core.h"
 #include "esc_coe.h"
+#include "esc_fault.h"
 
 static int g_pass = 0, g_fail = 0;
 
@@ -465,6 +466,43 @@ static void test_ca_negative(void)
     check("  total bits = 1920*8", (long)bits, 1920L * 8);
 }
 
+/* GD9.6 E-09 (offline part): coe_delay holds a DOWNLOAD response, an
+ * upload is answered at once, the held one appears at the first frame
+ * after the release time. */
+static void test_coe_delay(void)
+{
+    printf("\n[GD9.6] coe_delay: slow SDO download responses\n");
+    static esc_fault_bus_t fb;
+    esc_fault_init(&fb, NULL, 0);
+    uint8_t frame[64] = { 0 };
+    node_reset(4, 0, 0);
+    g_esc.fault.coe_delay_ms = 5;
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 1000000ull);      /* t = 1 ms */
+
+    uint8_t d[4] = { 0x2a, 0, 0, 0 };
+    sdo_download_exp(0x8000, 1, 0, d, 4);
+    check("download: response bytes written", r_cmd(), 0x60);
+    check("download: mailbox full NOT set yet",
+          !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 0);
+    check("download: held", g_esc.fault.mbx_held, 1);
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 5900000ull);      /* t = 5.9 ms */
+    check("4.9 ms later: still held", !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 0);
+    esc_fault_frame_begin(&fb, &g_esc, 1, frame, 0, 6000000ull);      /* t = 6 ms */
+    check("5 ms later: mailbox full", !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
+    check("5 ms later: released", g_esc.fault.mbx_held, 0);
+
+    g_esc.regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;   /* master read it */
+    sdo_upload_req(0x8000, 1, 0);
+    check("upload: answered at once (not delayed)",
+          !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
+
+    esc_fault_command(&fb, &g_esc, 1, "coe_delay 0 0", 7000000ull);
+    g_esc.regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
+    sdo_download_exp(0x8000, 1, 0, d, 4);
+    check("ctl 'coe_delay 0 0': download answered at once",
+          !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
+}
+
 int main(void)
 {
     printf("=========================================================\n");
@@ -476,6 +514,7 @@ int main(void)
     test_download_negative();
     test_ca();
     test_ca_negative();
+    test_coe_delay();
 
     printf("\n=========================================================\n");
     printf(" RESULT: %d pass, %d fail\n", g_pass, g_fail);

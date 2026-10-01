@@ -154,6 +154,11 @@ int esc_fault_frame_begin(esc_fault_bus_t *f, esc_t *chain, int n,
             f->mbx_dup++;
             LOG(f, now_ns, "mbx_dup: node %d re-posted its last mailbox response", i);
         }
+        if (e->fault.mbx_held && now_ns >= e->fault.mbx_release_ns) {
+            e->fault.mbx_held = 0;
+            e->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;   /* GD9.6 coe_delay */
+            LOG(f, now_ns, "coe_delay: node %d posted its held SDO download response", i);
+        }
         if (esc_wd_check(e, now_ns)) {
             f->wd_drops++;
             LOG(f, now_ns, "node %d: SM watchdog expired (%.3f ms since last trigger) "
@@ -416,6 +421,16 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
         if (cmd[4] == 'r') chain[node].fault.mbx_lose_armed = 1;
         else               chain[node].fault.mbx_dup_armed = 1;
         LOG(f, now_ns, "%s: armed on node %d (SOEM slave %d)", cmd, node, node + 1);
+    } else if (!strcmp(cmd, "coe_delay") && argc == 3) {
+        int ms = atoi(argv[2]);
+        if (ms < 0) goto bad_args;
+        if (!strcmp(argv[1], "all")) {
+            for (int i = 0; i < n; i++) chain[i].fault.coe_delay_ms = (uint32_t)ms;
+        } else {
+            NEED_NODE(1);
+            chain[node].fault.coe_delay_ms = (uint32_t)ms;
+        }
+        LOG(f, now_ns, "coe_delay: SDO download responses of %s delayed %d ms", argv[1], ms);
     } else if (!strcmp(cmd, "reject_al") && argc == 2) {
         if (!strcmp(argv[1], "all")) {
             for (int i = 0; i < n; i++) chain[i].force_reject_al = 1;
@@ -430,6 +445,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             esc_node_fault_t *nf = &chain[i].fault;
             nf->wkc_short_left = nf->stale_left = 0;
             nf->mbx_lose_armed = nf->mbx_dup_armed = nf->mbx_dup_pending = 0;
+            nf->coe_delay_ms = 0;   /* a held response is still released */
             chain[i].force_reject_al = 0;
         }
         LOG(f, now_ns, "clear: all pending injections cancelled");

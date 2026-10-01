@@ -58,6 +58,8 @@ jobs:
             grep -q 'not in the known list: 0' /tmp/audit.md
             grep -q '(process data by LRW)' /tmp/audit.md
           done
+      - name: Committed .enicfg files up to date with eni2cfg.py (GD9.6, + negative control)
+        run: tools/eni/check_enicfg.sh
       - name: soft_bus (SII, ESM, DC, fault injection, CoE C-01)
         run: make -C tools/soft_bus test
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
@@ -68,7 +70,7 @@ jobs:
         run: make -C libecmaster/diag test test_asan
       - name: libecmaster/policy (bus state machine, recovery planner, freshness)
         run: make -C libecmaster/policy test test_asan
-      - name: libecmaster/config (ENI loader, identity/layout checks, GD8 8.4)
+      - name: libecmaster/config (ENI loader, identity/layout checks, GD8 8.4; GD9.6 register InitCmd table, LRD/LWR, state timeouts)
         run: make -C libecmaster/config test
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
         run: tests/tsan/run_tsan.sh 1000000
@@ -121,6 +123,8 @@ jobs:
         run: |
           sudo -E env SB_ARGS=--coe-ca GOLDEN=tools/golden/golden_ecm_run_ca.txt tools/golden/check_golden.sh
           sudo -E env GOLDEN=tools/golden/golden_ecm_run_ca.txt EXPECT_DIFF=1 tools/golden/check_golden.sh
+      - name: ENI loader for vendor ENIs (GD9.6 E-06 LRD/LWR, E-07 TwinCAT IS620N, E-08 unknown register InitCmd, E-09 slow SDO)
+        run: sudo -E env CASES="e06 e07 e08 e09" LOG=/tmp/log_gd9_eni tools/gd9/run_eni_9_6.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -128,6 +132,7 @@ jobs:
           name: golden-capture
           path: |
             /tmp/golden_now.pcap
+            /tmp/log_gd9_eni
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

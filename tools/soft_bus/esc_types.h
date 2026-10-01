@@ -262,6 +262,9 @@ typedef struct {
     uint8_t  mbx_dup_pending;   /* re-post at the start of the next frame      */
     uint16_t app_seq;           /* --app-seq: slave application counter        */
     uint64_t mbx_repeats_served;/* master repeat requests answered (0x080E)    */
+    uint32_t coe_delay_ms;      /* GD9.6: SDO download responses held this long */
+    uint8_t  mbx_held;          /* a response is in SM1 but not yet "full"     */
+    uint64_t mbx_release_ns;    /* when it becomes visible (frame arrival time)*/
 } esc_node_fault_t;
 
 /* Phase 7: process data watchdog (Section I §13.1, Section II §2.10). */

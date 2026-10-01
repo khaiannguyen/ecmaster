@@ -11,6 +11,10 @@
 #   eni_mixed.xml         Box 1 P1-H723-CIA402-DRAFT, Box 2 commercial servo
 #   eni_mixed_rev.xml     the same two in the opposite order
 #   eni_8node_lrdlwr.xml  8 x SOFTBUS-PD4 with LRD/LWR instead of LRW
+#   eni_2servo.xml        2 x Inovance IS620N (GD9.4 C)
+#
+# Run with sudo (RUN=1) and the files it writes are given back to $SUDO_USER
+# (GD9.6: a root-owned config/eni made the next run without sudo fail).
 #
 # What it does:
 #   1. copies them to config/eni/ (keeps a sha256 list)
@@ -33,7 +37,16 @@ ok  () { echo "  [PASS] $1"; PASS=$((PASS+1)); }
 bad () { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
-FILES="eni_8node_ca eni_mixed eni_mixed_rev eni_8node_lrdlwr"
+FILES="eni_8node_ca eni_mixed eni_mixed_rev eni_8node_lrdlwr eni_2servo"
+
+# give what this script writes back to the user who ran sudo
+give_back () {
+    if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
+        chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$ENI_DIR" "$REPORT" 2>/dev/null
+        [ -n "${LOG:-}" ] && [ -d "$LOG" ] && chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$LOG" 2>/dev/null
+    fi
+}
+trap give_back EXIT
 have=()
 echo "=== 1. import from $DIR"
 for f in $FILES; do
@@ -95,6 +108,11 @@ eni_mixed|eni_mixed_rev)
         ok "$f: refused by eni2cfg with a reason (E-07 finding, see $f.eni2cfg.log)"
     fi
     chk "$f: process data by LRW" "audit_of $f | grep -q '(process data by LRW)'"
+    ;;
+eni_2servo)
+    chk "eni_2servo: 2 slaves, both IS620N (product 0xC0108) with check_rev 1" \
+        "[ \$(grep -c '^slave .* product 0xC0108 .* check_rev 1 ' $ENI_DIR/$f.enicfg) = 2 ]"
+    chk "eni_2servo: process data by LRW" "audit_of $f | grep -q '(process data by LRW)'"
     ;;
 esac
 done

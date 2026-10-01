@@ -209,6 +209,20 @@ static struct {
 static const char *g_eni_path;
 static ecm_eni_t   g_eni;         /* large; file scope, never on the stack */
 static int         g_eni_on;
+static int         g_eni_allow_unknown_reg;   /* GD9.6: --eni-allow-unknown-regcmd */
+static int         g_sdo_timeout_ms;          /* GD9.6: --sdo-timeout-ms, 0 = EC_TIMEOUTRXM */
+
+/* GD9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
+ * unless the ENI gives a slave a longer one (the Timeout of its AL Control
+ * write = the ESI's state machine timeout; IS620N: SAFE-OP->OP 9 s).
+ * Never shorter than before, so a bus that came up still comes up. */
+static int state_timeout_us(int st)
+{
+    if (!g_eni_on)
+        return EC_TIMEOUTSTATE;
+    long us = (long)ecm_eni_state_timeout_ms(&g_eni, st) * 1000L;
+    return us > EC_TIMEOUTSTATE ? (int)us : EC_TIMEOUTSTATE;
+}
 
 /* Opened in main(), BEFORE any thread is created -- see the Giai doan 4
  * post-mortem note in giai_doan_4_ke_hoach.md §5.2: opening this inside
@@ -1571,6 +1585,10 @@ int main(int argc, char **argv)
             g_etf_ns_per_byte = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--eni") == 0 && i + 1 < argc) {   /* Giai doan 8.4 */
             g_eni_path = argv[++i];
+        } else if (strcmp(argv[i], "--eni-allow-unknown-regcmd") == 0) {  /* GD9.6, never in CI */
+            g_eni_allow_unknown_reg = 1;
+        } else if (strcmp(argv[i], "--sdo-timeout-ms") == 0 && i + 1 < argc) { /* GD9.6 */
+            g_sdo_timeout_ms = atoi(argv[++i]);
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
             return 1;
@@ -1582,10 +1600,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "ecm_run: --eni: %s\n", err);
             return 1;
         }
-        if (ecm_eni_soem_supported(&g_eni) != 0) {
+        if (ecm_eni_soem_supported(&g_eni, g_eni_allow_unknown_reg) != 0) {
             fprintf(stderr, "ecm_run: --eni: ENI uses features ecm_run cannot execute, refusing\n");
             return 1;
         }
+        if (g_sdo_timeout_ms > 0)
+            ecm_eni_soem_set_sdo_timeout_us(g_sdo_timeout_ms * 1000);
         if (n <= 0) {
             n = g_eni.nslaves;
         } else if (n != g_eni.nslaves) {
@@ -1595,6 +1615,10 @@ int main(int argc, char **argv)
         g_eni_on = 1;
         fprintf(stderr, "ecm_run: ENI %s (from %s): %d slaves, %d CoE InitCmd(s), cycle %u us, DC ref %d\n",
                 g_eni_path, g_eni.source, g_eni.nslaves, g_eni.ncoe, g_eni.cycle_us, ecm_eni_refclock(&g_eni));
+        fprintf(stderr, "ecm_run: ENI state timeouts PREOP %d ms, SAFEOP %d ms, OP %d ms; "
+                "%d register InitCmd(s) checked\n",
+                state_timeout_us(ECM_ENI_ST_PREOP) / 1000, state_timeout_us(ECM_ENI_ST_SAFEOP) / 1000,
+                state_timeout_us(ECM_ENI_ST_OP) / 1000, g_eni.nreg);
     }
     /* Giai doan 9.1: group of every position. --motion-slaves k keeps its
      * GD3..GD8 meaning (1..k motion, k+1..n IO, 0 < k < n) so every existing
@@ -1744,7 +1768,7 @@ int main(int argc, char **argv)
 
     if (g_eni_on) {
         /* IP InitCmds need the mailbox, i.e. PRE-OP (ecx_config_init requested it) */
-        if (ecx_statecheck(&ctx, 0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE) != EC_STATE_PRE_OP) {
+        if (ecx_statecheck(&ctx, 0, EC_STATE_PRE_OP, state_timeout_us(ECM_ENI_ST_PREOP)) != EC_STATE_PRE_OP) {
             fprintf(stderr, "ecm_run: --eni: bus not in PRE-OP before InitCmds\n");
             ecx_close(&ctx); return 1;
         }
@@ -1795,7 +1819,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "ecm_run: expected WKC -- motion=%ld io=%ld\n", motion.expected_wkc, io.expected_wkc);
 
     /* ---- Bring the whole bus up to SAFEOP ---- */
-    if (!request_all_state(EC_STATE_PRE_OP, EC_TIMEOUTSTATE)) {
+    if (!request_all_state(EC_STATE_PRE_OP, state_timeout_us(ECM_ENI_ST_PREOP))) {
         fprintf(stderr, "Failed to reach PREOP\n"); ecx_close(&ctx); return 1;
     }
 
@@ -1957,7 +1981,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!request_all_state(EC_STATE_SAFE_OP, EC_TIMEOUTSTATE)) {
+    if (!request_all_state(EC_STATE_SAFE_OP, state_timeout_us(ECM_ENI_ST_SAFEOP))) {
         fprintf(stderr, "Failed to reach SAFEOP\n"); ecx_close(&ctx); return 1;
     }
 
@@ -1965,7 +1989,7 @@ int main(int argc, char **argv)
      * ESC's "must have received valid outputs" precondition (see L2-04). */
     pd_exchange_all(EC_TIMEOUTRET);
 
-    if (!request_op_keepalive(EC_TIMEOUTSTATE)) {
+    if (!request_op_keepalive(state_timeout_us(ECM_ENI_ST_OP))) {
         fprintf(stderr, "Failed to reach OPERATIONAL\n"); ecx_close(&ctx); return 1;
     }
 
