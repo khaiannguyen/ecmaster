@@ -31,6 +31,7 @@
 #include "esc_dc.h"
 #include "esc_fault.h"
 #include "esc_coe.h"
+#include "esc_profile.h"
 
 static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
@@ -306,8 +307,14 @@ static void node_power_on(esc_t *chain, int n, int k)
     esc_t *e = &chain[k];
     uint16_t pdo = e->pdo_size_bytes;
     uint8_t react = e->wd.react;
+    const esc_profile_t *prof = e->prof;          /* GD9.9: the node stays that slave */
+    struct esc_prof_state *ps = e->prof_st;
     memset(e, 0, sizeof(*e));          /* power-on: everything forgotten */
     esc_init(e, (uint8_t)k, pdo);
+    if (prof) {
+        e->prof_st = ps;
+        esc_prof_attach(e, prof);      /* OD back to the ESI defaults */
+    }
     e->wd.react = react;
     esc_dc_node_reset(e, k);
     esc_chain_wire(chain, n);

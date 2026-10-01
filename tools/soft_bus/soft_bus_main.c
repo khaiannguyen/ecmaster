@@ -21,6 +21,12 @@
  *   --coe-ca      SDO Complete Access + SII General category (CoE details
  *                 0x25), implies --coe-pdo-od; SOEM uses ecx_readPDOmapCA.
  *                 ESI: config/esi/softbus_esi_ca.xml
+ *
+ * GD9.9:
+ *   --profile N=FILE  SOEM slave N (1-based) stands in for another slave:
+ *                 identity, SII, CoE dictionary and PDO assignment rules of
+ *                 the profile FILE (tools/esi/esi2profile.py, from an ESI).
+ *                 Repeatable. A profile with "dc 0" has no DC unit.
  * ========================================================================== */
 
 #define _GNU_SOURCE          /* ppoll() */
@@ -46,6 +52,7 @@
 #include "esc_core.h"
 #include "esc_dc.h"
 #include "esc_fault.h"
+#include "esc_profile.h"
 
 #define RX_BUF_SIZE  FAULT_FRAME_MAX
 #define CTL_DEFAULT  "/tmp/soft_bus.ctl"
@@ -86,6 +93,8 @@ int main(int argc, char **argv)
     int sii_poke_word[8], sii_poke_val[8], n_poke = 0;   /* --sii-poke W=V (negative controls) */
     int coe_pdo_od = 0, coe_ca = 0;                      /* GD9.3, both off by default */
     int coe_delay_ms = 0;                                /* GD9.6, off by default */
+    int prof_node[16], n_prof = 0;                       /* GD9.9 --profile N=FILE */
+    const char *prof_file[16];
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -125,6 +134,16 @@ int main(int argc, char **argv)
             coe_delay_ms = atoi(argv[++i]);            /* GD9.6 E-09: slow SDO download responses */
         } else if (strcmp(argv[i], "--coe-ca") == 0) {
             coe_ca = 1;                                /* SDO Complete Access, implies --coe-pdo-od */
+        } else if (strcmp(argv[i], "--profile") == 0 && i + 1 < argc) {
+            char *v = argv[++i], *eq = strchr(v, '=');
+            int k = eq ? atoi(v) : 0;
+            if (!eq || k < 1 || k > 64 || n_prof >= 16) {
+                fprintf(stderr, "--profile expects N=FILE, N = SOEM slave number 1..64 (max 16)\n");
+                return 1;
+            }
+            prof_node[n_prof] = k;
+            prof_file[n_prof] = eq + 1;
+            n_prof++;
         } else if (strcmp(argv[i], "--sii-poke") == 0 && i + 1 < argc) {
             int w, v;
             if (n_poke >= 8 || sscanf(argv[++i], "%i=%i", &w, &v) != 2 || w < 0 || v < 0 || v > 0xFFFF) {
@@ -144,7 +163,8 @@ int main(int argc, char **argv)
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
                 "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n"
-                "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, GD9.5)\n",
+                "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, GD9.5)\n"
+                "       [--profile N=FILE ...] (slave N emulates the profile's slave, GD9.9)\n",
                 argv[0]);
         return 1;
     }
@@ -165,6 +185,22 @@ int main(int argc, char **argv)
         esc_init(&chain[i], (uint8_t)i, (uint16_t)pdo_size);
         if (coe_pdo_od || coe_ca)
             esc_set_coe_features(&chain[i], coe_pdo_od, coe_ca);   /* rebuilds the SII */
+    }
+    for (int p = 0; p < n_prof; p++) {
+        int k = prof_node[p];
+        if (k > n) { fprintf(stderr, "--profile %d: only %d node(s)\n", k, n); return 1; }
+        char err[512];
+        esc_profile_t *pf = esc_prof_load(prof_file[p], err, sizeof(err));
+        if (!pf) { fprintf(stderr, "--profile: %s\n", err); return 1; }
+        if (esc_prof_attach(&chain[k - 1], pf)) {
+            fprintf(stderr, "--profile %s: out of memory or SII image too large\n", prof_file[p]);
+            return 1;
+        }
+        if (!pf->dc) dc_cfg.no_dc_mask |= 1ull << (k - 1);
+        printf("soft_bus: node %d = profile \"%s\" (%s) vendor 0x%08X product 0x%08X rev 0x%08X, "
+               "%d PDOs, %d objects, SII %zu words%s\n",
+               k, pf->name, pf->path, (unsigned)pf->vendor, (unsigned)pf->product, (unsigned)pf->rev,
+               pf->npdo, pf->nobj, chain[k - 1].sii_image_words, pf->dc ? "" : ", no DC");
     }
     if (coe_pdo_od || coe_ca)
         printf("soft_bus: CoE %s%s\n", "PDO objects 0x1C00/0x1C12/0x1C13/0x1600/0x1A00",

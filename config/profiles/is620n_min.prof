@@ -1,0 +1,86 @@
+# Hand-written REDUCED soft_bus profile of an Inovance IS620N servo (GD9.9).
+#
+# The vendor ESI is not in the repo and nothing generated from it is
+# committed (roadmap GD9, licence note of 30/9: the ESI was downloaded for
+# local use only). This file carries only what the mixed-bus tests need:
+#   identity, SII config words, mailbox and SyncManagers (public facts, also
+#   in config/eni/eni_mixed.xml), the 4 fixed PDOs the tests use (0x1701,
+#   0x1702, 0x1B01, 0x1B02, mutually exclusive per direction), their mapping
+#   objects, 0x1C00/0x1C12/0x1C13, 0x1018 and 0x6060 (the ENI InitCmd writes
+#   it). The full profile comes from the ESI on the machine that has it:
+#     python3 tools/esi/esi2profile.py IS620N-Ecat_v2.6.9.xml -o is620n.prof
+#   (run_mixed_9_9.sh does that when IS620N_ESI is set; is620n.prof is in
+#   .gitignore).
+profile 1
+name "IS620N"
+identity vendor 0x00100000 product 0x000C0108 rev 0x00010001 serial 0x00000000
+config 0x0C08 0x0400 0x0064 0x0000 0x0000 0x0000 0x0000
+mailbox out 0x1000 128 in 0x1400 128 coe 1
+coe sdoinfo 0 pdoassign 1 pdoconfig 1 ca 0
+sm 0 start 0x1000 len 128 ctrl 0x26 en 1
+sm 1 start 0x1400 len 128 ctrl 0x22 en 1
+sm 2 start 0x1800 len 12 ctrl 0x64 en 1
+sm 3 start 0x1C00 len 28 ctrl 0x20 en 1
+dc 1 assign 0x0300
+pdo rx 0x1701 sm 2 fixed 1 entries 0x6040:00:16,0x607A:00:32,0x60B8:00:16,0x60FE:01:32 excludes 0x1702
+pdo rx 0x1702 sm 255 fixed 1 entries 0x6040:00:16,0x607A:00:32,0x60FF:00:32,0x6071:00:16,0x6060:00:8,0x60B8:00:16,0x607F:00:32 excludes 0x1701
+pdo tx 0x1B01 sm 3 fixed 1 entries 0x603F:00:16,0x6041:00:16,0x6064:00:32,0x6077:00:16,0x60F4:00:32,0x60B9:00:16,0x60BA:00:32,0x60BC:00:32,0x60FD:00:32 excludes 0x1B02
+pdo tx 0x1B02 sm 255 fixed 1 entries 0x603F:00:16,0x6041:00:16,0x6064:00:32,0x6077:00:16,0x6061:00:8,0x60B9:00:16,0x60BA:00:32,0x60BC:00:32,0x60FD:00:32 excludes 0x1B01
+obj 0x1000 var 1
+sub 0x1000 0 bits 32 ro 92010200
+obj 0x1018 record 4
+sub 0x1018 0 bits 8 ro 04
+sub 0x1018 1 bits 32 ro 00001000
+sub 0x1018 2 bits 32 ro 08010c00
+sub 0x1018 3 bits 32 ro 01000100
+obj 0x1701 record 5
+sub 0x1701 0 bits 8 ro 04
+sub 0x1701 1 bits 32 ro 10004060
+sub 0x1701 2 bits 32 ro 20007a60
+sub 0x1701 3 bits 32 ro 1000b860
+sub 0x1701 4 bits 32 ro 2001fe60
+obj 0x1702 record 8
+sub 0x1702 0 bits 8 ro 07
+sub 0x1702 1 bits 32 ro 10004060
+sub 0x1702 2 bits 32 ro 20007a60
+sub 0x1702 3 bits 32 ro 2000ff60
+sub 0x1702 4 bits 32 ro 10007160
+sub 0x1702 5 bits 32 ro 08006060
+sub 0x1702 6 bits 32 ro 1000b860
+sub 0x1702 7 bits 32 ro 20007f60
+obj 0x1B01 record 10
+sub 0x1B01 0 bits 8 ro 09
+sub 0x1B01 1 bits 32 ro 10003f60
+sub 0x1B01 2 bits 32 ro 10004160
+sub 0x1B01 3 bits 32 ro 20006460
+sub 0x1B01 4 bits 32 ro 10007760
+sub 0x1B01 5 bits 32 ro 2000f460
+sub 0x1B01 6 bits 32 ro 1000b960
+sub 0x1B01 7 bits 32 ro 2000ba60
+sub 0x1B01 8 bits 32 ro 2000bc60
+sub 0x1B01 9 bits 32 ro 2000fd60
+obj 0x1B02 record 10
+sub 0x1B02 0 bits 8 ro 09
+sub 0x1B02 1 bits 32 ro 10003f60
+sub 0x1B02 2 bits 32 ro 10004160
+sub 0x1B02 3 bits 32 ro 20006460
+sub 0x1B02 4 bits 32 ro 10007760
+sub 0x1B02 5 bits 32 ro 08006160
+sub 0x1B02 6 bits 32 ro 1000b960
+sub 0x1B02 7 bits 32 ro 2000ba60
+sub 0x1B02 8 bits 32 ro 2000bc60
+sub 0x1B02 9 bits 32 ro 2000fd60
+obj 0x1C00 array 5
+sub 0x1C00 0 bits 8 ro 04
+sub 0x1C00 1 bits 8 ro 01
+sub 0x1C00 2 bits 8 ro 02
+sub 0x1C00 3 bits 8 ro 03
+sub 0x1C00 4 bits 8 ro 04
+obj 0x1C12 array 2
+sub 0x1C12 0 bits 8 rw_preop 01
+sub 0x1C12 1 bits 16 rw_preop 0117
+obj 0x1C13 array 2
+sub 0x1C13 0 bits 8 rw_preop 01
+sub 0x1C13 1 bits 16 rw_preop 011b
+obj 0x6060 var 1
+sub 0x6060 0 bits 8 rw 00

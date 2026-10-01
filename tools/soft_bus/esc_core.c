@@ -36,6 +36,7 @@
 #include "esc_core.h"
 #include "esc_coe.h"
 #include "esc_dc.h"
+#include "esc_profile.h"
 
 /* ---- Little-endian helpers, independent of host endianness ---- */
 static inline uint16_t rd_le16(const uint8_t *p) {
@@ -238,6 +239,7 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
 
 void esc_set_coe_features(esc_t *esc, int pdo_od, int ca)
 {
+    if (esc->prof) return;   /* GD9.9: a profile node keeps its ESI's features */
     esc->coe_ca     = ca ? 1 : 0;
     esc->coe_pdo_od = (pdo_od || ca) ? 1 : 0;
     esc_build_sii(esc, esc->pdo_size_bytes);
@@ -287,6 +289,11 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     memset(&esc->wd, 0, sizeof(esc->wd));
     esc->wd.react = 1;
     memset(&esc->fault, 0, sizeof(esc->fault));
+
+    esc->mbx_out = SII_SM0_OFFSET; esc->mbx_out_len = SII_SM0_SIZE;   /* GD9.9 */
+    esc->mbx_in  = SII_SM1_OFFSET; esc->mbx_in_len  = SII_SM1_SIZE;
+    esc->prof = NULL;
+    esc->prof_st = NULL;
 
     esc->coe_pdo_od = 0;   /* GD9.3: esc_set_coe_features() turns them on */
     esc->coe_ca     = 0;
@@ -386,7 +393,7 @@ static void esc_phys_read(esc_t *esc, uint16_t phys_offset, uint8_t *data, uint1
      * byte SM1 buffer in one FPRD (ecx_mbxinhandler's ecx_FPRD call),
      * confirmed by reading ec_main.c, so a single "touches this range"
      * check is enough — no partial-read bookkeeping needed. */
-    if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+    if (phys_offset < esc->mbx_in + esc->mbx_in_len && phys_offset + len > esc->mbx_in) {
         if (esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL)
             esc->fault.sm1_consumed = 1;   /* a response was fetched (fault hooks) */
         esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
@@ -407,7 +414,7 @@ static void esc_phys_read_or(esc_t *esc, uint16_t phys_offset, uint8_t *data, ui
         data[k] |= esc->regs[phys_offset + k];
     }
 
-    if (phys_offset < SII_SM1_OFFSET + SII_SM1_SIZE && phys_offset + len > SII_SM1_OFFSET) {
+    if (phys_offset < esc->mbx_in + esc->mbx_in_len && phys_offset + len > esc->mbx_in) {
         if (esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL)
             esc->fault.sm1_consumed = 1;   /* a response was fetched (fault hooks) */
         esc->regs[REG_SM1_STATUS] &= (uint8_t)~SM_STATUS_MAILBOX_FULL;
@@ -605,7 +612,7 @@ static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data
      * SM1 for the master's OWN next cyclic poll (ecx_mbxhandler on the
      * RT thread), matching real hardware's "at least one cycle later"
      * timing without needing to simulate it. */
-    if (phys_offset < SII_SM0_OFFSET + SII_SM0_SIZE && phys_offset + len > SII_SM0_OFFSET) {
+    if (phys_offset < esc->mbx_out + esc->mbx_out_len && phys_offset + len > esc->mbx_out) {
         coe_on_mailbox_out_write(esc);
     }
 }
@@ -843,6 +850,17 @@ void esc_al_control_write(esc_t *esc)
         wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10)); /* retain the old state, set the error bit */
         wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_INVALIDALCONTROL); /* 0x0011 — L2-06 */
         return;
+    }
+
+    /* GD9.9: a profile node checks the SM2/SM3 sizes against the PDOs
+     * assigned in 0x1C12/0x1C13, like a real drive (0x001D / 0x001E). */
+    if (esc->prof && current == ESM_PREOP && requested == ESM_SAFEOP) {
+        uint16_t code = esc_prof_check_pd(esc);
+        if (code) {
+            wr_le16(esc->regs + REG_AL_STATUS, (uint16_t)(current | 0x10));
+            wr_le16(esc->regs + REG_AL_STATUS_CODE, code);
+            return;
+        }
     }
 
     /* Specifically for SAFEOP to OP: valid outputs must have been received since entering SAFEOP. */

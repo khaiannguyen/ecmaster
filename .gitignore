@@ -28,6 +28,7 @@ libecmaster/telemetry/test_turnaround_offline
 tools/rt_tail/log_rt_tail_*/
 tools/soft_bus/test_fault
 tools/soft_bus/test_coe
+tools/soft_bus/test_profile
 log_gd9_coe_*/
 log_x04_*/
 __pycache__/
@@ -58,3 +59,6 @@ config/eni/*.eni2cfg.log
 log_gd9_*/
 libecmaster/pdo/test_pdo_offline
 libecmaster/pdo/test_pdo_offline_asan
+
+# GD9.9: profiles generated from a vendor ESI stay local (licence note 30/9)
+config/profiles/is620n.prof

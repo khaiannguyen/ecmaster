@@ -20,7 +20,7 @@
 /* Max words for the per-node generated SII image (prefix + PDO categories +
  * End marker). 256 words leaves generous headroom beyond current test sizes
  * (largest tested: --pdo-size 64 needs about 65 words). */
-#define ESC_SII_IMAGE_MAX_WORDS  256
+#define ESC_SII_IMAGE_MAX_WORDS  1024
 
 /* Size of the fixed CoE test blob (object 0x8001:00) used to force
  * genuine multi-frame SDO segmentation -- see coe_od_t below. Must
@@ -308,6 +308,12 @@ typedef struct {
     uint32_t  sii_cmd_reads;
     uint8_t   coe_pdo_od;  /* GD9.3 --coe-pdo-od: 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
     uint8_t   coe_ca;      /* GD9.3 --coe-ca: SDO Complete Access + SII General cat. */
+    /* GD9.9: mailbox location of THIS node (SII words 24..27). The default
+     * soft_bus node keeps SII_SM0/SM1_OFFSET; a node with a profile takes
+     * its ESI's MBoxOut/MBoxIn (IS620N: 0x1000 / 0x1400). */
+    uint16_t  mbx_out, mbx_out_len, mbx_in, mbx_in_len;
+    const struct esc_profile *prof;      /* GD9.9: NULL = built-in SOFTBUS-PD4 */
+    struct esc_prof_state    *prof_st;   /* GD9.9: this node's OD values      */
 } esc_t;
 
 

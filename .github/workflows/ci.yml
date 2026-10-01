@@ -60,8 +60,12 @@ jobs:
           done
       - name: Committed .enicfg files up to date with eni2cfg.py (GD9.6, + negative control)
         run: tools/eni/check_enicfg.sh
-      - name: soft_bus (SII, ESM, DC, fault injection, CoE C-01)
+      - name: soft_bus (SII, ESM, DC, fault injection, CoE C-01, GD9.9 profiles)
         run: make -C tools/soft_bus test
+      - name: soft_bus profile of the P1 draft ESI up to date (GD9.9 esi2profile)
+        run: |
+          python3 tools/esi/esi2profile.py config/esi/p1_draft_esi.xml -o /tmp/p1_draft.prof
+          cmp /tmp/p1_draft.prof config/profiles/p1_draft.prof
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
         run: make -C libecmaster/telemetry run
       - name: libecmaster/core (ecm_dc reply-age gate)
@@ -135,6 +139,8 @@ jobs:
         run: sudo -E env CASES="f02a f02b f02c f02d" LOG=/tmp/log_gd9_fresh tools/gd9/run_fresh_9_8.sh
       - name: Bind PDO by (slave, index, sub) (GD9.10 B-01..B-03)
         run: sudo -E env CASES="b01 b01c b01n b02 b02b b03" LOG=/tmp/log_gd9_pdo tools/gd9/run_pdo_9_10.sh
+      - name: Mixed virtual bus P1 + IS620N from ESI profiles (GD9.9 V-01..V-03, DC-02, B-02m, N-01, N-02)
+        run: sudo -E env CASES="v01 v02 v03 b02m n01 n02" LOG=/tmp/log_gd9_mixed tools/gd9/run_mixed_9_9.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4

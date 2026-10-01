@@ -120,6 +120,12 @@ def find_device(root, product):
     raise SystemExit(f"ESI: no device with ProductCode 0x{product:X}")
 
 
+def default_pd_bytes(dev, tag, sm):
+    """Bytes of the PDOs of one direction that the ESI assigns to SM sm."""
+    bits = sum(e[2] for p in esi_pdos(dev, tag) if p["sm"] == sm for e in p["entries"])
+    return (bits + 7) // 8
+
+
 def esi_pdos(dev, tag):
     out = []
     for p in dev.findall(tag):
@@ -224,6 +230,15 @@ def main():
                 esi_int(s_esi.get("ControlByte")), esi_int(s_esi.get("Enable", "0")))
         got = (s_sii["start"], s_sii["len"], s_sii["ctrl"], s_sii["enable"])
         ok = got == want
+        if not ok and i >= 2 and want[1] == 0 and got[:1] + got[2:] == want[:1] + want[2:]:
+            # GD9.9: a process data SM with DefaultSize 0 (IS620N) -- the SII
+            # carries the size of the PDOs assigned by default, as an
+            # ESI-generated image does (tools/esi/esi2profile.py)
+            dflt = default_pd_bytes(dev, "RxPdo" if i == 2 else "TxPdo", i)
+            if got[1] == dflt:
+                report("PASS", f"SM{i} ({s_esi.text}): SII start 0x{got[0]:04X} len {got[1]} "
+                               f"= default PDOs (ESI DefaultSize 0) ctrl 0x{got[2]:02X} en {got[3]}")
+                continue
         report("PASS" if ok else "FAIL",
                f"SM{i} ({s_esi.text}): SII start 0x{got[0]:04X} len {got[1]} ctrl 0x{got[2]:02X} en {got[3]}"
                + ("" if ok else f" | ESI start 0x{want[0]:04X} len {want[1]} ctrl 0x{want[2]:02X} en {want[3]}"))
@@ -235,7 +250,11 @@ def main():
         check(f"{label} count", len(sii_p), len(esi_p), "{}")
         for a, b in zip(sii_p, esi_p):
             check(f"{label} 0x{b['index']:04X} index", a["index"], b["index"])
-            check(f"{label} 0x{b['index']:04X} SM", a["sm"], b["sm"], "{}")
+            if b["sm"] == -1 and a["sm"] == 0xFF:
+                # GD9.9: no Sm attribute = not assigned by default; SII SM 0xFF
+                report("PASS", f"{label} 0x{b['index']:04X} SM: SII 255 (not assigned), ESI no Sm")
+            else:
+                check(f"{label} 0x{b['index']:04X} SM", a["sm"], b["sm"], "{}")
             same = a["entries"] == b["entries"]
             report("PASS" if same else "FAIL",
                    f"{label} 0x{b['index']:04X} entries: SII "

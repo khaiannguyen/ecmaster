@@ -22,6 +22,7 @@
 #include "esc_types.h"
 #include "esc_sii.h"
 #include "esc_coe.h"
+#include "esc_profile.h"
 
 /* ---- Little-endian helpers -- local copies, matching esc_core.c's own
  * house style of not sharing these across translation units. ---- */
@@ -174,9 +175,23 @@ static int is_pdo_od_index(uint16_t index)
            index == 0x1600 || index == 0x1A00;
 }
 
+/* GD9.9: a profile node (soft_bus --profile) has the dictionary of its ESI
+ * instead of the built-in one; esc_profile.c holds the values. */
+static uint16_t prof_dtype(uint16_t bits)
+{
+    return bits <= 8 ? DT_U8 : bits <= 16 ? DT_U16 : bits <= 32 ? DT_U32 : DT_OCTET_STRING;
+}
+
 /* Returns 0 if the object does not exist in this node's dictionary. */
 static int od_object(const esc_t *esc, uint16_t index, uint8_t *objcode, uint8_t *max_sub)
 {
+    if (esc->prof) {
+        const esc_prof_obj_t *o = esc_prof_obj(esc, index);
+        if (!o) return 0;
+        *objcode = o->code;
+        *max_sub = o->code == OBJ_VAR ? 0 : o->max_sub;
+        return 1;
+    }
     if (is_pdo_od_index(index) && !esc->coe_pdo_od) return 0;
     switch (index) {
     case 0x1000: *objcode = OBJ_VAR;    *max_sub = 0; return 1;
@@ -197,6 +212,15 @@ static int od_object(const esc_t *esc, uint16_t index, uint8_t *objcode, uint8_t
 static int od_entry(const esc_t *esc, uint16_t index, uint8_t sub, od_entry_t *e)
 {
     uint8_t objcode, max_sub;
+    if (esc->prof) {
+        int g = esc_prof_sub(esc, index, sub);
+        if (g < 0) return 0;
+        const esc_prof_sub_t *ps = &esc->prof->sub[g];
+        e->bits = ps->bits;
+        e->access = ps->access;
+        e->dtype = prof_dtype(ps->bits);
+        return 1;
+    }
     if (!od_object(esc, index, &objcode, &max_sub) || sub > max_sub) return 0;
 
     if (objcode != OBJ_VAR && sub == 0) {
@@ -231,6 +255,14 @@ static uint32_t od_read(const esc_t *esc, uint16_t index, uint8_t sub, uint8_t *
 {
     const coe_od_t *od = &esc->coe_od;
     uint32_t v = 0;
+
+    if (esc->prof) {
+        int g = esc_prof_sub(esc, index, sub);
+        if (g < 0) return 0;
+        uint8_t n = esc->prof->sub[g].len;
+        memcpy(out, esc_prof_value(esc, g), n);
+        return n;
+    }
 
     switch (index) {
     case 0x1000:
@@ -292,6 +324,16 @@ static uint32_t od_check_write(const esc_t *esc, uint16_t index, uint8_t sub,
         (esc->regs[REG_AL_STATUS] & 0x0F) != ESM_PREOP)
         return ABORT_WRONG_STATE;
 
+    if (esc->prof) {
+        /* fixed size; a string (> 32 bit) may be written shorter */
+        uint32_t full = (e.bits + 7u) / 8u;
+        if (len > full)                                 return ABORT_LENGTH_TOO_HIGH;
+        if (len < full && (e.dtype != DT_OCTET_STRING || len == 0))
+            return ABORT_LENGTH_TOO_LOW;
+        if (!data) return 0;
+        return esc_prof_check_value(esc, index, sub, data, len);
+    }
+
     if (e.dtype == DT_OCTET_STRING) {
         if (len == 0)                return ABORT_LENGTH_TOO_LOW;
         if (len > COE_OCTET_RW_MAX)  return ABORT_LENGTH_TOO_HIGH;
@@ -312,6 +354,14 @@ static uint32_t od_check_write(const esc_t *esc, uint16_t index, uint8_t sub,
 static void od_commit(esc_t *esc, uint16_t index, uint8_t sub, const uint8_t *data, uint32_t len)
 {
     coe_od_t *od = &esc->coe_od;
+    if (esc->prof) {
+        int g = esc_prof_sub(esc, index, sub);
+        if (g < 0) return;
+        uint8_t *v = esc_prof_value(esc, g);
+        memset(v, 0, ESC_PROF_VAL_MAX);
+        memcpy(v, data, len < ESC_PROF_VAL_MAX ? len : ESC_PROF_VAL_MAX);
+        return;
+    }
     switch (index) {
     case 0x1C12:
     case 0x1C13: {
@@ -362,7 +412,8 @@ static uint32_t od_ca_read(const esc_t *esc, uint16_t index, uint8_t start,
     if (n > max_sub) n = max_sub;
     if (start == 0) { out[0] = n; out[1] = 0; pos = 2; }
     for (uint8_t s = 1; s <= n; s++) {
-        if (pos + 4 > COE_XFER_BUF_MAX) return ABORT_LENGTH_TOO_HIGH;
+        if (!od_entry(esc, index, s, &e)) continue;          /* profile: gap in a RECORD */
+        if (pos + (e.bits + 7u) / 8u > COE_XFER_BUF_MAX) return ABORT_LENGTH_TOO_HIGH;
         pos += od_read(esc, index, s, out + pos);
     }
     *len = pos;
@@ -393,8 +444,8 @@ static uint32_t od_ca_write(esc_t *esc, uint16_t index, uint8_t start,
 
     uint32_t full = start == 0 ? 2u : 0u;
     for (uint8_t s = 1; s <= max_sub; s++) {
-        od_entry(esc, index, s, &e);
-        full += e.bits / 8u;
+        if (!od_entry(esc, index, s, &e)) continue;          /* profile: gap */
+        full += (e.bits + 7u) / 8u;
     }
     if (len > full) return ABORT_LENGTH_TOO_HIGH;
 
@@ -414,8 +465,8 @@ static uint32_t od_ca_write(esc_t *esc, uint16_t index, uint8_t start,
         s = 1;
     }
     for (; s <= max_sub && pos < len; s++) {
-        od_entry(esc, index, s, &e);
-        uint32_t b = e.bits / 8u;
+        if (!od_entry(esc, index, s, &e)) continue;          /* profile: gap */
+        uint32_t b = (e.bits + 7u) / 8u;
         if (pos + b > len) return ABORT_TYPE_MISMATCH; /* data ends inside an entry */
         if (e.access != ACC_RO) {
             uint32_t a = od_check_write(esc, index, s, data + pos, b);
@@ -433,8 +484,14 @@ static uint32_t od_download(esc_t *esc, uint16_t index, uint8_t sub, int ca,
                             const uint8_t *data, uint32_t len)
 {
     if (ca) {
+        if (esc->prof) {   /* GD9.9: 0x1C12/0x1C13 checked as a whole set */
+            uint32_t a = esc_prof_check_ca(esc, index, sub, data, len);
+            if (a) return a;
+            esc->prof_st->ca_bypass = 1;
+        }
         uint32_t a = od_ca_write(esc, index, sub, data, len, 0);
         if (a == 0) od_ca_write(esc, index, sub, data, len, 1);
+        if (esc->prof) esc->prof_st->ca_bypass = 0;
         return a;
     }
     uint32_t a = od_check_write(esc, index, sub, data, len);
@@ -771,8 +828,8 @@ static void coe_handle_download_segment(esc_t *esc, uint8_t *resp, const uint8_t
  * ========================================================================== */
 void coe_on_mailbox_out_write(esc_t *esc)
 {
-    uint8_t *req  = esc->regs + SII_SM0_OFFSET;
-    uint8_t *resp = esc->regs + SII_SM1_OFFSET;
+    uint8_t *req  = esc->regs + esc->mbx_out;   /* GD9.9: per node */
+    uint8_t *resp = esc->regs + esc->mbx_in;
 
     uint8_t mbxtype = (uint8_t)(req[OFF_MBX_TYPE] & 0x0Fu);
     if (mbxtype != MBXTYPE_COE) {
@@ -842,7 +899,7 @@ int coe_post_emcy(esc_t *esc, uint16_t code, uint8_t reg, const uint8_t data[5])
 {
     if ((esc->regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL) || esc->fault.mbx_held)
         return 0;
-    uint8_t *resp = esc->regs + SII_SM1_OFFSET;
+    uint8_t *resp = esc->regs + esc->mbx_in;
     memset(resp, 0, 16);
     resp_header(resp, 0x000a, COES_EMERGENCY);
     wr_le16(resp + 8, code);           /* error code         */
