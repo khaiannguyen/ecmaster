@@ -483,7 +483,11 @@ typedef struct {
     uint64_t dc_samples, dc_wraps, dc_unlocks;
 } snapshot_t;
 
-#define MAX_SNAPSHOTS 4096   /* enough for ~68 minutes at one snapshot/second */
+/* GD10.1: 32768 = ~9.1 h at one snapshot/second, so an 8 h soak can still
+ * say WHEN a mismatch happened (4096 = 68 min stopped recording after the
+ * first hour). ~104 byte each: ~3.4 MB of BSS, locked by mlockall like the
+ * rest; written once per second, never on the cyclic path. */
+#define MAX_SNAPSHOTS 32768
 static snapshot_t g_snapshots[MAX_SNAPSHOTS];
 static int        g_snapshot_count = 0;
 
