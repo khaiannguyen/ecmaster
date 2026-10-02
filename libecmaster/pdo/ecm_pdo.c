@@ -163,6 +163,32 @@ int ecm_pdo_parse_ref(const char *s, int *slave, uint16_t *index, uint8_t *sub)
     return 0;
 }
 
+int ecm_pdo_scan_required(const uint32_t *vendor, int n, const uint16_t *bound, int nbound,
+                          const uint32_t *own, int nown, char *err, size_t errlen)
+{
+    uint8_t seen[ECM_PDO_MAX_SLAVES + 1] = { 0 };
+    size_t len = 0;
+    int cnt = 0;
+    if (err && errlen) err[0] = '\0';
+    for (int i = 0; i < nbound; i++) {
+        int s = bound[i];
+        if (s < 1 || s > n || s > ECM_PDO_MAX_SLAVES || seen[s]) continue;
+        seen[s] = 1;
+        int mine = 0;
+        for (int k = 0; k < nown; k++)
+            if (vendor[s] == own[k]) { mine = 1; break; }
+        if (mine) continue;
+        cnt++;
+        if (err && len + 1 < errlen) {
+            int r = snprintf(err + len, errlen - len, "%sslave %d (vendor 0x%08X)",
+                             len ? ", " : "", s, (unsigned)vendor[s]);
+            if (r > 0) len += (size_t)r;
+            if (len >= errlen) len = errlen - 1;
+        }
+    }
+    return cnt;
+}
+
 size_t ecm_pdo_table_format(const ecm_pdo_table_t *t, char *buf, size_t cap)
 {
     size_t len = 0;

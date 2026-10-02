@@ -90,6 +90,28 @@ void     ecm_pdo_set(const ecm_pdo_handle_t *h, uint8_t *iomap, uint64_t v);
 /* "3:0x6041:0" -> slave, index, sub. 0 ok. */
 int ecm_pdo_parse_ref(const char *s, int *slave, uint16_t *index, uint8_t *sub);
 
+/* GD10.1 -- when a bind needs the bus's own table.
+ *
+ * N-03 (GD9.9): a vendor device whose mapping differs from its ESI but has
+ * the same size passes every size check; an ENI-only table then binds the
+ * wrong bytes silently. The ESI/ENI of a slave we did not build is not
+ * evidence of what the device maps, so binding into it by (index, sub)
+ * needs the table scanned from the bus (--pdo-scan), where ENI == bus is
+ * then enforced.
+ *
+ *   vendor   SII vendor id per slave, 1-based, n+1 entries
+ *   bound    slaves the application binds into (repeats allowed)
+ *   own      vendor ids of slaves this project builds (ESI written here)
+ *
+ * Returns the number of distinct bound slaves of another vendor (0 = no
+ * scan needed); each named in err as "slave S (vendor 0x........)". */
+int ecm_pdo_scan_required(const uint32_t *vendor, int n, const uint16_t *bound, int nbound,
+                          const uint32_t *own, int nown, char *err, size_t errlen);
+
+/* Vendor id of the soft_bus default SII and the P1 draft ESI (placeholder,
+ * not a registered ETG id); ecm_run --pdo-own-vendor replaces it. */
+#define ECM_PDO_OWN_VENDOR_DEFAULT 0x00000499u
+
 /* One line per entry, for logs and tests. */
 size_t ecm_pdo_table_format(const ecm_pdo_table_t *t, char *buf, size_t cap);
 

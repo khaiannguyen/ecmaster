@@ -92,7 +92,7 @@ dc)      step dc      "9.5 DC-01..DC-05 (L6 40 s)"              -- sudo -E tools
 emcy)    step emcy    "9.7 M-01..M-03, P-01..P-03"              -- sudo -E tools/gd9/run_emcy_9_7.sh ;;
 fresh)   step fresh   "9.8 F-01, F-02"                          -- sudo -E tools/gd9/run_fresh_9_8.sh ;;
 pdo)     step pdo     "9.10 B-01..B-04"                         -- sudo -E tools/gd9/run_pdo_9_10.sh ;;
-mixed)   step mixed   "9.9 V-01..V-03, DC-02, B-02m, N-01..N-03" -- sudo -E env IS620N_ESI="${IS620N_ESI:-}" tools/gd9/run_mixed_9_9.sh ;;
+mixed)   step mixed   "9.9 V-01..V-03, DC-02, B-02m, B-05 (10.1), N-01..N-03c" -- sudo -E env IS620N_ESI="${IS620N_ESI:-}" tools/gd9/run_mixed_9_9.sh ;;
 l5)      step l5      "L5 policy / io / diag, 4+4"              -- l5_all ;;
 l5n1)    step l5n1    "L5 policy / io, N=1"                     -- l5n1_all ;;
 *) echo "unknown step $s"; ROWS+=("| $s | unknown step | **FAIL** | | |") ;;

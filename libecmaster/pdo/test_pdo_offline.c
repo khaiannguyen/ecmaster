@@ -1,5 +1,6 @@
 /*
- * test_pdo_offline.c -- GD9.10 B-03 / B-04 and the table itself, offline.
+ * test_pdo_offline.c -- GD9.10 B-03 / B-04 and the table itself, offline;
+ * GD10.1 B-05: which binds need the bus's own table.
  */
 #include "ecm_pdo.h"
 
@@ -120,6 +121,32 @@ int main(void)
     static char buf[4096];
     ecm_pdo_table_format(&T, buf, sizeof(buf));
     check("format line", strstr(buf, "pdo slave 1 out PDO 0x1600 0x607A:00 32 bit @24\n") != NULL, 1);
+
+    printf("[B-05 scan required for a slave of another vendor]\n");
+    {
+        /* bus: 1 = P1 (own), 2 = IS620N, 3 = IS620N, 4 = own */
+        const uint32_t vend[5] = { 0, 0x00000499u, 0x00100000u, 0x00100000u, 0x00000499u };
+        const uint32_t own[1]  = { ECM_PDO_OWN_VENDOR_DEFAULT };
+        const uint16_t b_own[3] = { 1, 4, 1 };
+        const uint16_t b_mix[5] = { 1, 2, 2, 3, 2 };
+        const uint16_t b_bad[2] = { 0, 9 };
+        check("B-05 own slaves only -> 0", ecm_pdo_scan_required(vend, 4, b_own, 3, own, 1, err, sizeof(err)), 0);
+        check("B-05 own slaves only: err empty", err[0] == '\0', 1);
+        check("B-05 two vendor slaves, repeats counted once -> 2",
+              ecm_pdo_scan_required(vend, 4, b_mix, 5, own, 1, err, sizeof(err)), 2);
+        check("B-05 names both with vendor id",
+              strcmp(err, "slave 2 (vendor 0x00100000), slave 3 (vendor 0x00100000)") == 0, 1);
+        const uint32_t own2[2] = { ECM_PDO_OWN_VENDOR_DEFAULT, 0x00100000u };
+        check("B-05 vendor declared own (--pdo-own-vendor) -> 0",
+              ecm_pdo_scan_required(vend, 4, b_mix, 5, own2, 2, err, sizeof(err)), 0);
+        check("B-05 no own vendor at all: every bound slave -> 2",
+              ecm_pdo_scan_required(vend, 4, b_own, 3, own, 0, err, sizeof(err)), 2);
+        check("B-05 out-of-range slaves ignored -> 0",
+              ecm_pdo_scan_required(vend, 4, b_bad, 2, own, 1, err, sizeof(err)), 0);
+        char tiny[12];
+        check("B-05 short err buffer stays terminated",
+              ecm_pdo_scan_required(vend, 4, b_mix, 5, own, 1, tiny, sizeof(tiny)) == 2 && strlen(tiny) < sizeof(tiny), 1);
+    }
 
     printf("\nRESULT: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

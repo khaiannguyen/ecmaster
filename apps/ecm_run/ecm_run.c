@@ -243,6 +243,14 @@ static int              g_pdo_nset, g_pdo_nget;
 static ecm_pdo_handle_t g_pdo_set_h[PDO_MAX_REFS], g_pdo_get_h[PDO_MAX_REFS];
 static uint64_t         g_pdo_set_v[PDO_MAX_REFS];
 static char             g_pdo_get_name[PDO_MAX_REFS][32];
+/* GD10.1: binding into a slave of another vendor needs --pdo-scan (N-03:
+ * a mapping that differs from the ESI but has the same size is invisible
+ * to every size check). Own vendors: --pdo-own-vendor; --pdo-trust-eni is
+ * the explicit, logged way to bind from the ENI alone anyway. */
+#define PDO_MAX_OWN 8
+static uint32_t         g_pdo_own[PDO_MAX_OWN] = { ECM_PDO_OWN_VENDOR_DEFAULT };
+static int              g_pdo_nown = 1;
+static int              g_pdo_trust_eni;
 
 /* GD9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
  * unless the ENI gives a slave a longer one (the Timeout of its AL Control
@@ -1761,6 +1769,21 @@ int main(int argc, char **argv)
             g_pdo_scan = 1;
         } else if (strcmp(argv[i], "--pdo-dump") == 0) {
             g_pdo_dump = 1;
+        } else if (strcmp(argv[i], "--pdo-trust-eni") == 0) {            /* GD10.1 */
+            g_pdo_trust_eni = 1;
+        } else if (strcmp(argv[i], "--pdo-own-vendor") == 0 && i + 1 < argc) {
+            char vb[256], *save = NULL;
+            snprintf(vb, sizeof(vb), "%s", argv[++i]);
+            g_pdo_nown = 0;
+            for (char *t = strtok_r(vb, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+                char *end;
+                unsigned long v = strtoul(t, &end, 0);
+                if (end == t || *end || g_pdo_nown >= PDO_MAX_OWN) {
+                    fprintf(stderr, "ecm_run: --pdo-own-vendor %s: expected 0xVENDOR[,0xVENDOR...] (max %d)\n", argv[i], PDO_MAX_OWN);
+                    return 1;
+                }
+                g_pdo_own[g_pdo_nown++] = (uint32_t)v;
+            }
         } else if (strcmp(argv[i], "--pdo-set") == 0 && i + 1 < argc) {
             g_pdo_set_spec = argv[++i];
         } else if (strcmp(argv[i], "--pdo-get") == 0 && i + 1 < argc) {
@@ -1860,6 +1883,7 @@ int main(int argc, char **argv)
             "       [--no-quarantine] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (GD9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (GD9.10)\n"
+            "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (GD10.1: binds into other vendors need --pdo-scan)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -2057,6 +2081,37 @@ int main(int argc, char **argv)
             ecx_close(&ctx); return 1;
         }
         const char *specs[2] = { g_pdo_set_spec, g_pdo_get_spec };
+        /* GD10.1: the table must come from the bus for every bound slave
+         * this project did not build (N-03). Checked before any bind, so
+         * the refusal names all such slaves at once. */
+        if (g_pdo != &g_pdo_bus) {
+            uint16_t bound[2 * PDO_MAX_REFS];
+            int nb = 0;
+            for (int w = 0; w < 2; w++) {
+                if (!specs[w]) continue;
+                char buf[512];
+                snprintf(buf, sizeof(buf), "%s", specs[w]);
+                for (char *save = NULL, *t = strtok_r(buf, ",", &save); t && nb < 2 * PDO_MAX_REFS;
+                     t = strtok_r(NULL, ",", &save)) {
+                    char *eq = strchr(t, '=');
+                    if (eq) *eq = '\0';
+                    int sl; uint16_t ix; uint8_t sb;
+                    if (ecm_pdo_parse_ref(t, &sl, &ix, &sb) == 0) bound[nb++] = (uint16_t)sl;
+                }
+            }
+            uint32_t vend[ECM_PDO_MAX_SLAVES + 1] = { 0 };
+            int nv = ctx.slavecount < ECM_PDO_MAX_SLAVES ? ctx.slavecount : ECM_PDO_MAX_SLAVES;
+            for (int s = 1; s <= nv; s++) vend[s] = ctx.slavelist[s].eep_man;
+            char verr[512];
+            int nn = ecm_pdo_scan_required(vend, nv, bound, nb, g_pdo_own, g_pdo_nown, verr, sizeof(verr));
+            if (nn && !g_pdo_trust_eni) {
+                fprintf(stderr, "ecm_run: binding by (index, sub) into %d slave(s) of another vendor from the ENI alone: %s\n"
+                        "ecm_run: their real mapping is not checked; add --pdo-scan (ENI == bus is then enforced), "
+                        "--pdo-own-vendor if you built them, or --pdo-trust-eni. Refusing\n", nn, verr);
+                ecx_close(&ctx); return 1;
+            }
+            if (nn) fprintf(stderr, "ecm_run: WARNING --pdo-trust-eni: binding into %s without checking their mapping\n", verr);
+        }
         for (int w = 0; w < 2; w++) {
             if (!specs[w]) continue;
             char buf[512], perr[512];
