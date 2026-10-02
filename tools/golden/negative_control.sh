@@ -11,7 +11,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 WORK=$(mktemp -d /tmp/golden_negctl_XXXXXX)
-cp -r "$ROOT/apps" "$ROOT/libecmaster" "$WORK/"
+cp -r "$ROOT/apps" "$ROOT/libecmaster" "$ROOT/libecm_cia402" "$WORK/"   # libecm_cia402: Phase 10.3+
 python3 - "$WORK/apps/ecm_run/ecm_run.c" <<'PY'
 import sys
 p = sys.argv[1]

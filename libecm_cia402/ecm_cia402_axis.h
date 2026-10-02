@@ -1,0 +1,129 @@
+/* ==========================================================================
+ * ecm_cia402_axis.h — Phase 10.5: master-side CiA402 axis, run in the RT hook.
+ *
+ * Per axis and per tick (hook of tick k, outputs go out in frame k+1):
+ *   1. inputs  statusword 0x6041 -> drive state (CiA 402 masks), position /
+ *              velocity actual, error code, mode display
+ *   2. latch   bus lost -> target DISABLED, error BUS_LOST (stays until a new
+ *              ENABLE command); drive Fault while ENABLED -> error FAULT
+ *   3. command from the command ring: ENABLE, DISABLE, QUICKSTOP,
+ *              FAULT_RESET, SET_MODE (owner ops of libecmaster/xchg)
+ *   4. control the controlword walks the drive one transition per tick:
+ *              ENABLED:  SOD -0x06-> RTSO -0x07-> SO -0x0F-> OE, the last
+ *                        step only once 0x6061 shows the requested mode and
+ *                        with target = actual (CSP) / 0 (CSV) in that frame
+ *              DISABLED: OE -0x07-> SO -0x06-> RTSO -0x00-> SOD
+ *              QUICKSTOP: 0x02 until the drive leaves Operation enabled
+ *              FAULT_RESET: one 0x80 pulse (rising edge), then 0x00 --
+ *                        the axis stays disabled afterwards
+ *   5. timeout a commanded step that does not happen within step_timeout
+ *              -> error TIMEOUT naming the state the drive is stuck in,
+ *              target DISABLED (no retry loop)
+ *   6. setpoints (CSP: position, CSV: velocity) from the axis' ring, keyed
+ *              by tick like libecmaster/xchg; only used while Operation
+ *              enabled with the mode confirmed, else dropped (counted).
+ *              Underrun: CSP holds the last position, CSV commands 0.
+ *              Not enabled: CSP target follows actual, CSV target 0.
+ *   7. state   one seqlock record per axis (ecm_cia402_state_t)
+ *
+ * The master never enables an axis by itself: target ENABLED only comes
+ * from an ENABLE command. RT-safe: no syscalls, locks or allocation.
+ * Modes handled here: CSP, CSV (PP/PV/HM: Phase 10.7).
+ * ========================================================================== */
+#ifndef ECM_CIA402_AXIS_H
+#define ECM_CIA402_AXIS_H
+
+#include <stdint.h>
+
+#include "ecm_cia402_cfg.h"
+#include "../libecmaster/xchg/ecm_xchg.h"
+
+/* drive state as read from the statusword */
+typedef enum {
+    ECM_DS_UNKNOWN = 0, ECM_DS_NOT_READY, ECM_DS_SOD, ECM_DS_RTSO, ECM_DS_SO,
+    ECM_DS_OE, ECM_DS_QSA, ECM_DS_FRA, ECM_DS_FAULT, ECM_DS_COUNT
+} ecm_ds_t;
+
+enum { ECM_TGT_DISABLED = 0, ECM_TGT_ENABLED, ECM_TGT_QUICKSTOP };
+
+enum {
+    ECM_AXERR_NONE = 0,
+    ECM_AXERR_TIMEOUT,        /* a commanded transition did not happen       */
+    ECM_AXERR_FAULT,          /* the drive went to Fault (0x603F in the state) */
+    ECM_AXERR_BUS_LOST,       /* process data lost while enabled             */
+    ECM_AXERR_MODE,           /* mode not configured / not handled           */
+    ECM_AXERR_IN_FAULT,       /* ENABLE refused: drive in Fault, reset first */
+};
+
+/* commands (ecm_xcmd_t.op), arg0 = mode for SET_MODE */
+enum {
+    ECM_CIA_OP_ENABLE = ECM_XOP_USER + 1,
+    ECM_CIA_OP_DISABLE,
+    ECM_CIA_OP_QUICKSTOP,
+    ECM_CIA_OP_FAULT_RESET,
+    ECM_CIA_OP_SET_MODE,
+};
+
+/* CiA 402 modes of operation (0x6060 values) */
+enum { ECM_OPMODE_PP = 1, ECM_OPMODE_PV = 3, ECM_OPMODE_HM = 6, ECM_OPMODE_CSP = 8, ECM_OPMODE_CSV = 9, ECM_OPMODE_CST = 10 };
+
+typedef struct {
+    ecm_axis_cfg_t  cfg;
+    ecm_axis_bind_t b;
+    /* RT state */
+    ecm_ds_t ds, ds_wait;
+    uint16_t sw, cw;
+    uint8_t  target, err, err_ds, reset_pulse, armed, mode_ok;
+    int8_t   mode_req, mode_disp;
+    int32_t  apos, avel;
+    uint16_t ecode;
+    int64_t  last_sp;
+    uint64_t step_since;
+    uint64_t used, late, underrun, dropped, transitions;
+    uint32_t last_seq;
+} ecm_cia402_axis_t;
+
+typedef struct {
+    uint64_t tick;
+    uint16_t sw, cw, ecode;
+    uint8_t  ds, target, err, err_ds, mode_ok;
+    int8_t   mode_disp, mode_req;
+    int32_t  apos, avel;
+    uint64_t used, late, underrun, dropped;
+    uint32_t last_seq;
+} ecm_cia402_state_t;
+
+typedef struct {
+    int               naxes;
+    uint64_t          cycle_ns;
+    uint32_t          step_timeout_ticks;
+    ecm_cia402_axis_t ax[ECM_AXIS_MAX];
+    ecm_xring_t       cmd;
+    ecm_xring_t       sp[ECM_AXIS_MAX];
+    ecm_xst_t         st[ECM_AXIS_MAX];
+    ecm_xst_t         clock;              /* tick, t_send_ns, in_valid, bus_lost */
+    uint64_t          cmd_applied, cmd_deferred, cmd_bad;
+} ecm_cia402_t;
+
+/* statusword -> drive state (CiA 402, bits 0..3, 5, 6) */
+ecm_ds_t    ecm_cia402_decode(uint16_t sw);
+const char *ecm_cia402_ds_str(ecm_ds_t ds);
+const char *ecm_cia402_err_str(int err);
+
+/* Not RT. step_timeout_ms: per commanded transition (plan: 500 ms). */
+void ecm_cia402_init(ecm_cia402_t *c, uint64_t cycle_ns, uint32_t step_timeout_ms);
+/* The first mode of cfg->modes (CSP before CSV) is the initial request. -1 if full. */
+int  ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_axis_bind_t *b);
+
+/* RT hook, once per tick. */
+void ecm_cia402_rt(ecm_cia402_t *c, uint8_t *iomap, uint64_t tick, uint64_t t_send_ns,
+                   int in_valid, int bus_lost);
+
+/* Application side (one producer thread). 0 ok, -1 full / bad axis. */
+int  ecm_cia402_cmd(ecm_cia402_t *c, int axis, int op, int64_t arg, uint32_t seq, uint64_t tick);
+int  ecm_cia402_setpoint(ecm_cia402_t *c, int axis, uint64_t tick, int64_t v);
+/* Reader side. 0 ok, -1 torn every try. */
+int  ecm_cia402_read(ecm_cia402_t *c, int axis, ecm_cia402_state_t *s);
+int  ecm_cia402_read_clock(ecm_cia402_t *c, uint64_t *tick, uint64_t *t_send_ns);
+
+#endif /* ECM_CIA402_AXIS_H */

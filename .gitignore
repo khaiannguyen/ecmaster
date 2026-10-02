@@ -32,6 +32,8 @@ tools/soft_bus/test_profile
 tools/soft_bus/test_cia402
 libecm_cia402/test_cia402_cfg
 libecm_cia402/test_cia402_cfg_asan
+libecm_cia402/test_cia402_axis
+libecm_cia402/test_cia402_axis_asan
 libecmaster/xchg/test_xchg_offline
 libecmaster/xchg/test_xchg_offline_asan
 log_gd9_coe_*/

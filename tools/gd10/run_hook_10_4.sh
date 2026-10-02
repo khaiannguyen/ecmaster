@@ -127,7 +127,9 @@ h03)
     echo "=== H-03 (Q-04) producer stops for 100 ms"
     run h03 1 4 "--profile 1=$P1" "--pdo-scan --hook xchg --xchg-out 1:0x607A:0 --xchg-sine 10000:1 --xchg-starve 2:100"
     U=$(slot 0 underrun)
-    chk "H-03 underrun $U in [100 - lead 4 - 3, 100 + 3]" "[ -n \"$U\" ] && [ $U -ge 93 ] && [ $U -le 103 ]"
+    chk "H-03 underrun $U >= 100 - lead 4 - 3" "[ -n \"$U\" ] && [ $U -ge 93 ]"
+    # the upper bound depends on how fast the (non-RT) app thread resumes
+    tchk "H-03 underrun $U <= 100 + 3" "[ -n \"$U\" ] && [ $U -le 103 ]"
     chk "H-03 held value is consistent: echo 0 mismatch ($(app echo_checked) checked)" "[ \$(app echo_mismatch) = 0 ]"
     ;;
 h04)

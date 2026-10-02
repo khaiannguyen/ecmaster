@@ -169,6 +169,7 @@
 #include "libecmaster/pdo/ecm_pdo_soem.h"
 #include "libecm_cia402/ecm_cia402_cfg.h"   /* Phase 10.3 */
 #include "libecmaster/xchg/ecm_xchg.h"         /* Phase 10.4 */
+#include "libecm_cia402/ecm_cia402_axis.h"     /* Phase 10.5 */
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -296,7 +297,26 @@ static struct {                               /* written by the app thread only 
     struct { uint64_t tick, got, want, used, under; } mm[4];   /* first mismatches */
 } g_xapp;
 
+/* Phase 10.5: the CiA402 layer's hook (libecm_cia402) and its test driver:
+ * --cia402-script "T CMD ARGS; ..." run by the application thread, T in
+ * seconds after the first published tick. Commands: enable|disable|
+ * quickstop|reset AXIS|all, mode AXIS csp|csv, sine AXIS AMP HZ (CSP,
+ * around the actual position at that moment), vel AXIS V (CSV), stop AXIS
+ * (no more setpoints). */
+static ecm_cia402_t     g_cia;              /* static, locked by mlockall */
+static const char      *g_cia_script;
+static uint32_t         g_cia_step_ms = 500;
+static int              g_cia_lead = 4;
+static struct {                              /* app thread only */
+    int64_t  track_max[ECM_AXIS_MAX];
+    uint64_t track_n[ECM_AXIS_MAX], pushed, full, events;
+} g_capp;
+
 static void hook_empty(const ecm_hook_args_t *a, void *ctx) { (void)a; (void)ctx; }
+static void hook_cia402(const ecm_hook_args_t *a, void *ctx)
+{
+    ecm_cia402_rt((ecm_cia402_t *)ctx, a->iomap, a->tick, a->t_send_ns, a->in_valid, a->bus_lost);
+}
 static void hook_xchg(const ecm_hook_args_t *a, void *ctx)
 {
     ecm_xchg_rt((ecm_xchg_t *)ctx, a->iomap, a->tick, a->t_send_ns, a->in_valid, a->bus_lost);
@@ -1397,10 +1417,113 @@ static void *telemetry_thread_fn(void *arg)
 
 /* Inert for now -- no CiA402 logic until later platforms. Exists so the
  * 5-thread skeleton matches master_plan_v2.md §2.4 from the start. */
+/* ---- Phase 10.5 test driver of the CiA402 layer (application thread) ---- */
+typedef struct { double t; char op[12]; int axis; double a, b; } cia_step_t;
+static int cia_parse(const char *src, cia_step_t *st, int max)
+{
+    char buf[2048], *save = NULL;
+    int n = 0;
+    snprintf(buf, sizeof(buf), "%s", src);
+    for (char *p = strtok_r(buf, ";", &save); p && n < max; p = strtok_r(NULL, ";", &save)) {
+        char ax[16] = "";
+        cia_step_t s = { 0 };
+        int k = sscanf(p, " %lf %11s %15s %lf %lf", &s.t, s.op, ax, &s.a, &s.b);
+        if (k < 3) return -1;
+        s.axis = !strcmp(ax, "all") ? -1 : (int)strtol(ax, NULL, 0);
+        if (!strcmp(s.op, "mode")) {               /* mode AXIS csp|csv: 3rd token is the mode */
+            char md[8] = "";
+            if (sscanf(p, " %*f %*s %*s %7s", md) != 1) return -1;
+            s.a = !strcmp(md, "csv") ? ECM_OPMODE_CSV : ECM_OPMODE_CSP;
+        }
+        st[n++] = s;
+    }
+    return n;
+}
+
+static void *cia402_app(void)
+{
+    cia_step_t steps[64];
+    int ns = g_cia_script ? cia_parse(g_cia_script, steps, 64) : 0, si = 0;
+    if (ns < 0) { fprintf(stderr, "[CIA402-APP] cannot parse --cia402-script\n"); ns = 0; }
+    enum { P_NONE, P_SINE, P_VEL } kind[ECM_AXIS_MAX] = { 0 };
+    double amp[ECM_AXIS_MAX] = { 0 }, hz[ECM_AXIS_MAX] = { 0 }, vel[ECM_AXIS_MAX] = { 0 };
+    int64_t base[ECM_AXIS_MAX] = { 0 };
+    uint64_t t_start[ECM_AXIS_MAX] = { 0 }, next[ECM_AXIS_MAX] = { 0 }, last_rec[ECM_AXIS_MAX] = { 0 };
+    static int64_t sp[ECM_AXIS_MAX][1024];
+    static uint8_t sp_ok[ECM_AXIS_MAX][1024];
+    ecm_cia402_state_t prev[ECM_AXIS_MAX];
+    memset(prev, 0, sizeof(prev));
+    uint64_t t0 = 0;
+    uint32_t seq = 0;
+    while (!g_app_stop) {
+        struct timespec d = { 0, 1000000 };
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &d, NULL);
+        uint64_t k;
+        if (ecm_cia402_read_clock(&g_cia, &k, NULL) || k == 0) continue;
+        if (!t0) t0 = k;
+        double now = (double)(k - t0) * (double)g_cia.cycle_ns * 1e-9;
+        for (; si < ns && steps[si].t <= now; si++) {
+            cia_step_t *s = &steps[si];
+            for (int a = 0; a < g_cia.naxes; a++) {
+                if (s->axis >= 0 && s->axis != a) continue;
+                ecm_cia402_state_t cs;
+                ecm_cia402_read(&g_cia, a, &cs);
+                int op = 0;
+                if (!strcmp(s->op, "enable")) op = ECM_CIA_OP_ENABLE;
+                else if (!strcmp(s->op, "disable")) op = ECM_CIA_OP_DISABLE;
+                else if (!strcmp(s->op, "quickstop")) op = ECM_CIA_OP_QUICKSTOP;
+                else if (!strcmp(s->op, "reset")) op = ECM_CIA_OP_FAULT_RESET;
+                else if (!strcmp(s->op, "mode")) op = ECM_CIA_OP_SET_MODE;
+                else if (!strcmp(s->op, "sine")) { kind[a] = P_SINE; amp[a] = s->a; hz[a] = s->b; base[a] = cs.apos; t_start[a] = k; next[a] = 0; }
+                else if (!strcmp(s->op, "vel"))  { kind[a] = P_VEL; vel[a] = s->a; next[a] = 0; }
+                else if (!strcmp(s->op, "stop")) kind[a] = P_NONE;
+                if (op) ecm_cia402_cmd(&g_cia, a, op, (int64_t)s->a, ++seq, 0);
+                fprintf(stderr, "[CIA402-APP] t=%.3f tick=%" PRIu64 " axis %d: %s\n", now, k, a, s->op);
+            }
+        }
+        for (int a = 0; a < g_cia.naxes; a++) {
+            /* setpoints, g_cia_lead ticks ahead */
+            if (kind[a] != P_NONE) {
+                if (next[a] < k + 2) next[a] = k + 2;
+                for (; next[a] <= k + (uint64_t)g_cia_lead; next[a]++) {
+                    int64_t v = kind[a] == P_VEL ? (int64_t)llround(vel[a])
+                              : base[a] + (int64_t)llround(amp[a] * sin(2.0 * M_PI * hz[a] *
+                                    (double)(next[a] - t_start[a]) * (double)g_cia.cycle_ns * 1e-9));
+                    if (ecm_cia402_setpoint(&g_cia, a, next[a], v)) { g_capp.full++; break; }
+                    g_capp.pushed++;
+                    sp[a][next[a] & 1023] = v;
+                    sp_ok[a][next[a] & 1023] = kind[a] == P_SINE;
+                }
+            }
+            /* state: transitions, errors, tracking of CSP: actual(k) vs setpoint(k-1) */
+            ecm_cia402_state_t s;
+            if (ecm_cia402_read(&g_cia, a, &s)) continue;
+            if (s.ds != prev[a].ds || s.err != prev[a].err || s.mode_disp != prev[a].mode_disp) {
+                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d %s -> %s (sw 0x%04X cw 0x%04X mode %d)%s%s%s\n",
+                        now, s.tick, a, ecm_cia402_ds_str((ecm_ds_t)prev[a].ds), ecm_cia402_ds_str((ecm_ds_t)s.ds),
+                        s.sw, s.cw, s.mode_disp, s.err ? " ERROR " : "", s.err ? ecm_cia402_err_str(s.err) : "",
+                        s.err == ECM_AXERR_TIMEOUT ? ecm_cia402_ds_str((ecm_ds_t)s.err_ds) : "");
+                g_capp.events++;
+            }
+            if (s.tick == last_rec[a] + 1 && kind[a] == P_SINE && s.ds == ECM_DS_OE && s.mode_disp == ECM_OPMODE_CSP &&
+                sp_ok[a][(s.tick - 1) & 1023] && s.tick > t_start[a] + 8) {
+                int64_t e = (int64_t)s.apos - sp[a][(s.tick - 1) & 1023];
+                if (e < 0) e = -e;
+                if (e > g_capp.track_max[a]) g_capp.track_max[a] = e;
+                g_capp.track_n[a]++;
+            }
+            last_rec[a] = s.tick;
+            prev[a] = s;
+        }
+    }
+    return NULL;
+}
+
 static void *app_thread_fn(void *arg)
 {
     (void)arg;
     set_non_rt_thread();
+    if (g_hook == hook_cia402) return cia402_app();
     if (!g_xchg_sine) {
         while (!g_app_stop) usleep(100000);
         return NULL;
@@ -1891,6 +2014,10 @@ int main(int argc, char **argv)
             g_pdo_scan = 1;
         } else if (strcmp(argv[i], "--pdo-dump") == 0) {
             g_pdo_dump = 1;
+        } else if (strcmp(argv[i], "--cia402-script") == 0 && i + 1 < argc) {   /* Phase 10.5 */
+            g_cia_script = argv[++i];
+        } else if (strcmp(argv[i], "--axis-step-timeout-ms") == 0 && i + 1 < argc) {
+            g_cia_step_ms = (uint32_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--hook") == 0 && i + 1 < argc) {      /* Phase 10.4 */
             g_hook_name = argv[++i];
         } else if (strcmp(argv[i], "--xchg-out") == 0 && i + 1 < argc) {
@@ -2036,6 +2163,7 @@ int main(int argc, char **argv)
             "       [--axis S[:N],... [--axis-modes csp,csv,pp,pv,hm,cst] | --axes-cfg FILE] [--axis-no-6502]   (Phase 10.3)\n"
             "       [--hook empty|xchg] [--xchg-out S:IDX:SUB,...] [--xchg-in S:IDX:SUB,...]\n"
             "       [--xchg-sine AMP:HZ] [--xchg-lead TICKS] [--xchg-starve SECOND:MS]   (Phase 10.4, test hooks)\n"
+            "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -2051,7 +2179,8 @@ int main(int argc, char **argv)
     if (g_hook_name) {
         if (!strcmp(g_hook_name, "empty"))      { g_hook = hook_empty; g_hook_ctx = NULL; }
         else if (!strcmp(g_hook_name, "xchg"))  { g_hook = hook_xchg;  g_hook_ctx = &g_xchg; }
-        else { fprintf(stderr, "ecm_run: --hook empty|xchg\n"); return 1; }
+        else if (!strcmp(g_hook_name, "cia402")) { g_hook = hook_cia402; g_hook_ctx = &g_cia; }
+        else { fprintf(stderr, "ecm_run: --hook empty|xchg|cia402\n"); return 1; }
         hist_init(&g_hook_hist);
     }
     if ((g_xchg_out_spec || g_xchg_in_spec || g_xchg_sine) && g_hook != hook_xchg) {
@@ -2062,6 +2191,11 @@ int main(int argc, char **argv)
     }
     if (g_xchg_lead < 0 || g_xchg_lead > 400) { fprintf(stderr, "ecm_run: --xchg-lead 0..400\n"); return 1; }
     ecm_xchg_init(&g_xchg, (uint64_t)motion_cycle_us * 1000u);
+    if (g_hook == hook_cia402 && !g_axis_list && !g_axes_cfg) {   /* axes are parsed a few lines below */
+        fprintf(stderr, "ecm_run: --hook cia402 needs --axis or --axes-cfg\n"); return 1;
+    }
+    if (g_cia_script && g_hook != hook_cia402) { fprintf(stderr, "ecm_run: --cia402-script needs --hook cia402\n"); return 1; }
+    ecm_cia402_init(&g_cia, (uint64_t)motion_cycle_us * 1000u, g_cia_step_ms);
 
     /* Phase 10.3: axes from the command line or a file, checked before the
      * bus is touched (syntax); bound and checked against the drive at PREOP */
@@ -2399,7 +2533,30 @@ int main(int argc, char **argv)
                     b->tpos.bits ? ", target pos" : "", b->tvel.bits ? ", target vel" : "",
                     b->mode_by_sdo ? "SDO/InitCmd (0x6060 not in the PDOs)" : "PDO");
         }
-        fprintf(stderr, "ecm_run: %d CiA402 axis/axes configured (no cyclic CiA402 yet: Phase 10.4/10.5)\n", g_naxes);
+        /* Phase 10.5: one mode and no 0x6060 in the PDOs -> set it by SDO now
+         * (an ENI InitCmd may already have; writing it again is harmless) and
+         * read it back. With 0x6060 in the PDOs the hook writes it and waits
+         * for 0x6061. */
+        for (int k = 0; k < g_naxes && g_hook == hook_cia402; k++) {
+            const ecm_axis_cfg_t *a = &g_axes[k];
+            if (!g_axis_b[k].mode_by_sdo) continue;
+            int8_t m = (a->modes & ECM_MODE_CSP) ? ECM_OPMODE_CSP : ECM_OPMODE_CSV, rb = 0;
+            int sz = 1;
+            uint16_t i6060 = ecm_axis_index(a, 0x6060);
+            int w1 = ecx_SDOwrite(&ctx, a->slave, i6060, 0, FALSE, 1, &m, EC_TIMEOUTRXM);
+            int w2 = ecx_SDOread(&ctx, a->slave, i6060, 0, FALSE, &sz, &rb, EC_TIMEOUTRXM);
+            { ec_errort er; while (ecx_poperror(&ctx, &er)) { } }
+            if (w1 <= 0 || w2 <= 0 || rb != m) {
+                fprintf(stderr, "ecm_run: axis %s: setting 0x%04X:00 = %d by SDO failed (read back %d). Refusing\n",
+                        a->name, i6060, m, rb);
+                ecx_close(&ctx); return 1;
+            }
+            fprintf(stderr, "ecm_run: axis %s: 0x%04X:00 = %d set by SDO (not in the PDOs)\n", a->name, i6060, m);
+        }
+        if (g_hook == hook_cia402)
+            for (int k = 0; k < g_naxes; k++) ecm_cia402_add_axis(&g_cia, &g_axes[k], &g_axis_b[k]);
+        fprintf(stderr, "ecm_run: %d CiA402 axis/axes configured%s\n", g_naxes,
+                g_hook == hook_cia402 ? ", CiA402 hook on (Phase 10.5)" : " (no --hook cia402: not driven)");
     }
 
     /* ---- Phase 10.4: exchange slots (motion group only: the hook gets its IOmap) */
@@ -3167,6 +3324,20 @@ int main(int argc, char **argv)
                 " max=%" PRId64 " ns\n", g_hook_name, g_hook_calls,
                 hist_percentile(&g_hook_hist, 0.50), hist_percentile(&g_hook_hist, 0.99),
                 hist_percentile(&g_hook_hist, 0.9999), g_hook_hist.max_ns);
+    }
+    if (g_hook == hook_cia402) {
+        for (int k = 0; k < g_cia.naxes; k++) {
+            ecm_cia402_state_t s;
+            ecm_cia402_read(&g_cia, k, &s);
+            fprintf(stderr, "  [CIA402] axis %d (%s): %s sw=0x%04X cw=0x%04X mode=%d pos=%d vel=%d err=%s 0x603F=0x%04X "
+                    "used=%" PRIu64 " late=%" PRIu64 " underrun=%" PRIu64 " dropped=%" PRIu64 " track_max=%" PRId64 " (n=%" PRIu64 ")\n",
+                    k, g_cia.ax[k].cfg.name, ecm_cia402_ds_str((ecm_ds_t)s.ds), s.sw, s.cw, s.mode_disp, s.apos, s.avel,
+                    ecm_cia402_err_str(s.err), s.ecode, s.used, s.late, s.underrun, s.dropped,
+                    g_capp.track_max[k], g_capp.track_n[k]);
+        }
+        fprintf(stderr, "  [CIA402] commands applied=%" PRIu64 " deferred=%" PRIu64 " bad=%" PRIu64
+                "; app pushed=%" PRIu64 " full=%" PRIu64 " events=%" PRIu64 "\n",
+                g_cia.cmd_applied, g_cia.cmd_deferred, g_cia.cmd_bad, g_capp.pushed, g_capp.full, g_capp.events);
     }
     if (g_hook == hook_xchg) {
         for (int k = 0; k < g_xchg.nslots; k++) {

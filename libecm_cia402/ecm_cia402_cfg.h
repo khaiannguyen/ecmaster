@@ -23,7 +23,8 @@
  *   > 1 mode    0x6060 / 0x6061 in the PDOs: the mode changes at run time.
  *               With one mode they may be absent: the mode is then set by
  *               SDO / ENI InitCmd before OP (IS620N 0x1701/0x1B01).
- *   optional    0x603F error code (in)
+ *   optional    0x603F error code, 0x6064 / 0x606C actual position / velocity
+ *               (in) when the modes do not need them but the slave maps them
  * ========================================================================== */
 #ifndef ECM_CIA402_CFG_H
 #define ECM_CIA402_CFG_H

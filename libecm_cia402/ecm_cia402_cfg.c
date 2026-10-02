@@ -207,6 +207,10 @@ int ecm_axis_bind(const ecm_axis_cfg_t *a, const ecm_pdo_table_t *t, const ecm_p
     if (need(a, t, loc, 0x6061, ECM_PDO_IN, why, &b->mode_disp, !several, err, errlen)) return -1;
     b->mode_by_sdo = b->mode.bits == 0;
     need(a, t, loc, 0x603F, ECM_PDO_IN, "error code", &b->err, 1, err, errlen);
+    /* Phase 10.5: actual position / velocity whenever the slave maps them,
+     * even if the modes do not need them (state of a CSV-only axis) */
+    if (!b->apos.bits) need(a, t, loc, 0x6064, ECM_PDO_IN, "position actual", &b->apos, 1, err, errlen);
+    if (!b->avel.bits) need(a, t, loc, 0x606C, ECM_PDO_IN, "velocity actual", &b->avel, 1, err, errlen);
     return 0;
 }
 
