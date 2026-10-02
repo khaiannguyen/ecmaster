@@ -166,6 +166,7 @@
 #include "libecmaster/config/ecm_eni_soem.h"
 #include "libecmaster/pdo/ecm_pdo.h"         /* Phase 9.10 */
 #include "libecmaster/pdo/ecm_pdo_soem.h"
+#include "libecm_cia402/ecm_cia402_cfg.h"   /* Phase 10.3 */
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -251,6 +252,16 @@ static char             g_pdo_get_name[PDO_MAX_REFS][32];
 static uint32_t         g_pdo_own[PDO_MAX_OWN] = { ECM_PDO_OWN_VENDOR_DEFAULT };
 static int              g_pdo_nown = 1;
 static int              g_pdo_trust_eni;
+
+/* Phase 10.3: CiA402 axes (libecm_cia402). Configured and checked at PREOP:
+ * every object the requested modes need is bound (ecm_pdo_bind), the drive's
+ * 0x6502 must list every mode, and an axis on another vendor's slave needs
+ * the scanned PDO table (Phase 10.1 rule). Nothing cyclic yet (10.4/10.5). */
+static ecm_axis_cfg_t   g_axes[ECM_AXIS_MAX];
+static ecm_axis_bind_t  g_axis_b[ECM_AXIS_MAX];
+static int              g_naxes;
+static const char      *g_axis_list, *g_axis_modes_s = "csp", *g_axes_cfg;
+static int              g_axis_no6502;
 
 /* Phase 9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
  * unless the ENI gives a slave a longer one (the Timeout of its AL Control
@@ -1773,6 +1784,14 @@ int main(int argc, char **argv)
             g_pdo_scan = 1;
         } else if (strcmp(argv[i], "--pdo-dump") == 0) {
             g_pdo_dump = 1;
+        } else if (strcmp(argv[i], "--axis") == 0 && i + 1 < argc) {      /* Phase 10.3 */
+            g_axis_list = argv[++i];
+        } else if (strcmp(argv[i], "--axis-modes") == 0 && i + 1 < argc) {
+            g_axis_modes_s = argv[++i];
+        } else if (strcmp(argv[i], "--axes-cfg") == 0 && i + 1 < argc) {
+            g_axes_cfg = argv[++i];
+        } else if (strcmp(argv[i], "--axis-no-6502") == 0) {
+            g_axis_no6502 = 1;
         } else if (strcmp(argv[i], "--pdo-trust-eni") == 0) {            /* Phase 10.1 */
             g_pdo_trust_eni = 1;
         } else if (strcmp(argv[i], "--pdo-own-vendor") == 0 && i + 1 < argc) {
@@ -1888,6 +1907,7 @@ int main(int argc, char **argv)
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
+            "       [--axis S[:N],... [--axis-modes csp,csv,pp,pv,hm,cst] | --axes-cfg FILE] [--axis-no-6502]   (Phase 10.3)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -1898,6 +1918,29 @@ int main(int argc, char **argv)
         return 1;
     }
     long ticks_per_io = io_cycle_us / motion_cycle_us;
+
+    /* Phase 10.3: axes from the command line or a file, checked before the
+     * bus is touched (syntax); bound and checked against the drive at PREOP */
+    if (g_axis_list || g_axes_cfg) {
+        char aerr[512];
+        if (g_axis_list && g_axes_cfg) {
+            fprintf(stderr, "ecm_run: --axis and --axes-cfg exclude each other\n");
+            return 1;
+        }
+        if (g_axes_cfg) {
+            if (ecm_axis_load_cfg(g_axes_cfg, g_axes, &g_naxes, ECM_AXIS_MAX, aerr, sizeof(aerr))) {
+                fprintf(stderr, "ecm_run: --axes-cfg: %s\n", aerr);
+                return 1;
+            }
+        } else {
+            uint32_t m;
+            if (ecm_axis_parse_modes(g_axis_modes_s, &m, aerr, sizeof(aerr)) ||
+                ecm_axis_parse_list(g_axis_list, m, g_axes, &g_naxes, ECM_AXIS_MAX, aerr, sizeof(aerr))) {
+                fprintf(stderr, "ecm_run: --axis: %s\n", aerr);
+                return 1;
+            }
+        }
+    }
 
     g_ifname = ifname;   /* Phase 4: telemetry thread's passive RX socket needs this */
     g_motion_cycle_us = motion_cycle_us;   /* Phase 7.3: receive budget */
@@ -2148,6 +2191,71 @@ int main(int argc, char **argv)
                 (*cnt)++;
             }
         }
+    }
+
+    /* ---- Phase 10.3: CiA402 axes. Still PREOP: plain SDO reads (the cyclic
+     * mailbox is not running yet), and every refusal comes before SAFE-OP. */
+    if (g_naxes) {
+        char aerr[1024];
+        if (!g_pdo) {
+            fprintf(stderr, "ecm_run: --axis needs a PDO table: --eni (enicfg 2) or --pdo-scan\n");
+            ecx_close(&ctx); return 1;
+        }
+        if (g_pdo != &g_pdo_bus) {                     /* Phase 10.1 rule, for axes */
+            uint16_t bound[ECM_AXIS_MAX];
+            uint32_t vend[ECM_PDO_MAX_SLAVES + 1] = { 0 };
+            int nv = ctx.slavecount < ECM_PDO_MAX_SLAVES ? ctx.slavecount : ECM_PDO_MAX_SLAVES;
+            for (int s = 1; s <= nv; s++) vend[s] = ctx.slavelist[s].eep_man;
+            for (int k = 0; k < g_naxes; k++) bound[k] = g_axes[k].slave;
+            int nn = ecm_pdo_scan_required(vend, nv, bound, g_naxes, g_pdo_own, g_pdo_nown, aerr, sizeof(aerr));
+            if (nn && !g_pdo_trust_eni) {
+                fprintf(stderr, "ecm_run: axes on %d slave(s) of another vendor with the PDO table from the ENI alone: %s\n"
+                        "ecm_run: their real mapping is not checked; add --pdo-scan (ENI == bus is then enforced), "
+                        "--pdo-own-vendor if you built them, or --pdo-trust-eni. Refusing\n", nn, aerr);
+                ecx_close(&ctx); return 1;
+            }
+            if (nn) fprintf(stderr, "ecm_run: WARNING --pdo-trust-eni: axes on %s without checking their mapping\n", aerr);
+        }
+        for (int k = 0; k < g_naxes; k++) {
+            const ecm_axis_cfg_t *a = &g_axes[k];
+            if (a->slave > ctx.slavecount) {
+                fprintf(stderr, "ecm_run: axis %s: slave %u, the bus has %d. Refusing\n", a->name, a->slave, ctx.slavecount);
+                ecx_close(&ctx); return 1;
+            }
+            if (ecm_axis_bind(a, g_pdo, g_pdo_loc, &g_axis_b[k], aerr, sizeof(aerr))) {
+                fprintf(stderr, "ecm_run: %s. Refusing\n", aerr);
+                ecx_close(&ctx); return 1;
+            }
+            uint16_t i6502 = ecm_axis_index(a, 0x6502);
+            uint32_t sup = 0;
+            int sz = (int)sizeof(sup);
+            int w = ecx_SDOread(&ctx, a->slave, i6502, 0, FALSE, &sz, &sup, EC_TIMEOUTRXM);
+            uint32_t abort_code = 0;
+            { ec_errort er; while (ecx_poperror(&ctx, &er)) if (er.Etype == EC_ERR_TYPE_SDO_ERROR) abort_code = (uint32_t)er.AbortCode; }
+            if (w <= 0) {
+                if (!g_axis_no6502) {
+                    fprintf(stderr, "ecm_run: axis %s (slave %u): cannot read 0x%04X:00 supported drive modes "
+                            "(SDO abort 0x%08X): the modes cannot be checked. Refusing (--axis-no-6502 to go on without)\n",
+                            a->name, a->slave, i6502, abort_code);
+                    ecx_close(&ctx); return 1;
+                }
+                fprintf(stderr, "ecm_run: WARNING axis %s: 0x%04X not readable (abort 0x%08X), modes NOT checked (--axis-no-6502)\n",
+                        a->name, i6502, abort_code);
+            } else if (ecm_axis_check_modes(a, sup, aerr, sizeof(aerr))) {
+                fprintf(stderr, "ecm_run: %s. Refusing\n", aerr);
+                ecx_close(&ctx); return 1;
+            }
+            const ecm_axis_bind_t *b = &g_axis_b[k];
+            char ms[64];
+            ecm_axis_modes_str(a->modes, ms, sizeof(ms));
+            fprintf(stderr, "ecm_run: axis %s: slave %u axis %u, modes %s, 0x6502 %s0x%08X; "
+                    "cw group %u bit %u, sw group %u bit %u%s%s, mode by %s\n",
+                    a->name, a->slave, a->n, ms, w > 0 ? "" : "unread ", (unsigned)sup,
+                    b->cw.group, b->cw.bit, b->sw.group, b->sw.bit,
+                    b->tpos.bits ? ", target pos" : "", b->tvel.bits ? ", target vel" : "",
+                    b->mode_by_sdo ? "SDO/InitCmd (0x6060 not in the PDOs)" : "PDO");
+        }
+        fprintf(stderr, "ecm_run: %d CiA402 axis/axes configured (no cyclic CiA402 yet: Phase 10.4/10.5)\n", g_naxes);
     }
 
     /* ---- Phase 9.8: freshness per slave. Resolved here, after mapping, so a

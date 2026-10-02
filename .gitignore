@@ -30,6 +30,8 @@ tools/soft_bus/test_fault
 tools/soft_bus/test_coe
 tools/soft_bus/test_profile
 tools/soft_bus/test_cia402
+libecm_cia402/test_cia402_cfg
+libecm_cia402/test_cia402_cfg_asan
 log_gd9_coe_*/
 log_x04_*/
 __pycache__/

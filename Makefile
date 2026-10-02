@@ -47,7 +47,9 @@ test-offline:
 	$(MAKE) -C libecmaster/policy test test_asan
 	$(MAKE) -C libecmaster/config test
 	$(MAKE) -C libecmaster/pdo test test_asan
+	$(MAKE) -C libecm_cia402 test test_asan
+	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
 
 clean:
-	@for d in tools/soft_bus $(APPS); do $(MAKE) -s -C $$d clean; done
+	@for d in tools/soft_bus libecm_cia402 $(APPS); do $(MAKE) -s -C $$d clean; done

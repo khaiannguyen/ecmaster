@@ -66,6 +66,8 @@ jobs:
         run: |
           python3 tools/esi/esi2profile.py config/esi/p1_draft_esi.xml -o /tmp/p1_draft.prof
           cmp /tmp/p1_draft.prof config/profiles/p1_draft.prof
+      - name: 4-axis CiA402 test profile up to date (Phase 10.2 make_multiaxis_prof)
+        run: python3 tools/esi/make_multiaxis_prof.py --axes 4 | cmp - config/profiles/cia402_4ax.prof
       - name: libecmaster/telemetry (histogram, SPSC ring, turnaround pairing)
         run: make -C libecmaster/telemetry run
       - name: libecmaster/core (ecm_dc reply-age gate)
@@ -78,6 +80,10 @@ jobs:
         run: make -C libecmaster/config test
       - name: libecmaster/pdo (PDO entry table, bind, bit-level get/set, Phase 9.10)
         run: make -C libecmaster/pdo test test_asan
+      - name: libecm_cia402 axis configuration (Phase 10.3 K-01, K-03o, K-04o)
+        run: make -C libecm_cia402 test test_asan
+      - name: No CiA402 object index in libecmaster (Phase 10.3 K-05, + negative control)
+        run: python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
         run: tests/tsan/run_tsan.sh 1000000
 
@@ -143,6 +149,8 @@ jobs:
         run: sudo -E env CASES="v01 v02 v03 b02m b05 n01 n02 n03" LOG=/tmp/log_gd9_mixed tools/gd9/run_mixed_9_9.sh
       - name: Virtual CiA402 drive through SOEM (Phase 10.2 D-01..D-07, A-04)
         run: sudo -E env LOG=/tmp/log_gd10_servo tools/gd10/run_servo_10_2.sh
+      - name: CiA402 axis configuration (Phase 10.3 K-01n..K-08)
+        run: sudo -E env LOG=/tmp/log_gd10_axes tools/gd10/run_axes_10_3.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -157,6 +165,7 @@ jobs:
             /tmp/log_gd9_pdo
             /tmp/log_gd9_mixed
             /tmp/log_gd10_servo
+            /tmp/log_gd10_axes
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 
