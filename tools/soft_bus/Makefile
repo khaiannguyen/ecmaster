@@ -1,4 +1,4 @@
-SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
+SUDO ?= sudo   # Phase 9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = soft_bus

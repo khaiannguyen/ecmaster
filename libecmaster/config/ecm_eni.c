@@ -174,7 +174,7 @@ static int parse_slave(char **tok, int n, int lineno, ecm_eni_t *eni, char *err,
         seterr(err, errlen, "line %d: slave: bad or missing 'shift_ns'", lineno);
         return -1;
     }
-    /* GD9.6: optional (enicfg 1 has none) */
+    /* Phase 9.6: optional (enicfg 1 has none) */
     static const char *const st_key[ECM_ENI_ST_COUNT] = { "preop_ms", "safeop_ms", "op_ms" };
     for (int k = 0; k < ECM_ENI_ST_COUNT; k++) {
         const char *sv = kv(tok, n, 2, st_key[k]);
@@ -404,7 +404,7 @@ int ecm_eni_parse_text(const char *text, ecm_eni_t *eni, char *err, size_t errle
         seterr(err, errlen, "enicfg 2 without a 'pd_cmd' record");
         return -1;
     }
-    /* GD9.10: PDO entries, when present, must add up to the slave sizes */
+    /* Phase 9.10: PDO entries, when present, must add up to the slave sizes */
     if (eni->npdo) {
         for (int i = 0; i < eni->nslaves; i++) {
             uint32_t o = 0, in = 0;
@@ -519,7 +519,7 @@ int ecm_eni_refclock(const ecm_eni_t *eni)
     return 0;
 }
 
-/* ---------------------------------------------------------------- GD9.6 */
+/* ---------------------------------------------------------------- Phase 9.6 */
 
 const char *ecm_eni_cmd_name(uint8_t cmd)
 {
@@ -543,7 +543,7 @@ static unsigned cmd_kind(uint8_t cmd)
 /* Register InitCmds that SOEM (ecx_config_init / ecx_config_map_group /
  * ecx_configdc) and libecmaster (ecm_run state machine, DC SYNC0 setup)
  * already do -- the table of kehoach §8 item 1. Seeded from the audit of
- * the GD8 ENIs (giai_doan_8_nhat_ky_8_3.md §3) and of every TwinCAT ENI of
+ * the Phase 8 ENIs (giai_doan_8_nhat_ky_8_3.md §3) and of every TwinCAT ENI of
  * step 9.4 (config/eni/known_regs.txt, docs/eni_audit_9_4*.md): all of
  * them use only these. Deliberately NOT here (an ENI with them is refused
  * until someone decides): 0x0400-0x0420 watchdogs (ecm_run sets 0x0420
@@ -551,7 +551,7 @@ static unsigned cmd_kind(uint8_t cmd)
  * value, SOEM never writes it), EEPROM writes, anything vendor specific.
  * The DC writes (0x0980, 0x09A0, 0x09A4) are known because ecm_run does
  * them from the slave record; ecm_eni_check_supported() also checks that
- * their data says the same as that record (GD9.5). */
+ * their data says the same as that record (Phase 9.5). */
 static const struct {
     uint16_t ado;
     unsigned kinds;
@@ -585,7 +585,7 @@ static const struct {
     { 0x0981, K_WR, 0, "DC activation: ecm_run DC setup" },
     { 0x0990, K_WR, 0, "DC start time: ecm_run DC setup" },
     { 0x09A0, K_WR, 0, "SYNC0 (+ SYNC1) cycle: ecm_run from the ENI (sync0_ns, sync1_ns)" },
-    { 0x09A4, K_WR, 0, "SYNC1 cycle: ecm_run from the ENI (sync1_ns, GD9.5)" },
+    { 0x09A4, K_WR, 0, "SYNC1 cycle: ecm_run from the ENI (sync1_ns, Phase 9.5)" },
     { 0x09A8, K_WR, 1, "latch control left at reset (0): latch not used by ecm_run" },
 };
 
@@ -664,7 +664,7 @@ int ecm_eni_check_supported(const ecm_eni_t *eni, int allow_unknown_reg, int *nw
         else
             bad++;
     }
-    /* GD9.5: the DC register InitCmds must agree with the slave record that
+    /* Phase 9.5: the DC register InitCmds must agree with the slave record that
      * ecm_run applies (assign, sync0_ns, sync1_ns). They come from different
      * parts of the ENI (InitCmds vs the DC element); a hand-edited ENI can
      * make them disagree, and then the ENI says two things. */

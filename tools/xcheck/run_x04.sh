@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_x04.sh — Giai doan 9.3 X-04: IgH (an independent master) drives the
-# GD9.3 CoE features of soft_bus before SOEM is trusted with them.
+# run_x04.sh — Phase 9.3 X-04: IgH (an independent master) drives the
+# Phase 9.3 CoE features of soft_bus before SOEM is trusted with them.
 #
-# Rig (GD8 8.1): veth_ig (MAC 02:00:00:00:00:10, IgH generic driver) <->
+# Rig (Phase 8.1): veth_ig (MAC 02:00:00:00:00:10, IgH generic driver) <->
 # veth_igs (soft_bus); /opt/etherlab/etc/ethercat.conf MASTER0_DEVICE set to
 # that MAC; `sudo /opt/etherlab/sbin/ethercatctl start` BEFORE this script,
 # `ethercatctl stop` + `lsmod | grep ^ec_` empty AFTER it (IgH's idle thread
@@ -45,7 +45,7 @@ chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 for f in "$SOFT_BUS" "$IGH_APP" "$ETHERCAT"; do
     [ -x "$f" ] || { echo "missing $f (igh_x01b: see the build line in igh_x01b.c)"; exit 2; }
 done
-# A stale GD8 build of igh_x01b has no --complete-sdo: it prints Usage and
+# A stale Phase 8 build of igh_x01b has no --complete-sdo: it prints Usage and
 # exits 1, which made X-04n "pass" for the wrong reason (Jetson 30/9).
 "$IGH_APP" --no-such-option 2>&1 | grep -q -- '--complete-sdo' || {
     echo "$IGH_APP is an old build without --complete-sdo: rebuild it (see igh_x01b.c)"; exit 2; }
@@ -78,7 +78,7 @@ for _ in $(seq 100); do grep -q "all $N slaves in OP" "$LOG/igh_x04a.log" && bre
     echo "--- 1600:01";                   up 0 -t uint32 0x1600 1
     echo "--- 8002 slave 0";              up 0 -t string 0x8002 0
 } > "$LOG/cli_x04b.txt"
-S16="GD9.3-X04-normal"                     # 16 byte -> normal download
+S16="Phase 9.3-X04-normal"                     # 16 byte -> normal download
 S200=$(python3 -c "print(''.join(chr(97 + k % 26) for k in range(200)))")
 "$ETHERCAT" download -p 3 -t string 0x8002 0 "$S16"  > "$LOG/dl16.txt" 2>&1; DL16=$?
 R16=$(up 3 -t string 0x8002 0)

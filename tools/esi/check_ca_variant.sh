@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_ca_variant.sh -- GD9.3: the Complete Access ESI variant
+# check_ca_variant.sh -- Phase 9.3: the Complete Access ESI variant
 # (config/esi/softbus_esi_ca.xml) is up to date with softbus_esi.xml, valid
 # against the schema, and matches the SII of `soft_bus --coe-ca`; the default
 # ESI still matches the default SII. Negative control: the CA ESI against the

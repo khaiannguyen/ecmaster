@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# negative_control.sh — Giai doan 7.5: prove the golden check can fail.
+# negative_control.sh — Phase 7.5: prove the golden check can fail.
 # Builds a copy of ecm_run with the two SM watchdog writes (0x0400, 0x0420)
 # swapped -- the same frames, only their order changes -- and requires
 # check_golden.sh to see the difference.

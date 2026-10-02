@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_xsd.sh -- GD8 8.2: validate the soft_bus ESI against the EtherCAT ESI XML schema.
+# check_xsd.sh -- Phase 8.2: validate the soft_bus ESI against the EtherCAT ESI XML schema.
 #
 # The official schema (ETG, ESI_Schema_V1i21.zip) is for ETG members only and
 # TwinCAT 4024 does not install it. We validate against schema version 1.17 as

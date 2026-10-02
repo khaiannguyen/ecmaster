@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_eni_9_6.sh — Giai doan 9.6: loader for real (vendor / TwinCAT) ENIs,
+# run_eni_9_6.sh — Phase 9.6: loader for real (vendor / TwinCAT) ENIs,
 # against soft_bus over veth. Plan: claude/giai_doan_9_ke_hoach.md §8.
 #
 #   sudo -E ./run_eni_9_6.sh              all cases
@@ -52,7 +52,7 @@ chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 for f in "$SOFT_BUS" "$ECM_RUN"; do [ -x "$f" ] || { echo "missing $f"; exit 2; }; done
 command -v tshark >/dev/null || { echo "tshark not installed"; exit 2; }
-for i in "$IF_M" "$IF_S"; do      # GD9.5: the 14/13 run of 1/10 was a lost veth pair
+for i in "$IF_M" "$IF_S"; do      # Phase 9.5: the 14/13 run of 1/10 was a lost veth pair
     ip link show "$i" >/dev/null 2>&1 || {
         echo "interface $i missing (veth pairs do not survive a reboot):"
         echo "  sudo ip link add $IF_M type veth peer name $IF_S && sudo ip link set $IF_M up && sudo ip link set $IF_S up"

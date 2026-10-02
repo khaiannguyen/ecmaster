@@ -88,7 +88,7 @@ int ecm_diag_handoff_get(ecm_diag_handoff_t *h, ecm_diag_raw_t *out)
     int f0 = atomic_load_explicit(&h->state[0], memory_order_acquire) == 1;
     int f1 = atomic_load_explicit(&h->state[1], memory_order_acquire) == 1;
     if (!f0 && !f1) return 0;
-    /* Giai doan 7.6 (found by the stress test, not by TSan -- it is not a
+    /* Phase 7.6 (found by the stress test, not by TSan -- it is not a
      * data race): the two loads above are not one snapshot. If slot 0 was
      * seen empty, the producer may have filled it (epoch N) and then slot 1
      * (N+1) before slot 1 was loaded; taking slot 1 now hands out N+1
@@ -293,7 +293,7 @@ int ecm_diag_analyze(const ecm_diag_t *d, ecm_diag_finding_t *out, int max)
     if (d->frames_lost)
         push(out, &nf, max, ECM_FIND_DIAG_LOST, ECM_SEV_INFO, 0, 0, 0, d->frames_lost, 0);
 
-    /* 5. GD9.7: emergency messages */
+    /* 5. Phase 9.7: emergency messages */
     for (int i = 0; i < n; i++) {
         const ecm_diag_slave_t *s = &d->s[i];
         if (!s->emcy_count) continue;
@@ -314,7 +314,7 @@ int ecm_diag_analyze(const ecm_diag_t *d, ecm_diag_finding_t *out, int max)
     return nf;
 }
 
-/* ------------------------------------------------------------ GD9.7 --- */
+/* ------------------------------------------------------------ Phase 9.7 --- */
 const char *ecm_emcy_class_name(uint16_t code)
 {
     if (code == 0x0000) return "error reset / no error";

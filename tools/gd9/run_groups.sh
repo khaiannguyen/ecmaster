@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_groups.sh — Giai doan 9.1: group assignment per slave, empty
+# run_groups.sh — Phase 9.1: group assignment per slave, empty
 # GROUP_IO, one-slave bus (P1/P2/P4: one LAN9252) and a motion-only bus
 # (own slave + commercial servo). Plan: claude/giai_doan_9_ke_hoach.md §3.
 #

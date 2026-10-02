@@ -1,6 +1,6 @@
 /*
- * test_pdo_offline.c -- GD9.10 B-03 / B-04 and the table itself, offline;
- * GD10.1 B-05: which binds need the bus's own table.
+ * test_pdo_offline.c -- Phase 9.10 B-03 / B-04 and the table itself, offline;
+ * Phase 10.1 B-05: which binds need the bus's own table.
  */
 #include "ecm_pdo.h"
 

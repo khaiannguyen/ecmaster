@@ -1,8 +1,8 @@
-# GD9.6: the loader's table is KNOWN_REGS in libecmaster/config/ecm_eni.c
+# Phase 9.6: the loader's table is KNOWN_REGS in libecmaster/config/ecm_eni.c
 # (with the reason each entry is safe, and 0x09A8 only as an all-zero write);
 # this file stays the input of eni_audit.py. Keep the two in step.
 #
-# known_regs.txt -- GD9.4 seed for the 9.6 loader table: register InitCmds
+# known_regs.txt -- Phase 9.4 seed for the 9.6 loader table: register InitCmds
 # that TwinCAT puts into the soft_bus ENIs (eni_8node*.xml, eni_1node_1pdo.xml)
 # and that SOEM + libecmaster already do themselves during configuration
 # (audit in claude/giai_doan_8_nhat_ky_8_3.md). One ADO (hex) per line, or

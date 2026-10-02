@@ -1,10 +1,10 @@
 /* ==========================================================================
  * ecm_run.c — Real cyclic EtherCAT master, two process-data groups running
- * at different rates on the RT thread (Giai doan 3 / L3 scope), now
- * instrumented for Giai doan 4 (5-thread architecture, 4 measured
+ * at different rates on the RT thread (Phase 3 / L3 scope), now
+ * instrumented for Phase 4 (5-thread architecture, 4 measured
  * quantities, histograms, turnaround correlation via error queue).
  *
- * ---- Giai doan 4 additions on top of the Giai doan 3 file ----
+ * ---- Phase 4 additions on top of the Phase 3 file ----
  *
  * 1. Per-tick instrumentation: wake_jitter_ns, prep_send_ns,
  *    cycle_occupancy_ns are now captured and pushed into a lock-free SPSC
@@ -47,15 +47,15 @@
  *
  * 4. Five-thread skeleton per master_plan_v2.md §2.4: this file's main()
  *    IS the RT thread (SCHED_FIFO 80, pinned to the isolated core). Four
- *    more threads are spawned: ứng dụng and mailbox are inert stubs (no
- *    logic until Giai doan 5), giám sát is a lightweight ~100ms
+ *    more threads are spawned: application and mailbox are inert stubs (no
+ *    logic until Phase 5), monitor is a lightweight ~100ms
  *    placeholder, and telemetry is the real consumer of both rings above.
- *    giám sát and telemetry are deliberately SEPARATE threads (not merged,
- *    as the very first Giai doan 4 draft did) -- see the Giai doan 4
+ *    monitor and telemetry are deliberately SEPARATE threads (not merged,
+ *    as the very first Phase 4 draft did) -- see the Phase 4
  *    review note on why merging them risks head-of-line blocking once
- *    Giai doan 9 diagnostics add real SDO/mailbox calls to giám sát.
+ *    Phase 9 diagnostics add real SDO/mailbox calls to the monitor.
  *
- * ---- Giai doan 5 additions on top of the Giai doan 4 file ----
+ * ---- Phase 5 additions on top of the Phase 4 file ----
  *
  * 5. mailbox_thread_fn() is no longer an inert stub: it now runs
  *    ecm_mailbox_run() (libecmaster/mailbox/ecm_mailbox.c), built on
@@ -83,7 +83,7 @@
  *    emergencyerror) and from the mailbox thread (ecx_SDOread/write ->
  *    ecx_SDOerror). This module never calls ecx_poperror()/
  *    ecx_iserror() itself to avoid adding a second concurrent reader.
- *    GD9.7: the ONE reader is the RT thread (elist_drain(), right after
+ *    Phase 9.7: the ONE reader is the RT thread (elist_drain(), right after
  *    the process data of a RUN/DEGRADED tick). It is also the writer of
  *    every EMCY (they arrive through ecx_mbxinhandler in the same thread),
  *    so EMCY never race. It turns each entry into an event for the
@@ -93,7 +93,7 @@
  *    can in rare cases be lost or read twice -- it is a report, never
  *    used for a decision (the SDO caller gets its own return code).
  *
- * ---- Giai doan 6 additions on top of the Giai doan 5 file ----
+ * ---- Phase 6 additions on top of the Phase 5 file ----
  *
  * 6. Distributed Clocks, master-shift (libecmaster/core/ecm_dc.c):
  *    DC(a) ecx_configdc() + ecx_dcsync0() on every GROUP_MOTION slave
@@ -104,7 +104,7 @@
  *    (no SYNC0): their clocks are still disciplined by the FRMW that
  *    travels in the motion frame, but an 8 ms SYNC0 would need the IO
  *    round-robin tick aligned to the DC grid -- deliberately out of scope.
- *    Giai doan 9.5: with --eni the DC configuration is the ENI's, per slave
+ *    Phase 9.5: with --eni the DC configuration is the ENI's, per slave
  *    (dc_arm_slave): which slaves get SYNC0, SYNC1 (AssignActivate 0x0700,
  *    CycleTime1), ShiftTime, and the reference clock -- which must be the
  *    first DC-capable slave on the bus, the one SOEM's ecx_configdc() uses.
@@ -117,12 +117,12 @@
  *    Anchor = ONE FPRD 0x0910..0x0997 on the reference clock.
  *    DC telemetry is RT-thread-only state (no ring change): |e| histogram
  *    and sums read after the loop exits, plus 4 fields in the per-second
- *    snapshot -> same "no I/O in the hot loop" rule as Giai doan 3.
+ *    snapshot -> same "no I/O in the hot loop" rule as Phase 3.
  *    Enabled automatically when slave 1 is DC-capable; --no-dc forces off.
  *
- * Everything below this point that is unchanged from Giai doan 4 keeps its
+ * Everything below this point that is unchanged from Phase 4 keeps its
  * original comments; only the file header above and the new/changed code
- * sections are new for Giai doan 5/6.
+ * sections are new for Phase 5/6.
  * ========================================================================== */
 
 /* Must come before any system header — CPU_ZERO/CPU_SET/sched_setaffinity
@@ -147,8 +147,8 @@
 #include <linux/if_packet.h>
 #include <linux/net_tstamp.h>
 #include <linux/sockios.h>
-#include <linux/ethtool.h>   /* GD9.2: link speed -> ETF ns/byte */
-#include <linux/errqueue.h>   /* Giai doan 8.5: SO_EE_ORIGIN_TXTIME */
+#include <linux/ethtool.h>   /* Phase 9.2: link speed -> ETF ns/byte */
+#include <linux/errqueue.h>   /* Phase 8.5: SO_EE_ORIGIN_TXTIME */
 #include <arpa/inet.h>
 
 #include "soem/soem.h"
@@ -164,7 +164,7 @@
 #include "libecmaster/diag/ecm_diag.h"     
 #include "libecmaster/config/ecm_eni.h"
 #include "libecmaster/config/ecm_eni_soem.h"
-#include "libecmaster/pdo/ecm_pdo.h"         /* GD9.10 */
+#include "libecmaster/pdo/ecm_pdo.h"         /* Phase 9.10 */
 #include "libecmaster/pdo/ecm_pdo_soem.h"
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
@@ -176,10 +176,10 @@
 #error "SOEM built with EC_MAXGROUP <= GROUP_IO: rebuild SOEM with cmake -DEC_MAXGROUP=4"
 #endif
 #include "libecmaster/diag/ecm_diag_soem.h"
-#include "libecmaster/policy/ecm_policy.h"    /* Giai doan 7.3 */
+#include "libecmaster/policy/ecm_policy.h"    /* Phase 7.3 */
 #include <stdatomic.h>
 
-#define IOMAP_SIZE   (256 * 1024)   /* see IOMAP_SIZE note in the Giai doan 3 file header */
+#define IOMAP_SIZE   (256 * 1024)   /* see IOMAP_SIZE note in the Phase 3 file header */
 
 static uint8 IOmap_motion[IOMAP_SIZE];
 static uint8 IOmap_io[IOMAP_SIZE];
@@ -188,7 +188,7 @@ static ecx_contextt ctx;
 static volatile sig_atomic_t g_stop = 0;
 static void on_sigint(int sig) { (void)sig; g_stop = 1; }
 
-/* ---- Giai doan 4: telemetry plumbing, global so both the RT thread and
+/* ---- Phase 4: telemetry plumbing, global so both the RT thread and
  * the telemetry thread can reach them. The RT thread only ever PUSHES;
  * the telemetry thread only ever POPS -- this is the single-producer/
  * single-consumer contract both ring types are built around. ---- */
@@ -200,13 +200,13 @@ static volatile sig_atomic_t g_app_stop       = 0;
 static volatile sig_atomic_t g_mailbox_stop   = 0;
 static volatile sig_atomic_t g_monitor_stop   = 0;
 
-/* ---- Giai doan 5: mailbox subsystem, created in main() once ctx is
+/* ---- Phase 5: mailbox subsystem, created in main() once ctx is
  * initialized, used by mailbox_thread_fn() below and by the RT loop
  * (service_group()) via ecm_mailbox_rt_pump_group(). Not touched by
  * any other thread. ---- */
 static ecm_mailbox_t *g_mbx = NULL;
 
-/* ---- Giai doan 6: DC(b). g_dc and g_dcstat are written ONLY by the RT
+/* ---- Phase 6: DC(b). g_dc and g_dcstat are written ONLY by the RT
  * thread once the loop starts; main() reads them only after the loop has
  * exited (same contract as the motion/io group_stats_t). ---- */
 #define DC_HIST_US 1001            /* |e| bins of 1 us, last bin = overflow */
@@ -224,10 +224,10 @@ static struct {
 static const char *g_eni_path;
 static ecm_eni_t   g_eni;         /* large; file scope, never on the stack */
 static int         g_eni_on;
-static int         g_eni_allow_unknown_reg;   /* GD9.6: --eni-allow-unknown-regcmd */
-static int         g_sdo_timeout_ms;          /* GD9.6: --sdo-timeout-ms, 0 = EC_TIMEOUTRXM */
+static int         g_eni_allow_unknown_reg;   /* Phase 9.6: --eni-allow-unknown-regcmd */
+static int         g_sdo_timeout_ms;          /* Phase 9.6: --sdo-timeout-ms, 0 = EC_TIMEOUTRXM */
 
-/* GD9.10: process data by (slave, index, sub). The table comes from the ENI
+/* Phase 9.10: process data by (slave, index, sub). The table comes from the ENI
  * (.enicfg "pdo" records) or from a scan of the bus (--pdo-scan); with both,
  * they must agree. --pdo-set / --pdo-get exercise ecm_pdo_bind() end to end:
  * the RT thread writes the set values into the outputs every tick (it owns
@@ -243,7 +243,7 @@ static int              g_pdo_nset, g_pdo_nget;
 static ecm_pdo_handle_t g_pdo_set_h[PDO_MAX_REFS], g_pdo_get_h[PDO_MAX_REFS];
 static uint64_t         g_pdo_set_v[PDO_MAX_REFS];
 static char             g_pdo_get_name[PDO_MAX_REFS][32];
-/* GD10.1: binding into a slave of another vendor needs --pdo-scan (N-03:
+/* Phase 10.1: binding into a slave of another vendor needs --pdo-scan (N-03:
  * a mapping that differs from the ESI but has the same size is invisible
  * to every size check). Own vendors: --pdo-own-vendor; --pdo-trust-eni is
  * the explicit, logged way to bind from the ENI alone anyway. */
@@ -252,7 +252,7 @@ static uint32_t         g_pdo_own[PDO_MAX_OWN] = { ECM_PDO_OWN_VENDOR_DEFAULT };
 static int              g_pdo_nown = 1;
 static int              g_pdo_trust_eni;
 
-/* GD9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
+/* Phase 9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
  * unless the ENI gives a slave a longer one (the Timeout of its AL Control
  * write = the ESI's state machine timeout; IS620N: SAFE-OP->OP 9 s).
  * Never shorter than before, so a bus that came up still comes up. */
@@ -264,7 +264,7 @@ static int state_timeout_us(int st)
     return us > EC_TIMEOUTSTATE ? (int)us : EC_TIMEOUTSTATE;
 }
 
-/* Opened in main(), BEFORE any thread is created -- see the Giai doan 4
+/* Opened in main(), BEFORE any thread is created -- see the Phase 4
  * post-mortem note in giai_doan_4_ke_hoach.md §5.2: opening this inside
  * telemetry_thread_fn() left a startup race (RT thread could start
  * ticking, and the very first replies could already have come and gone,
@@ -276,7 +276,7 @@ static int state_timeout_us(int st)
  * entirely: it is guaranteed bound before the RT loop ever sends a frame. */
 static int g_passive_rx_fd = -1;
 
-/* ---- Giai doan 7.2: diagnostics (plan §3.1/§3.2) ----
+/* ---- Phase 7.2: diagnostics (plan §3.1/§3.2) ----
  * RT thread: sends one diagnostic frame per second and collects the reply
  * on a later tick (ecm_diag_soem_collect never waits), then hands the raw
  * read to the monitor thread. Monitor: accumulates, analyses, writes the
@@ -291,7 +291,7 @@ static ecm_diag_t         g_diag;          /* monitor only (and main() after joi
 #define NON_RT_STACK_BYTES (256u * 1024u)  /* see the pthread_create() block in main() */
 #define DIAG_MAX_AGE_TICKS 5              /* give a diag reply 5 ticks, then count it lost */
 
-/* ---- Giai doan 7.3: fault policy (docs/fault_policy.md) ----
+/* ---- Phase 7.3: fault policy (docs/fault_policy.md) ----
  * RT thread owns g_bus (state machine) and executes g_cmdq; the monitor
  * owns g_srec (per-slave planner), drains g_ev, and runs RECOVER and
  * recovery path B. Ownership of the bus during RECOVER is handed over with
@@ -307,9 +307,9 @@ static long             g_motion_cycle_us = 1000;
 static ecm_bus_fsm_t    g_bus;                 /* RT only */
 static uint64_t         g_tick_deadline_ns;    /* RT only: receives must finish before this */
 static ecm_evring_t     g_ev;                  /* RT -> monitor */
-static uint64_t         g_emcy_ev_drops;       /* GD9.7: RT only, EMCY events the ring refused */
-static atomic_ullong    g_emcy_ev_drops_pub;   /* GD9.7: RT publishes, monitor reads */
-static int              g_emcy_print_max = 20; /* GD9.7: EMCY log lines per slave, then counted only */
+static uint64_t         g_emcy_ev_drops;       /* Phase 9.7: RT only, EMCY events the ring refused */
+static atomic_ullong    g_emcy_ev_drops_pub;   /* Phase 9.7: RT publishes, monitor reads */
+static int              g_emcy_print_max = 20; /* Phase 9.7: EMCY log lines per slave, then counted only */
 static ecm_cmdq_t       g_cmdq;                /* monitor -> RT */
 static ecm_srec_plan_t  g_srec;                /* monitor only */
 static atomic_int       g_bus_state_pub;       /* RT publishes, monitor reads */
@@ -322,7 +322,7 @@ static atomic_int       g_excl_depth;
 static atomic_uint      g_excl_gen;
 static uint64_t         g_recoveries_b, g_recoveries_full;   /* monitor only */
 
-/* ---- Giai doan 7.4: late / duplicate / stale replies (L5-07/08/09) ----
+/* ---- Phase 7.4: late / duplicate / stale replies (L5-07/08/09) ----
  * Index quarantine: SOEM hands out its 16 frame indexes in rotation (~1.1
  * frames per tick here) and accepts ANY frame carrying an index that is in
  * state EC_BUF_TX. A reply that comes back after its receive timed out is
@@ -340,8 +340,8 @@ static uint64_t g_quar_total, g_quar_overflow;
 /* Input freshness (fault_policy §3.4 / plan §3.4): offset of a 16-bit
  * counter in EVERY slave's inputs that the slave increments per cycle. It
  * is the slave's PDO contract -- given on the command line, never assumed. */
-static int      g_fresh_off   = -1;             /* --fresh-offset N: every slave, 16 bit (GD7.4 alias) */
-/* GD9.8: freshness per slave. The application counter is part of each
+static int      g_fresh_off   = -1;             /* --fresh-offset N: every slave, 16 bit (Phase 7.4 alias) */
+/* Phase 9.8: freshness per slave. The application counter is part of each
  * slave's own PDO contract, so where it is (and whether there is one) is
  * per slave: --fresh "all=0,2=off,5=4:8". g_fresh_on[s] = 0 means the
  * master cannot tell "WKC correct but data old" for that slave. */
@@ -356,8 +356,8 @@ static uint64_t g_stale_replies;                /* motion replies rejected by th
 static int      g_reply_check = 1;              /* --no-reply-check (negative control): count, don't act */
 static uint64_t g_foreign_replies[3];           /* [group]: reply header != what was sent */
 
-/* ---- Giai doan 9.1: group of every slave, from the command line ----
- * Until GD8 slaves 1..k were GROUP_MOTION and k+1..n GROUP_IO, with
+/* ---- Phase 9.1: group of every slave, from the command line ----
+ * Until Phase 8 slaves 1..k were GROUP_MOTION and k+1..n GROUP_IO, with
  * 0 < k < n: a bus of ONE slave (P1/P2/P4: one LAN9252) or of motion
  * slaves only (own slave + a commercial servo) could not run. Now:
  *   default               every slave GROUP_MOTION, GROUP_IO empty
@@ -400,7 +400,7 @@ static int parse_slave_list(const char *s, uint8_t *mark, int max, char *err, si
 
 /* One process-data exchange of every non-empty group, blocking, outside
  * the RT loop (before OP, keeping the watchdog fed, recovery). Order kept
- * from GD3: motion send/receive, then IO send/receive. */
+ * from Phase 3: motion send/receive, then IO send/receive. */
 static void pd_exchange_all(int timeout_us)
 {
     ecx_send_processdata_group(&ctx, GROUP_MOTION);
@@ -411,7 +411,7 @@ static void pd_exchange_all(int timeout_us)
     }
 }
 
-/* ---- Giai doan 8.5 (R-02): --link etf (patches/soem-txtime.patch) ----
+/* ---- Phase 8.5 (R-02): --link etf (patches/soem-txtime.patch) ----
  * `next` (CLOCK_MONOTONIC) stays the tick's target. With --link etf the RT
  * thread wakes g_etf_lead_us earlier and gives the motion frame
  * SCM_TXTIME = next + (TAI - MONO); the NIC launches it at `next` (ETF
@@ -428,7 +428,7 @@ static int         g_link_etf        = 0;
 static long        g_etf_lead_us     = 200;
 static long        g_etf_asap_us     = 150;
 static int         g_etf_prio        = 3;
-static int         g_etf_ns_per_byte = 0;        /* 0 = from the link speed (GD9.2): 8 at 1 Gbit/s, 80 at 100 Mbit/s */
+static int         g_etf_ns_per_byte = 0;        /* 0 = from the link speed (Phase 9.2): 8 at 1 Gbit/s, 80 at 100 Mbit/s */
 static uint64_t    g_tai_steps;                  /* RT only */
 static int64_t     g_tai_step_max;               /* RT only, ns */
 static atomic_ulong g_etf_missed, g_etf_invalid, g_etf_other;   /* telemetry thread */
@@ -452,12 +452,12 @@ typedef struct {
     uint64_t     wkc_mismatch;
     uint64_t     overrun;
     int64_t      cycle_ns;         /* nominal cycle period for this group */
-    ecm_wkc_stats_t wkcs;          /* Giai doan 7.2: WKC by class (NOFRAME/ZERO/PARTIAL/OVER) */
-    int          last_idx;         /* Giai doan 7.4: EtherCAT index of the last frame sent */
-    uint8_t      in_snap[256];     /* Giai doan 7.4: inputs before this receive, restored  */
+    ecm_wkc_stats_t wkcs;          /* Phase 7.2: WKC by class (NOFRAME/ZERO/PARTIAL/OVER) */
+    int          last_idx;         /* Phase 7.4: EtherCAT index of the last frame sent */
+    uint8_t      in_snap[256];     /* Phase 7.4: inputs before this receive, restored  */
     uint32_t     in_snap_len;      /*   when the reply turns out to be an old one           */
-    uint64_t     last_send_ns;     /* Giai doan 7.4: CLOCK_MONOTONIC right after sendto()    */
-    int          reply_foreign;    /* Giai doan 7.4: this cycle's reply belonged to another frame */
+    uint64_t     last_send_ns;     /* Phase 7.4: CLOCK_MONOTONIC right after sendto()    */
+    int          reply_foreign;    /* Phase 7.4: this cycle's reply belonged to another frame */
 } group_stats_t;
 
 /* Made file-scope (not local to main()) so telemetry_thread_fn's final
@@ -470,20 +470,20 @@ static group_stats_t io;
 
 
 /* One snapshot per second of wall-clock progress, written with NO I/O
- * inside the hot loop -- see the Giai doan 3 file header note on why this
+ * inside the hot loop -- see the Phase 3 file header note on why this
  * exists. */
 typedef struct {
     uint64_t tick;
     uint64_t motion_cycles, motion_mismatch, motion_overrun;
     uint64_t io_cycles,     io_mismatch,     io_overrun;
-    /* Giai doan 6 */
+    /* Phase 6 */
     int      dc_state;             /* ecm_dc_state_t */
     int64_t  dc_err_ns;            /* last phase error */
     int64_t  dc_sum_u;             /* cumulative adjust, all samples */
     uint64_t dc_samples, dc_wraps, dc_unlocks;
 } snapshot_t;
 
-/* GD10.1: 32768 = ~9.1 h at one snapshot/second, so an 8 h soak can still
+/* Phase 10.1: 32768 = ~9.1 h at one snapshot/second, so an 8 h soak can still
  * say WHEN a mismatch happened (4096 = 68 min stopped recording after the
  * first hour). ~104 byte each: ~3.4 MB of BSS, locked by mlockall like the
  * rest; written once per second, never on the cyclic path. */
@@ -511,7 +511,7 @@ static uint64_t ts_to_ns(const struct timespec *t)
     return (uint64_t)t->tv_sec * 1000000000ULL + (uint64_t)t->tv_nsec;
 }
 
-/* Giai doan 8.5 */
+/* Phase 8.5 */
 static void ns_to_ts(uint64_t ns, struct timespec *t)
 {
     t->tv_sec  = (time_t)(ns / 1000000000ULL);
@@ -534,7 +534,7 @@ static int64_t tai_minus_mono_ns(void)
 }
 
 /* Startup only: is there an ETF qdisc with offload on this interface? */
-/* GD9.2: link speed in Mbit/s from the driver (ETHTOOL_GSET), -1 if unknown
+/* Phase 9.2: link speed in Mbit/s from the driver (ETHTOOL_GSET), -1 if unknown
  * (veth reports SPEED_UNKNOWN). Used to pick the ETF ns/byte: at 100 Mbit/s
  * a byte takes 80 ns, ten times the 1 Gbit/s value the frames were spaced
  * with before, so back-to-back txtimes would overlap on the wire. */
@@ -576,8 +576,8 @@ static int request_all_state(int target, int timeout_us)
 {
     ctx.slavelist[0].state = target;
     ecx_writestate(&ctx, 0);
-    /* GD9.7 fix: ecx_statecheck() returns the state it READ (BRD: the OR
-     * of every slave's), not success. Up to GD9.6 this function returned
+    /* Phase 9.7 fix: ecx_statecheck() returns the state it READ (BRD: the OR
+     * of every slave's), not success. Up to Phase 9.6 this function returned
      * it as is, so a bus with one slave stuck in PREOP (0x02 | 0x04 = 0x06)
      * counted as "reached SAFEOP" and ecm_run went on to request OP. */
     return ecx_statecheck(&ctx, 0, target, timeout_us) == target;
@@ -590,7 +590,7 @@ static int request_all_state(int target, int timeout_us)
  * Jetson 2026-09-25: with GROUP_MOTION's SM watchdog at 3ms (see WD_TIME_*
  * above), slaves 1-4 latch SAFEOP+ERR / 0x001B (Sync manager watchdog) the
  * instant OP is requested -- every run, before any fault injection -- and
- * since there is no auto-recovery yet (Giai doan 7.3), they stay latched.
+ * since there is no auto-recovery yet (Phase 7.3), they stay latched.
  * Root cause: the gap between the last real PD cycle sent before this call
  * and the RT loop's first cyclic send (after ecx_statecheck's polling, 4x
  * pthread_create and the SCHED_FIFO switch) exceeds 3ms. Fix: send real PD
@@ -604,7 +604,7 @@ static int request_op_keepalive(int timeout_us)
     struct timespec t0, now;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
-        pd_exchange_all(EC_TIMEOUTRET);   /* GD9.1: skips an empty GROUP_IO */
+        pd_exchange_all(EC_TIMEOUTRET);   /* Phase 9.1: skips an empty GROUP_IO */
 
         ctx.slavelist[0].state = 0;
         ecx_readstate(&ctx);
@@ -623,15 +623,15 @@ static int request_op_keepalive(int timeout_us)
  * the "background" 1ms rate and the "every Nth tick" 8ms rate.
  * NO fprintf/logging here -- this runs inside the RT hot loop.
  *
- * Giai doan 4 additions: pushes (tick, group) into g_tx_order right after
+ * Phase 4 additions: pushes (tick, group) into g_tx_order right after
  * sendto() so the telemetry thread can later match the async TX
  * completion; and exposes three timing values via out-params (any of
  * which may be NULL if the caller doesn't need them) so the caller can
  * build this tick's rt_sample_t without duplicating the timing logic.
- * wkc_mismatch/overrun accounting is UNCHANGED from Giai doan 3 -- t0 is
+ * wkc_mismatch/overrun accounting is UNCHANGED from Phase 3 -- t0 is
  * still captured fresh at the start of this function, exactly as before,
  * so those two stats keep their exact original meaning. */
-/* Giai doan 7.4 (L5-07): does the reply now in rxbuf[idx] carry the same
+/* Phase 7.4 (L5-07): does the reply now in rxbuf[idx] carry the same
  * datagrams (command, address, length) as the frame sent with this index?
  * A reply to ANOTHER frame that reused the index (e.g. a late motion reply
  * taken as the IO reply) does not. Logical (LRW/LRD/LWR) and FRMW
@@ -664,7 +664,7 @@ static void service_group(group_stats_t *g, uint64_t tick,
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     ecx_send_processdata_group(&ctx, g->group);
-    /* Giai doan 7.4: index of the frame just sent (one frame per group
+    /* Phase 7.4: index of the frame just sent (one frame per group
      * here), for index-keyed turnaround pairing and index quarantine. */
     int sent_idx = ctx.idxstack.pushed > 0 ? ctx.idxstack.idx[ctx.idxstack.pushed - 1] : -1;
     g->last_idx = sent_idx;
@@ -675,19 +675,19 @@ static void service_group(group_stats_t *g, uint64_t tick,
     g->last_send_ns = ts_to_ns(&t_after_send);
     if (out_prep_send_ns) *out_prep_send_ns = ts_diff_ns(&t_after_send, &t0);
 
-    /* Giai doan 7.3 §2: the receive must end before the tick's deadline.
+    /* Phase 7.3 §2: the receive must end before the tick's deadline.
      * EC_TIMEOUTRET (2000 us) is twice the 1 ms cycle: one lost frame used
      * to cost 2-4 ms and turn into a chain of overruns. */
     int rx_timeout_us = g_rx_legacy ? EC_TIMEOUTRET
         : ecm_rx_timeout_us(ts_to_ns(&t_after_send), g_tick_deadline_ns, RX_MIN_US, (int)g_motion_cycle_us);
-    {   /* Giai doan 7.4: keep the inputs as they were, in case this reply
+    {   /* Phase 7.4: keep the inputs as they were, in case this reply
          * turns out to be an old one (see g_stale_replies) */
         uint32_t ib = ctx.grouplist[g->group].Ibytes;
         g->in_snap_len = ib <= sizeof(g->in_snap) ? ib : 0;
         if (g->in_snap_len) memcpy(g->in_snap, ctx.grouplist[g->group].inputs, g->in_snap_len);
     }
     int wkc = ecx_receive_processdata_group(&ctx, g->group, rx_timeout_us);
-    /* Giai doan 7.4: right after the receive, before anything else can
+    /* Phase 7.4: right after the receive, before anything else can
      * reuse the index: is it really the reply to what we sent? */
     g->reply_foreign = 0;
     if (wkc > 0 && sent_idx >= 0 && !reply_header_matches(sent_idx)) {
@@ -701,9 +701,9 @@ static void service_group(group_stats_t *g, uint64_t tick,
             wkc = EC_NOFRAME;
         }
     }
-    if (out_wkc) *out_wkc = wkc;   /* Giai doan 6: DC(b) only trusts ctx.DCtime if the frame came back */
+    if (out_wkc) *out_wkc = wkc;   /* Phase 6: DC(b) only trusts ctx.DCtime if the frame came back */
 
-    /* Giai doan 5: pump any pending mailbox I/O queued for this group
+    /* Phase 5: pump any pending mailbox I/O queued for this group
      * (at most ECM_MBX_LIMIT_PER_CYCLE jobs -- see ecm_mailbox.h).
      * Placed BEFORE t1 is captured so its cost is included in
      * cycle_occupancy_ns (quantity #4) on purpose: L4-03 needs to
@@ -736,11 +736,11 @@ static void service_group(group_stats_t *g, uint64_t tick,
 
     g->cycles++;
     if (wkc != g->expected_wkc) g->wkc_mismatch++;
-    ecm_wkc_account(&g->wkcs, wkc, (int)g->expected_wkc);   /* Giai doan 7.2, no syscalls */
+    ecm_wkc_account(&g->wkcs, wkc, (int)g->expected_wkc);   /* Phase 7.2, no syscalls */
     if (elapsed_ns > g->cycle_ns) g->overrun++;
 }
 
-/* GD9.7: the only reader of SOEM's error list while the threads run (see
+/* Phase 9.7: the only reader of SOEM's error list while the threads run (see
  * the file header, point on elist). RT-safe: no syscalls, copies only, and
  * the cheap ecaterror check keeps an empty list at one load per tick. */
 static void elist_drain(uint64_t tick)
@@ -812,7 +812,7 @@ static void print_all_snapshots(void)
     }
 }
 
-/* ---- SM watchdog and DC anchor as functions (Giai doan 7.3): also used
+/* ---- SM watchdog and DC anchor as functions (Phase 7.3): also used
  * when a power-cycled slave is brought back. See main() for the rationale
  * of the values. ---- */
 #define REG_SM_WD_DIVIDER     0x0400u
@@ -837,8 +837,8 @@ static int write_sm_watchdog(int slave)
 static uint16_t g_dc_ref;           /* reference clock slave (1-based)   */
 static int64_t  g_dc_cyc_ns;        /* SYNC0 cycle                        */
 
-/* Giai doan 9.5: arm SYNC0 (or SYNC0 + SYNC1) of one slave. Without --eni:
- * SYNC0 = motion cycle, shift 0, as since GD6. With --eni: the slave's own
+/* Phase 9.5: arm SYNC0 (or SYNC0 + SYNC1) of one slave. Without --eni:
+ * SYNC0 = motion cycle, shift 0, as since Phase 6. With --eni: the slave's own
  * AssignActivate (0x0300 SYNC0, 0x0700 SYNC0 + SYNC1), CycleTime1 (0x09A4,
  * SYNC1 relative to SYNC0) and ShiftTime. Startup and RECOVERY both come
  * here, so a power-cycled slave gets back exactly what the ENI asked. */
@@ -874,7 +874,7 @@ static int dc_anchor(int32_t *lead_out)
     if (w != 1 || lead <= 0) return w != 1 ? w : 0;
     ecm_dc_cfg_t dcfg;
     ecm_dc_default_cfg(&dcfg, g_dc_cyc_ns, g_dc_setpoint_ns);
-    /* Giai doan 7.4: reply-age gate on. Valid here because every receive
+    /* Phase 7.4: reply-age gate on. Valid here because every receive
      * ends by the tick deadline (< 1 cycle after the send) and the DC
      * update gets the send time (see ecm_dc.h). */
     dcfg.gate_ns = g_dc_cyc_ns;
@@ -883,7 +883,7 @@ static int dc_anchor(int32_t *lead_out)
     return w;
 }
 
-/* ---- Giai doan 7.3: telemetry exclusion window (docs/fault_policy.md
+/* ---- Phase 7.3: telemetry exclusion window (docs/fault_policy.md
  * §5.3). Anyone about to put frames on the wire that the RT thread's
  * tx_order ring does not describe (monitor recovery, LOST probing) opens a
  * window; the telemetry thread discards what it sees meanwhile and resyncs
@@ -899,7 +899,7 @@ static void excl_end(void)
     atomic_fetch_sub_explicit(&g_excl_depth, 1, memory_order_acq_rel);
 }
 
-/* ---- Giai doan 7.4: index quarantine (RT thread) ---- */
+/* ---- Phase 7.4: index quarantine (RT thread) ---- */
 static void quar_add(int idx, uint64_t tick)
 {
     if (!g_quarantine || idx < 0 || idx >= EC_MAXBUF) return;
@@ -938,8 +938,8 @@ static void quar_expire(uint64_t tick)
     pthread_mutex_unlock(&ctx.port.getindex_mutex);
 }
 
-/* ---- Giai doan 7.4: input freshness, one slave (RT thread, no syscalls) ---- */
-/* GD9.8: "all=0,2=off,5=4:8" -> per slave on/byte/bits. Entries are
+/* ---- Phase 7.4: input freshness, one slave (RT thread, no syscalls) ---- */
+/* Phase 9.8: "all=0,2=off,5=4:8" -> per slave on/byte/bits. Entries are
  * applied left to right, a later one overrides; ranges "3-6=..." allowed.
  * Value: "off", or BYTE[:BITS] with BITS 8, 16 (default) or 32. */
 static int fresh_parse(const char *spec, int n, char *err, size_t errsz)
@@ -1018,7 +1018,7 @@ static void rt_exec_command(uint64_t tick)
 }
 
 /* ==========================================================================
- * Giai doan 4: the four non-RT threads.
+ * Phase 4: the four non-RT threads.
  *
  * IMPORTANT correctness note: pthread_create() defaults to
  * PTHREAD_INHERIT_SCHED, meaning a new thread inherits the CREATING
@@ -1027,7 +1027,7 @@ static void rt_exec_command(uint64_t tick)
  * of these threads MUST explicitly switch itself to SCHED_OTHER on entry,
  * or it would silently keep SCHED_FIFO 80 -- exactly the kind of
  * mis-priority bug that would surface much later as an unexplained
- * latency spike. isolcpus=3 (Giai doan 1) already keeps these threads off
+ * latency spike. isolcpus=3 (Phase 1) already keeps these threads off
  * the isolated core by default, so no explicit CPU affinity is set here.
  * ========================================================================== */
 
@@ -1053,7 +1053,7 @@ static int enable_tx_sw_timestamping(int fd)
     return setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPING, &flags, sizeof(flags));
 }
 
-/* ---- Giai doan 4, RX side (option (b), confirmed 22/9): a SEPARATE,
+/* ---- Phase 4, RX side (option (b), confirmed 22/9): a SEPARATE,
  * passive AF_PACKET socket bound to the same interface, used only to
  * observe genuine incoming EtherCAT frames with SO_TIMESTAMPING -- this
  * keeps nicdrv.c (which reads with plain recv(), no cmsg) completely
@@ -1095,7 +1095,7 @@ static int open_passive_rx_socket(const char *ifname)
     return fd;
 }
 
-/* Giai doan 7.4: 2 ms (was 10 ms). Index pairing gives up on a send after
+/* Phase 7.4: 2 ms (was 10 ms). Index pairing gives up on a send after
  * TURNAROUND_MAX_AGE_TICKS; a 10 ms batch made it give up on sends whose
  * TX completion was simply still waiting in the error queue. */
 #define TELEMETRY_POLL_US 2000
@@ -1114,7 +1114,7 @@ static void *telemetry_thread_fn(void *arg)
     /* TX side: fully confirmed (22/9) -- ctx.port is an EMBEDDED struct,
      * so this is a dot, not an arrow. See the file header note above. */
     int soem_raw_fd = ctx.port.sockhandle;
-    /* Giai doan 7.2 finding (sandbox, kernel 6.18, veth): with TX
+    /* Phase 7.2 finding (sandbox, kernel 6.18, veth): with TX
      * timestamping on SOEM's own socket and this thread draining its error
      * queue while the RT thread recv()s on the same fd, SOEM saw ~1% motion
      * NOFRAME, 30% IO PARTIAL and replies landing in the wrong index
@@ -1137,7 +1137,7 @@ static void *telemetry_thread_fn(void *arg)
     }
 
     int print_counter = 0;
-    unsigned excl_seen_gen = 0;                 /* Giai doan 7.3 exclusion window */
+    unsigned excl_seen_gen = 0;                 /* Phase 7.3 exclusion window */
     uint64_t excl_polls = 0, excl_order = 0, excl_txc = 0, excl_rx = 0;
 
     while (!g_telemetry_stop) {
@@ -1152,7 +1152,7 @@ static void *telemetry_thread_fn(void *arg)
              * queue (TX) and passive_rx_fd (RX), never from this field. */
         }
 
-        /* Giai doan 7.3 (docs/fault_policy.md §5.3): while another thread
+        /* Phase 7.3 (docs/fault_policy.md §5.3): while another thread
          * sends frames of its own (recovery) or the bus is LOST/RECOVER,
          * send order != tx_order order. Discard everything seen in such a
          * poll, count it, and restart the matcher once the window closed. */
@@ -1189,7 +1189,7 @@ static void *telemetry_thread_fn(void *arg)
 
         turnaround_drain_tx_order(&g_telemetry.turnaround, &g_tx_order);
 
-        /* Giai doan 8.5: --no-tx-ts but --link etf: ETF drop reports still
+        /* Phase 8.5: --no-tx-ts but --link etf: ETF drop reports still
          * land on SOEM's error queue. Drain them (a non-empty error queue
          * keeps POLLERR set and turns SOEM's ppoll() into a busy loop). */
         if (soem_raw_fd < 0 && g_link_etf) {
@@ -1224,11 +1224,11 @@ static void *telemetry_thread_fn(void *arg)
 
                 ssize_t tr = recvmsg(soem_raw_fd, &msg, MSG_ERRQUEUE);
                 if (tr < 0) break;
-                /* Giai doan 7.4: the error queue returns the sent frame
+                /* Phase 7.4: the error queue returns the sent frame
                  * itself -> pair by its EtherCAT index, not by position */
                 int tx_idx = turnaround_frame_idx((const uint8_t *)buf, (size_t)tr);
 
-                int etf_err = 0;   /* Giai doan 8.5: an ETF drop report, not a TX completion */
+                int etf_err = 0;   /* Phase 8.5: an ETF drop report, not a TX completion */
                 for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
                     if (cmsg->cmsg_level == SOL_PACKET && cmsg->cmsg_type == PACKET_TX_TIMESTAMP) {
                         const struct sock_extended_err *ee = (const struct sock_extended_err *)CMSG_DATA(cmsg);
@@ -1275,7 +1275,7 @@ static void *telemetry_thread_fn(void *arg)
                     if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMPING) {
                         struct timespec *ts = (struct timespec *)CMSG_DATA(cmsg);
                         uint64_t rx_ts_ns = ts_to_ns(&ts[0]);
-                        /* Giai doan 7.4: pair by EtherCAT index (duplicates,
+                        /* Phase 7.4: pair by EtherCAT index (duplicates,
                          * late and lost replies no longer shift the pairing) */
                         turnaround_on_rx_arrival_idx(&g_telemetry.turnaround, rx_ts_ns,
                                                      turnaround_frame_idx((const uint8_t *)buf, (size_t)r),
@@ -1304,7 +1304,7 @@ static void *telemetry_thread_fn(void *arg)
         hist_add(&g_telemetry.occupancy_hist,   s.cycle_occupancy_ns);
     }
     if (passive_rx_fd >= 0) close(passive_rx_fd);
-    fprintf(stderr, "\n=== Giai doan 4 telemetry (final) ===\n");
+    fprintf(stderr, "\n=== Phase 4 telemetry (final) ===\n");
     fprintf(stderr, "  ring drop_count=%" PRIu64 "  turnaround: matched=%" PRIu64
                     " implausible=%" PRIu64 " tx_io_discarded=%" PRIu64 " rx_io_discarded=%" PRIu64
                     " evicted_no_match=%" PRIu64 " completion_no_pending=%" PRIu64
@@ -1313,12 +1313,12 @@ static void *telemetry_thread_fn(void *arg)
             g_telemetry.turnaround.stat_tx_io_discarded, g_telemetry.turnaround.stat_rx_io_discarded,
             g_telemetry.turnaround.stat_evicted_no_match, g_telemetry.turnaround.stat_completion_no_pending,
             g_telemetry.turnaround.stat_rx_no_pending);
-    fprintf(stderr, "  index pairing (Giai doan 7.4): tx_skipped=%" PRIu64 " tx_unmatched=%" PRIu64
+    fprintf(stderr, "  index pairing (Phase 7.4): tx_skipped=%" PRIu64 " tx_unmatched=%" PRIu64
                     " rx_skipped=%" PRIu64 " (sends whose reply never came) rx_unmatched=%" PRIu64
                     " (duplicate/late/foreign arrivals)\n",
             g_telemetry.turnaround.stat_tx_skipped, g_telemetry.turnaround.stat_tx_unmatched,
             g_telemetry.turnaround.stat_rx_skipped, g_telemetry.turnaround.stat_rx_unmatched);
-    fprintf(stderr, "  exclusion windows (Giai doan 7.3): polls=%" PRIu64 " discarded tx_order=%" PRIu64
+    fprintf(stderr, "  exclusion windows (Phase 7.3): polls=%" PRIu64 " discarded tx_order=%" PRIu64
                     " tx_completions=%" PRIu64 " rx=%" PRIu64 "\n", excl_polls, excl_order, excl_txc, excl_rx);
     fprintf(stderr, "  reconcile TX side: matched+implausible+tx_io_discarded+completion_no_pending = %" PRIu64
                     "  (expect == total sendto() calls = motion.cycles + io.cycles = %" PRIu64 ")\n",
@@ -1348,13 +1348,13 @@ static void *app_thread_fn(void *arg)
     return NULL;
 }
 
-/* Giai doan 5: real mailbox worker. The actual FPWR/FPRD socket I/O for
+/* Phase 5: real mailbox worker. The actual FPWR/FPRD socket I/O for
  * pending SDO/mailbox traffic still happens on the RT thread (see
  * ecm_mailbox_rt_pump_group() inside service_group() below) -- this
  * thread only ever talks to SOEM's PI-mutex-protected cyclic mailbox
  * queue via ecx_SDOread()/ecx_SDOwrite(), never the socket directly.
  * g_mbx is created in main() before this thread is spawned (see the
- * Giai doan 4 thread-ordering note above pthread_create() in main). */
+ * Phase 4 thread-ordering note above pthread_create() in main). */
 static void *mailbox_thread_fn(void *arg)
 {
     (void)arg;
@@ -1364,13 +1364,13 @@ static void *mailbox_thread_fn(void *arg)
 }
 
 /* ~100ms cadence per master_plan_v2.md §2.4. Nothing to poll yet (no
- * CoE/mailbox until Giai doan 5) -- deliberately its OWN thread, separate
- * from telemetry, so that Giai doan 9's future SDO/mailbox calls here
+ * CoE/mailbox until Phase 5) -- deliberately its OWN thread, separate
+ * from telemetry, so that Phase 9's future SDO/mailbox calls here
  * (which can block far longer than a 1ms/8ms cycle) can never delay
- * telemetry's ring-draining -- see the Giai doan 4 review note on this. */
+ * telemetry's ring-draining -- see the Phase 4 review note on this. */
 static const char *al_code_str(uint16_t code) { return ec_ALstatuscode2string(code); }
 
-/* GD9.7: a requested state was not reached at startup -> say which slaves,
+/* Phase 9.7: a requested state was not reached at startup -> say which slaves,
  * with their AL status code and its class, instead of one line. */
 static void report_state_failure(int target, const char *name)
 {
@@ -1442,7 +1442,7 @@ static void diag_process_pending(void)
 }
 
 /* ==========================================================================
- * Giai doan 7.3: recovery, monitor side (docs/fault_policy.md §4, §5).
+ * Phase 7.3: recovery, monitor side (docs/fault_policy.md §4, §5).
  * Everything here may block for seconds; it runs on the monitor thread.
  * ========================================================================== */
 static double mono_now_s(void)
@@ -1467,7 +1467,7 @@ static uint64_t le64(const uint8_t *p)
 static void dc_restore_slave(int s)
 {
     ec_slavet *sl = &ctx.slavelist[s];
-    /* Giai doan 8.4: with --eni, SYNC0 slaves are the ENI's DC slaves */
+    /* Phase 8.4: with --eni, SYNC0 slaves are the ENI's DC slaves */
     int had_sync0 = g_eni_on ? g_eni.slave[s - 1].dc : (sl->group == GROUP_MOTION);
     if (!g_dc_enabled || !had_sync0 || !sl->hasdc) return;
     ec_slavet *rf = &ctx.slavelist[g_dc_ref];
@@ -1508,7 +1508,7 @@ static void dc_restore_slave(int s)
 static int reconfig_po2so_hook(ecx_contextt *c, uint16 slave)
 {
     int f = write_sm_watchdog(slave);
-    /* Giai doan 8.4: a power-cycled slave lost the ENI's PS CoE writes too */
+    /* Phase 8.4: a power-cycled slave lost the ENI's PS CoE writes too */
     int eni_ok = g_eni_on ? ecm_eni_soem_po2so(c, slave) : 1;
     dc_restore_slave(slave);
     return f == 0 && eni_ok;
@@ -1527,7 +1527,7 @@ static int recover_path_b(int s)
         st = ecx_reconfig_slave(&ctx, (uint16)s, EC_TIMEOUTRET3);
         ctx.slavelist[s].PO2SOconfig = NULL;
 #ifdef ECMASTER_SOEM_MBXCNT_PATCH
-        /* Giai doan 7.4: a power-cycled slave starts its mailbox Cnt at 1
+        /* Phase 7.4: a power-cycled slave starts its mailbox Cnt at 1
          * again; forget the old one or its first response may be taken
          * for a duplicate (patches/soem-mbx-cnt.patch). */
         ctx.slavelist[s].mbxincnt = 0;
@@ -1601,7 +1601,7 @@ static void recovery_step(void)
         if (rec)
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d back in OP (recovery #%llu)\n",
                     s, (unsigned long long)g_srec.s[i].recoveries);
-        if (gu && g_srec.s[i].failed_config)      /* GD9.7 */
+        if (gu && g_srec.s[i].failed_config)      /* Phase 9.7 */
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d: AL 0x%02x code 0x%04x (%s) is a CONFIGURATION "
                     "error -> FAILED(config) at once, no retry (the same configuration would be refused "
                     "again; fix the ENI/ESI or the slave), needs an operator\n",
@@ -1640,7 +1640,7 @@ static void recovery_step(void)
 
 static void print_events(void)
 {
-    g_diag.emcy_lost = atomic_load_explicit(&g_emcy_ev_drops_pub, memory_order_relaxed);   /* GD9.7 */
+    g_diag.emcy_lost = atomic_load_explicit(&g_emcy_ev_drops_pub, memory_order_relaxed);   /* Phase 9.7 */
     ecm_event_t e;
     while (ecm_evring_pop(&g_ev, &e)) {
         if (e.type == ECM_EV_BUS) {
@@ -1664,7 +1664,7 @@ static void print_events(void)
         } else if (e.type == ECM_EV_CMD_DONE) {
             if (e.b <= 0)
                 fprintf(stderr, "ecm_run: [RECOVERY] slave %d: AL control write not acknowledged (wkc=%d)\n", e.a, e.b);
-        } else if (e.type == ECM_EV_EMCY) {   /* GD9.7 */
+        } else if (e.type == ECM_EV_EMCY) {   /* Phase 9.7 */
             ecm_emcy_t m = { .t_ns = (uint64_t)(mono_now_s() * 1e9), .tick = e.tick,
                              .code = (uint16_t)((uint32_t)e.a & 0xFFFF), .reg = (uint8_t)((uint32_t)e.a >> 16),
                              .data = { (uint8_t)((uint32_t)e.a >> 24), (uint8_t)e.b, (uint8_t)((uint32_t)e.b >> 8),
@@ -1688,7 +1688,7 @@ static void print_events(void)
     }
 }
 
-/* Giai doan 7.2/7.3. 10 ms cadence: bus events and RECOVER requests need a
+/* Phase 7.2/7.3. 10 ms cadence: bus events and RECOVER requests need a
  * fast reaction; the diagnostic snapshot (and the per-slave planner that
  * works on it) still runs every 100 ms. Blocking is fine: SCHED_OTHER. */
 static void *monitor_thread_fn(void *arg)
@@ -1723,14 +1723,14 @@ int main(int argc, char **argv)
 {
     const char *ifname = NULL;
     int n = 0;
-    int motion_slaves = -1;          /* --motion-slaves k (alias, GD3..GD8) */
-    const char *io_list = NULL;      /* --io-slaves LIST (GD9.1) */
+    int motion_slaves = -1;          /* --motion-slaves k (alias, Phase 3..Phase 8) */
+    const char *io_list = NULL;      /* --io-slaves LIST (Phase 9.1) */
     long motion_cycle_us = 1000;
     long io_cycle_us     = 8000;
     long duration_sec    = 0; /* 0 = run until Ctrl+C */
-    int  no_dc           = 0; /* Giai doan 6 */
+    int  no_dc           = 0; /* Phase 6 */
     long dc_setpoint_pct = 30;
-    long n_lost          = 100; /* Giai doan 7.3 */
+    long n_lost          = 100; /* Phase 7.3 */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -1739,7 +1739,7 @@ int main(int argc, char **argv)
             n = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--motion-slaves") == 0 && i + 1 < argc) {
             motion_slaves = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--io-slaves") == 0 && i + 1 < argc) {   /* Giai doan 9.1 */
+        } else if (strcmp(argv[i], "--io-slaves") == 0 && i + 1 < argc) {   /* Phase 9.1 */
             io_list = argv[++i];
         } else if (strcmp(argv[i], "--motion-cycle-us") == 0 && i + 1 < argc) {
             motion_cycle_us = atol(argv[++i]);
@@ -1757,23 +1757,23 @@ int main(int argc, char **argv)
             g_diag_enabled = 0;
         } else if (strcmp(argv[i], "--diag-file") == 0 && i + 1 < argc) {
             g_diag_path = argv[++i];
-        } else if (strcmp(argv[i], "--no-recover") == 0) {           /* Giai doan 7.3 */
+        } else if (strcmp(argv[i], "--no-recover") == 0) {           /* Phase 7.3 */
             g_recover_enabled = 0;
         } else if (strcmp(argv[i], "--rx-timeout-legacy") == 0) {
             g_rx_legacy = 1;
         } else if (strcmp(argv[i], "--n-lost") == 0 && i + 1 < argc) {
             n_lost = atol(argv[++i]);
-        } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Giai doan 7.4 */
+        } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Phase 7.4 */
             g_quarantine = 0;
         } else if (strcmp(argv[i], "--no-reply-check") == 0) {
             g_reply_check = 0;
         } else if (strcmp(argv[i], "--fresh-offset") == 0 && i + 1 < argc) {
             g_fresh_off = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--pdo-scan") == 0) {                 /* GD9.10 */
+        } else if (strcmp(argv[i], "--pdo-scan") == 0) {                 /* Phase 9.10 */
             g_pdo_scan = 1;
         } else if (strcmp(argv[i], "--pdo-dump") == 0) {
             g_pdo_dump = 1;
-        } else if (strcmp(argv[i], "--pdo-trust-eni") == 0) {            /* GD10.1 */
+        } else if (strcmp(argv[i], "--pdo-trust-eni") == 0) {            /* Phase 10.1 */
             g_pdo_trust_eni = 1;
         } else if (strcmp(argv[i], "--pdo-own-vendor") == 0 && i + 1 < argc) {
             char vb[256], *save = NULL;
@@ -1792,11 +1792,11 @@ int main(int argc, char **argv)
             g_pdo_set_spec = argv[++i];
         } else if (strcmp(argv[i], "--pdo-get") == 0 && i + 1 < argc) {
             g_pdo_get_spec = argv[++i];
-        } else if (strcmp(argv[i], "--fresh") == 0 && i + 1 < argc) {   /* GD9.8 */
+        } else if (strcmp(argv[i], "--fresh") == 0 && i + 1 < argc) {   /* Phase 9.8 */
             g_fresh_spec = argv[++i];
         } else if (strcmp(argv[i], "--fresh-stale") == 0 && i + 1 < argc) {
             g_fresh_stale = (uint32_t)atol(argv[++i]);
-        } else if (strcmp(argv[i], "--link") == 0 && i + 1 < argc) {  /* Giai doan 8.5 */
+        } else if (strcmp(argv[i], "--link") == 0 && i + 1 < argc) {  /* Phase 8.5 */
             const char *l = argv[++i];
             if (strcmp(l, "etf") == 0) g_link_etf = 1;
             else if (strcmp(l, "af_packet") == 0) g_link_etf = 0;
@@ -1809,11 +1809,11 @@ int main(int argc, char **argv)
             g_etf_prio = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--etf-ns-per-byte") == 0 && i + 1 < argc) {
             g_etf_ns_per_byte = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--eni") == 0 && i + 1 < argc) {   /* Giai doan 8.4 */
+        } else if (strcmp(argv[i], "--eni") == 0 && i + 1 < argc) {   /* Phase 8.4 */
             g_eni_path = argv[++i];
-        } else if (strcmp(argv[i], "--eni-allow-unknown-regcmd") == 0) {  /* GD9.6, never in CI */
+        } else if (strcmp(argv[i], "--eni-allow-unknown-regcmd") == 0) {  /* Phase 9.6, never in CI */
             g_eni_allow_unknown_reg = 1;
-        } else if (strcmp(argv[i], "--sdo-timeout-ms") == 0 && i + 1 < argc) { /* GD9.6 */
+        } else if (strcmp(argv[i], "--sdo-timeout-ms") == 0 && i + 1 < argc) { /* Phase 9.6 */
             g_sdo_timeout_ms = atoi(argv[++i]);
         } else {
             fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
@@ -1846,8 +1846,8 @@ int main(int argc, char **argv)
                 state_timeout_us(ECM_ENI_ST_PREOP) / 1000, state_timeout_us(ECM_ENI_ST_SAFEOP) / 1000,
                 state_timeout_us(ECM_ENI_ST_OP) / 1000, g_eni.nreg);
     }
-    /* Giai doan 9.1: group of every position. --motion-slaves k keeps its
-     * GD3..GD8 meaning (1..k motion, k+1..n IO, 0 < k < n) so every existing
+    /* Phase 9.1: group of every position. --motion-slaves k keeps its
+     * Phase 3..Phase 8 meaning (1..k motion, k+1..n IO, 0 < k < n) so every existing
      * script and golden capture runs unchanged. */
     int groups_ok = ifname && n > 0 && n <= EC_MAXSLAVE;
     if (groups_ok && motion_slaves >= 0 && io_list) {
@@ -1885,9 +1885,9 @@ int main(int argc, char **argv)
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
             "       [--no-quarantine] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
-            "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (GD9.8, per slave)\n"
-            "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (GD9.10)\n"
-            "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (GD10.1: binds into other vendors need --pdo-scan)\n"
+            "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
+            "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
+            "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -1899,8 +1899,8 @@ int main(int argc, char **argv)
     }
     long ticks_per_io = io_cycle_us / motion_cycle_us;
 
-    g_ifname = ifname;   /* Giai doan 4: telemetry thread's passive RX socket needs this */
-    g_motion_cycle_us = motion_cycle_us;   /* Giai doan 7.3: receive budget */
+    g_ifname = ifname;   /* Phase 4: telemetry thread's passive RX socket needs this */
+    g_motion_cycle_us = motion_cycle_us;   /* Phase 7.3: receive budget */
 
     /* Open the passive RX socket HERE, before anything else -- see
      * g_passive_rx_fd's declaration comment for why this must happen
@@ -1921,7 +1921,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "ecx_init on %s failed\n", ifname);
         return 1;
     }
-    /* Giai doan 8.5: --link etf. Before the first frame: with an ETF qdisc
+    /* Phase 8.5: --link etf. Before the first frame: with an ETF qdisc
      * every frame without a valid txtime is dropped, config included. */
     if (g_link_etf) {
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
@@ -1933,7 +1933,7 @@ int main(int argc, char **argv)
         }
         int sp = link_speed_mbps(ifname);
         if (g_etf_ns_per_byte <= 0) {
-            /* Never below the 1 Gbit/s value 8 used until GD9.2 (veth reports
+            /* Never below the 1 Gbit/s value 8 used until Phase 9.2 (veth reports
              * 10 Gbit/s; the i226 at 2.5 Gbit/s never carries EtherCAT). */
             g_etf_ns_per_byte = (sp > 0 && sp < 1000) ? (8000 + sp - 1) / sp : 8;
             fprintf(stderr, "ecm_run: link etf: %s speed %d Mbit/s -> %d ns/byte%s\n", ifname, sp,
@@ -1973,7 +1973,7 @@ int main(int argc, char **argv)
     } else if (wc < n) {
         fprintf(stderr, "Warning: found %d slave(s), expected %d -- continuing with what was found.\n", wc, n);
         n = wc;
-        /* GD3..GD8 behaviour of --motion-slaves: keep at least one IO slave */
+        /* Phase 3..Phase 8 behaviour of --motion-slaves: keep at least one IO slave */
         if (motion_slaves >= n && n > 1) {
             motion_slaves = n - 1;
             for (int s = 1; s <= n; s++) g_is_io[s] = (uint8_t)(s > motion_slaves);
@@ -2025,9 +2025,9 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Giai doan 9.1: ecx_config_map_group()'s return value includes the
-     * logstartaddr that its mbxstatuslength is off by (see the GD5 note
-     * further below); up to GD8 this line printed e.g. "65572 byte" for a
+    /* Phase 9.1: ecx_config_map_group()'s return value includes the
+     * logstartaddr that its mbxstatuslength is off by (see the Phase 5 note
+     * further below); up to Phase 8 this line printed e.g. "65572 byte" for a
      * 36 byte motion map. Print the bytes the group really sends. */
     motion_iomap_size -= (int)ctx.grouplist[GROUP_MOTION].logstartaddr;
     io_iomap_size     -= (int)ctx.grouplist[GROUP_IO].logstartaddr;
@@ -2035,7 +2035,7 @@ int main(int argc, char **argv)
             n_motion, motion_iomap_size, n_io, io_iomap_size,
             g_io_active ? "" : " -- GROUP_IO empty: never sent");
 
-    /* ---- GD9.10: PDO table (ENI and/or scan), checked against what SOEM
+    /* ---- Phase 9.10: PDO table (ENI and/or scan), checked against what SOEM
      * mapped, then the --pdo-set/--pdo-get references bound. Scanning
      * uses plain SDO reads: here the cyclic mailbox is not enabled yet. */
     if (g_eni_on && g_eni.npdo) {
@@ -2085,7 +2085,7 @@ int main(int argc, char **argv)
             ecx_close(&ctx); return 1;
         }
         const char *specs[2] = { g_pdo_set_spec, g_pdo_get_spec };
-        /* GD10.1: the table must come from the bus for every bound slave
+        /* Phase 10.1: the table must come from the bus for every bound slave
          * this project did not build (N-03). Checked before any bind, so
          * the refusal names all such slaves at once. */
         if (g_pdo != &g_pdo_bus) {
@@ -2150,9 +2150,9 @@ int main(int argc, char **argv)
         }
     }
 
-    /* ---- GD9.8: freshness per slave. Resolved here, after mapping, so a
+    /* ---- Phase 9.8: freshness per slave. Resolved here, after mapping, so a
      * counter outside a slave's inputs is refused now (by name) instead of
-     * being skipped silently every cycle. --fresh-offset N (GD7.4) is the
+     * being skipped silently every cycle. --fresh-offset N (Phase 7.4) is the
      * same as --fresh all=N; --fresh entries override it. */
     if (g_fresh_off >= 0 || g_fresh_spec) {
         int nf = ctx.slavecount < ECM_SREC_MAX_SLAVES ? ctx.slavecount : ECM_SREC_MAX_SLAVES;
@@ -2195,7 +2195,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Failed to reach PREOP\n"); report_state_failure(EC_STATE_PRE_OP, "PREOP"); ecx_close(&ctx); return 1;
     }
 
-    /* ---- Giai doan 5: enable SOEM's cyclic mailbox handler now that
+    /* ---- Phase 5: enable SOEM's cyclic mailbox handler now that
      * every slave is >= PRE_OP, and BEFORE requesting SAFEOP -- this
      * must happen before the mailbox thread (spawned further below,
      * still well before OP) or the RT thread ever touch mailbox
@@ -2209,7 +2209,7 @@ int main(int argc, char **argv)
     int mbx_enabled = ecm_mailbox_enable_cyclic(&ctx);
     fprintf(stderr, "ecm_run: cyclic mailbox enabled on %d/%d slave(s)\n", mbx_enabled, n);
 
-    /* Giai doan 5: workaround for a length-computation asymmetry in
+    /* Phase 5: workaround for a length-computation asymmetry in
      * SOEM's ecx_config_map_group() (ec_config.c), confirmed by gdb +
      * reading the source directly: Obytes and Ibytes are each computed
      * as (LogAddr - logstartaddr), but mbxstatuslength is computed as
@@ -2225,9 +2225,9 @@ int main(int argc, char **argv)
     ctx.grouplist[GROUP_MOTION].mbxstatuslength -= ctx.grouplist[GROUP_MOTION].logstartaddr;
     ctx.grouplist[GROUP_IO].mbxstatuslength     -= ctx.grouplist[GROUP_IO].logstartaddr;
 
-    /* ---- Giai doan 5: SM watchdog -- written explicitly, never left at
+    /* ---- Phase 5: SM watchdog -- written explicitly, never left at
      * whatever the slave's power-on default happens to be (roadmap
-     * requirement: "SM watchdog cấu hình tường minh"). Two registers per
+     * requirement: "SM watchdog configured explicitly"). Two registers per
      * slave (Section II §2.10 / ETG.1000-4):
      *   0x0400 Watchdog Divider    -- base tick = (Divider+2) * 40ns
      *   0x0420 Watchdog Time (process data) -- actual timeout =
@@ -2254,7 +2254,7 @@ int main(int argc, char **argv)
      * GROUP_MOTION (if sized for 8ms):
      *   GROUP_MOTION: 30  * 100us = 3ms  (3x its 1ms nominal cycle --
      *     comfortably above every occupancy/wake_jitter figure measured
-     *     in Giai doan 4/5 so far, worst case ~232us, yet trips within
+     *     in Phase 4/5 so far, worst case ~232us, yet trips within
      *     3ms of an actual master hang)
      *   GROUP_IO:     240 * 100us = 24ms (3x its 8ms nominal cycle,
      *     same reasoning)
@@ -2262,9 +2262,9 @@ int main(int argc, char **argv)
      * NOTE: soft_bus accepts these writes (generic register space, no
      * special handling needed) but does not yet ACT on the watchdog
      * itself (no trip/countdown behavior simulated) -- out of scope
-     * for this pass. DoD for this step is "cấu hình tường minh, test
-     * được bằng tshark", not "trip behavior simulated end to end". ---- */
-    /* (register/value constants moved to file scope in Giai doan 7.3:
+     * for this pass. DoD for this step is "configured explicitly,
+     * verifiable with tshark", not "trip behavior simulated end to end". ---- */
+    /* (register/value constants moved to file scope in Phase 7.3:
      * write_sm_watchdog() also runs after recovering a power-cycled slave) */
 
     int wd_fail = 0;
@@ -2281,11 +2281,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "ecm_run: SM watchdog FPWR failures: %d\n", wd_fail);
     }
 
-    /* ---- Giai doan 6: Distributed Clocks, DC(a). Blocking frames, so
+    /* ---- Phase 6: Distributed Clocks, DC(a). Blocking frames, so
      * they go here with the SM watchdog writes: before any thread exists
-     * (Giai doan 5 lesson: a blocking frame from another thread while the
+     * (Phase 5 lesson: a blocking frame from another thread while the
      * RT loop runs desyncs g_tx_order), and in PREOP, before SAFEOP. ---- */
-    /* Giai doan 9.5: with --eni the DC configuration is the ENI's, slave by
+    /* Phase 9.5: with --eni the DC configuration is the ENI's, slave by
      * slave: reference clock, which slaves get SYNC0, SYNC1, shift. What
      * SOEM / ecm_run cannot do is refused here, before SAFE-OP. */
     int first_dc = 0;                       /* first DC-capable slave on the bus */
@@ -2342,7 +2342,7 @@ int main(int argc, char **argv)
         ecx_configdc(&ctx);
         uint16_t ref = ctx.grouplist[GROUP_MOTION].DCnext;
 
-        /* without --eni the reference must be slave 1, as since GD6 */
+        /* without --eni the reference must be slave 1, as since Phase 6 */
         int want_ref = g_eni_on ? first_dc : 1;
         if (!want_ref || !ctx.slavelist[want_ref].hasdc) {
             fprintf(stderr, "ecm_run: DC off -- slave %d is not DC-capable (0x0008 bit2 = 0)\n", want_ref ? want_ref : 1);
@@ -2357,7 +2357,7 @@ int main(int argc, char **argv)
             int64_t cyc = motion_cycle_us * 1000L;
             int sync0_n = 0;
             for (int s = 1; s <= ctx.slavecount; s++) {
-                /* Giai doan 8.4: with --eni the ENI decides which slaves get
+                /* Phase 8.4: with --eni the ENI decides which slaves get
                  * SYNC0 (and their shift); otherwise GROUP_MOTION as before. */
                 int want_sync0 = g_eni_on
                     ? (g_eni.slave[s - 1].dc && ctx.slavelist[s].hasdc)
@@ -2391,7 +2391,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Giai doan 9.5: the ENI asked for DC (and --no-dc was not given): a bus
+    /* Phase 9.5: the ENI asked for DC (and --no-dc was not given): a bus
      * that ends up without it would run, but not as configured -> refuse */
     if (g_eni_on && !no_dc && !g_dc_enabled) {
         fprintf(stderr, "ecm_run: --eni: the ENI configures DC but DC could not be enabled (see above), "
@@ -2410,7 +2410,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Failed to reach OPERATIONAL\n"); report_state_failure(EC_STATE_OPERATIONAL, "OPERATIONAL"); ecx_close(&ctx); return 1;
     }
 
-    /* ---- Giai doan 4: bring up the two rings and the four non-RT threads
+    /* ---- Phase 4: bring up the two rings and the four non-RT threads
      * BEFORE this thread switches itself to SCHED_FIFO below. Order
      * matters: pthread_create() inherits the creating thread's scheduling
      * policy at the moment of creation (PTHREAD_INHERIT_SCHED default), so
@@ -2419,10 +2419,10 @@ int main(int argc, char **argv)
      * a second, explicit safeguard, in case this ordering ever changes. */
     ring_init(&g_ring);
     tx_order_ring_init(&g_tx_order);
-    ecm_diag_soem_io_init(&g_diag_io);          /* Giai doan 7.2 */
+    ecm_diag_soem_io_init(&g_diag_io);          /* Phase 7.2 */
     ecm_diag_handoff_init(&g_diag_ho);
     ecm_diag_init(&g_diag, ctx.slavecount, EC_STATE_OPERATIONAL);
-    {                                           /* Giai doan 7.3 */
+    {                                           /* Phase 7.3 */
         ecm_bus_cfg_t bcfg;
         ecm_bus_default_cfg(&bcfg);
         if (n_lost > 0) bcfg.n_lost = (uint32_t)n_lost;
@@ -2465,14 +2465,14 @@ int main(int argc, char **argv)
                 bcfg.n_lost, g_recover_enabled ? "ON" : "OFF (--no-recover)");
     }
 
-    /* Giai doan 7.2 finding (2026-09-25): explicit, small stacks. With
+    /* Phase 7.2 finding (2026-09-25): explicit, small stacks. With
      * mlockall(MCL_CURRENT | MCL_FUTURE) above, every pthread_create()
      * with the default 8 MB stack locks and zero-fills all 8 MB up front:
      * 4 threads took 8-12 ms (measured), right between reaching OP and the
      * RT loop's first tick -- no process data during that time, so the
      * 3 ms GROUP_MOTION SM watchdog expired and every motion slave latched
      * SAFEOP+ERR 0x001B at startup, every run. Invisible before soft_bus
-     * modelled the watchdog (Giai doan 7.1). Deepest thread frame is
+     * modelled the watchdog (Phase 7.1). Deepest thread frame is
      * ~2.5 KB (gcc -fstack-usage) plus libc stdio: 256 KB is >10x margin,
      * and 4 x 256 KB locks in well under 1 ms. */
     pthread_t telemetry_tid, app_tid, mailbox_tid, monitor_tid;
@@ -2480,7 +2480,7 @@ int main(int argc, char **argv)
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setstacksize(&attr, NON_RT_STACK_BYTES);
-        /* GD9.7: from here the RT thread is the only reader of SOEM's error
+        /* Phase 9.7: from here the RT thread is the only reader of SOEM's error
          * list. What configuration left in it was reported already (InitCmd
          * failures) or is SOEM's own probing (e.g. 0x1C00 read aborts). */
         {
@@ -2500,7 +2500,7 @@ int main(int argc, char **argv)
     }
 
     /* ---- NOW switch this thread (the RT thread) to SCHED_FIFO 80,
-     * pinned to the isolated core (core 3, isolcpus=3 from Giai doan 1).
+     * pinned to the isolated core (core 3, isolcpus=3 from Phase 1).
      * Requires cap_sys_nice, already granted by `make setcap`. ---- */
     {
         struct sched_param sp = { .sched_priority = 80 };
@@ -2521,7 +2521,7 @@ int main(int argc, char **argv)
     else
         fprintf(stderr, "ecm_run: all slaves in OPERATIONAL. Starting cyclic loop (base tick = %ld us, no IO group).\n",
                 motion_cycle_us);
-    fprintf(stderr, "ecm_run: no further stderr output from the RT thread until the loop ends -- see the Giai doan 3 file header for why.\n");
+    fprintf(stderr, "ecm_run: no further stderr output from the RT thread until the loop ends -- see the Phase 3 file header for why.\n");
 
     signal(SIGINT, on_sigint);
 
@@ -2529,16 +2529,16 @@ int main(int argc, char **argv)
     clock_gettime(CLOCK_MONOTONIC, &next);
     start = next;
     uint64_t tick = 0;
-    g_dcstat.settle_ticks = (uint64_t)(5000000L / motion_cycle_us);   /* Giai doan 6: DC stats skip first 5 s */
+    g_dcstat.settle_ticks = (uint64_t)(5000000L / motion_cycle_us);   /* Phase 6: DC stats skip first 5 s */
 
     /* Ticks-per-second, used only to decide when to record a snapshot --
      * still no I/O happens as a result, just an array write. */
     long ticks_per_snapshot = (motion_cycle_us > 0) ? (1000000L / motion_cycle_us) : 1;
     if (ticks_per_snapshot < 1) ticks_per_snapshot = 1;
 
-    unsigned recover_gen = 0;             /* Giai doan 7.3: RECOVER generations requested */
+    unsigned recover_gen = 0;             /* Phase 7.3: RECOVER generations requested */
     while (!g_stop) {
-        /* Giai doan 8.5: --link etf wakes lead before the target `next`;
+        /* Phase 8.5: --link etf wakes lead before the target `next`;
          * af_packet wakes at `next` (lead 0), unchanged. */
         struct timespec wake_at = next;
         const int64_t lead_ns = g_link_etf ? g_etf_lead_us * 1000L : 0;
@@ -2560,7 +2560,7 @@ int main(int argc, char **argv)
             launch_tai_ns = (int64_t)ts_to_ns(&next) + off;
         }
 
-        /* Giai doan 7.3 §2: every receive in this tick ends by the deadline,
+        /* Phase 7.3 §2: every receive in this tick ends by the deadline,
          * computed from the tick's TARGET time (not t_wake), so a late wake
          * shortens the budget instead of pushing the next tick. */
         /* 8.5 v2: with --link etf the motion frame leaves at `next`, and the
@@ -2570,29 +2570,29 @@ int main(int argc, char **argv)
         g_tick_deadline_ns = ts_to_ns(&next) + (uint64_t)(motion_cycle_us * 1000L)
                            - (uint64_t)(g_link_etf ? g_etf_asap_us * 1000L : 0) - RX_GUARD_NS;
         ecm_bus_tick(&g_bus);
-        quar_expire(tick);                          /* Giai doan 7.4 */
+        quar_expire(tick);                          /* Phase 7.4 */
         ecm_event_t bus_ev;
 
         int64_t  motion_prep_send_ns = 0, motion_total_ns = 0;
         uint64_t motion_rx_ts_ns     = 0;
         int motion_wkc = 0;
         int64_t cycle_occupancy_ns = 0;
-        uint8_t io_due = (g_io_active && tick % (uint64_t)ticks_per_io == 0) ? 1 : 0;   /* GD9.1 */
+        uint8_t io_due = (g_io_active && tick % (uint64_t)ticks_per_io == 0) ? 1 : 0;   /* Phase 9.1 */
         uint8_t any_wkc_mismatch = 0;
         int64_t dc_adjust_ns = 0;
 
         if (g_bus.state == ECM_BUS_RUN || g_bus.state == ECM_BUS_DEGRADED) {
-        /* (body below kept at its Giai doan 6 indentation so the 7.3 diff stays readable) */
+        /* (body below kept at its Phase 6 indentation so the 7.3 diff stays readable) */
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
         if (g_link_etf) ecx_txtime_set_next(&ctx.port, launch_tai_ns);   /* 8.5: only the motion frame */
 #endif
-        for (int k = 0; k < g_pdo_nset; k++)   /* GD9.10: the RT thread owns the IOmap */
+        for (int k = 0; k < g_pdo_nset; k++)   /* Phase 9.10: the RT thread owns the IOmap */
             ecm_pdo_set(&g_pdo_set_h[k], g_pdo_set_h[k].group == GROUP_IO ? IOmap_io : IOmap_motion,
                         g_pdo_set_v[k]);
         service_group(&motion, tick, &motion_prep_send_ns, &motion_total_ns, &motion_rx_ts_ns, &motion_wkc);
         cycle_occupancy_ns = motion_total_ns;   /* quantity #4, starts with motion's own cost */
 
-        if (motion_wkc == EC_NOFRAME) quar_add(motion.last_idx, tick);   /* Giai doan 7.4 */
+        if (motion_wkc == EC_NOFRAME) quar_add(motion.last_idx, tick);   /* Phase 7.4 */
         int io_class = -1;
         int io_wkc = 0;
         if (io_due) {
@@ -2609,14 +2609,14 @@ int main(int argc, char **argv)
             if (motion.wkc_mismatch != motion_mismatch_before) any_wkc_mismatch = 1;
             motion_mismatch_before = motion.wkc_mismatch;
         }
-        elist_drain(tick);   /* GD9.7: EMCY / SDO aborts -> monitor */
+        elist_drain(tick);   /* Phase 9.7: EMCY / SDO aborts -> monitor */
 
-        /* ---- Giai doan 6: DC(b). ctx.DCtime was refreshed by the motion
+        /* ---- Phase 6: DC(b). ctx.DCtime was refreshed by the motion
          * receive (only GROUP_MOTION carries the FRMW), so read it before
          * anything else can send. Pure arithmetic, no syscalls. ---- */
         if (g_dc_enabled && motion_wkc > 0) {
             uint64_t wraps_before = g_dc.wraps;
-            /* Giai doan 7.4: host time of the SEND, not of the wake: the DC
+            /* Phase 7.4: host time of the SEND, not of the wake: the DC
              * sample is taken when the frame passes the reference clock, and
              * the reply-age gate compares the two. On a non-RT host the
              * thread can be preempted between wake and send; the unwrap and
@@ -2642,7 +2642,7 @@ int main(int argc, char **argv)
             since_wrap++;
         }
 
-        /* ---- Giai doan 7.4 (L5-07): the DC reply-age gate says this motion
+        /* ---- Phase 7.4 (L5-07): the DC reply-age gate says this motion
          * reply was taken at another time -> it is an old reply that SOEM
          * matched to this frame by a reused index. Put the inputs back and
          * count the cycle as "no frame". ---- */
@@ -2658,13 +2658,13 @@ int main(int argc, char **argv)
         if (g_reply_check && motion.reply_foreign) motion_class = ECM_POL_WKC_NOFRAME;
         if (g_reply_check && io_due && io.reply_foreign) io_class = ECM_POL_WKC_NOFRAME;
 
-        /* Giai doan 7.3 §3: bus state machine, pure arithmetic */
+        /* Phase 7.3 §3: bus state machine, pure arithmetic */
         if (ecm_bus_on_cycle(&g_bus, tick, motion_class, io_class, &bus_ev)) {
             ecm_evring_push(&g_ev, &bus_ev);
             if (bus_ev.to == ECM_BUS_LOST) excl_begin();   /* ends when the bus is back in RUN */
         }
 
-        /* Giai doan 7.4 (L5-09): input freshness, only on replies that were
+        /* Phase 7.4 (L5-09): input freshness, only on replies that were
          * accepted with the full WKC (a missing slave is WKC's business). */
         if (g_fresh_any) {
             if (motion_class == ECM_POL_WKC_OK)
@@ -2675,7 +2675,7 @@ int main(int argc, char **argv)
                     if (ctx.slavelist[s].group == GROUP_IO) fresh_feed(s, tick);
         }
 
-        /* ---- Giai doan 7.2: diagnostics. One frame per second, never on an
+        /* ---- Phase 7.2: diagnostics. One frame per second, never on an
          * IO tick; the reply is collected on a later tick from SOEM's rx
          * buffer (no waiting). One sendto() -> one g_tx_order push. ---- */
         if (g_diag_enabled) {
@@ -2683,9 +2683,9 @@ int main(int argc, char **argv)
             if (g_diag_io.pending) {
                 int r = ecm_diag_soem_collect(&ctx, &g_diag_io, &g_diag_raw_rt,
                                               ts_to_ns(&t_wake), DIAG_MAX_AGE_TICKS);
-                if (r < 0) quar_add(g_diag_io.idx, tick);    /* Giai doan 7.4: gave up on it */
+                if (r < 0) quar_add(g_diag_io.idx, tick);    /* Phase 7.4: gave up on it */
                 if (r != 0) {
-                    g_diag_raw_rt.ngroups = g_io_active ? 2 : 1;   /* GD9.1 */
+                    g_diag_raw_rt.ngroups = g_io_active ? 2 : 1;   /* Phase 9.1 */
                     g_diag_raw_rt.wkc[0] = motion.wkcs;
                     g_diag_raw_rt.wkc[1] = io.wkcs;
                     g_diag_raw_rt.handoff_drops = g_diag_ho.drops;
@@ -2698,7 +2698,7 @@ int main(int argc, char **argv)
             }
         }
 
-        /* Giai doan 7.3 §4 path A: at most one AL control write per tick,
+        /* Phase 7.3 §4 path A: at most one AL control write per tick,
          * never on an IO tick, only with budget left before the deadline. */
         if (!io_due) rt_exec_command(tick);
 
@@ -2755,7 +2755,7 @@ int main(int argc, char **argv)
             };
         }
 
-        /* Giai doan 6: |dc_adjust_ns| <= cycle/20, so the step stays
+        /* Phase 6: |dc_adjust_ns| <= cycle/20, so the step stays
          * positive and ts_add_ns()'s carry-only normalisation is enough. */
         ts_add_ns(&next, motion_cycle_us * 1000L + dc_adjust_ns);
 
@@ -2766,7 +2766,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Giai doan 7.4 (found in the 30 min soak, 25/9): leave OP the moment
+    /* Phase 7.4 (found in the 30 min soak, 25/9): leave OP the moment
      * process data stops. Printing the statistics and joining the threads
      * below took ~170 ms, during which the slaves were still in OP without
      * outputs: every one of them tripped its SM watchdog and latched
@@ -2784,7 +2784,7 @@ int main(int argc, char **argv)
     if (g_io_active) print_stats(&io);
     else fprintf(stderr, "  [GROUP_IO] empty (no slave assigned), never sent\n");
 
-    /* ---- Giai doan 6: DC(b) summary (RT loop has exited) ---- */
+    /* ---- Phase 6: DC(b) summary (RT loop has exited) ---- */
     if (g_dc_enabled) {
         uint64_t nn = g_dcstat.n, want[4], acc = 0; int k = 0;
         const double pq[4] = { 0.50, 0.99, 0.999, 0.9999 };
@@ -2812,7 +2812,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "  [DC] disabled\n");
     }
 
-    /* ---- Giai doan 8.5: link backend ---- */
+    /* ---- Phase 8.5: link backend ---- */
     if (g_link_etf) {
 #ifdef ECMASTER_SOEM_TXTIME_PATCH
         fprintf(stderr, "  [LINK] etf: lead=%ld us asap=%ld us; SOEM: late(sent now)=%u bypass(no ETF)=%u send_err=%u; "
@@ -2825,7 +2825,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "  [LINK] af_packet\n");
     }
 
-    /* ---- Giai doan 4: stop and join the four non-RT threads before
+    /* ---- Phase 4: stop and join the four non-RT threads before
      * tearing down the bus, so telemetry's final drain (inside
      * telemetry_thread_fn, right before it returns) sees every sample
      * this run produced. ---- */
@@ -2838,13 +2838,13 @@ int main(int argc, char **argv)
     pthread_join(mailbox_tid,   NULL);
     pthread_join(monitor_tid,   NULL);
 
-    /* Giai doan 5: only after the mailbox thread has actually returned
+    /* Phase 5: only after the mailbox thread has actually returned
      * from ecm_mailbox_run() (guaranteed by the join right above) --
      * destroying g_mbx any earlier could free the job queue out from
      * under a job still in flight. */
     ecm_mailbox_destroy(g_mbx);
 
-    /* ---- Giai doan 7.2: final diagnostics (monitor has joined) ---- */
+    /* ---- Phase 7.2: final diagnostics (monitor has joined) ---- */
     if (g_diag_enabled) {
         static ecm_diag_finding_t f[128];
         int nf = ecm_diag_analyze(&g_diag, f, 128);
@@ -2857,7 +2857,7 @@ int main(int argc, char **argv)
             ecm_diag_finding_str(&f[i], al_code_str, line, sizeof(line));
             fprintf(stderr, "  [DIAG] %s\n", line);
         }
-        for (int g = 0; g < (g_io_active ? 2 : 1); g++) {   /* GD9.1 */
+        for (int g = 0; g < (g_io_active ? 2 : 1); g++) {   /* Phase 9.1 */
             const group_stats_t *gs = g ? &io : &motion;
             fprintf(stderr, "  [WKC %s] ok=%" PRIu64 " noframe=%" PRIu64 " zero=%" PRIu64
                     " partial=%" PRIu64 " over=%" PRIu64 " max_run_bad=%u\n", gs->label,
@@ -2867,7 +2867,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* ---- Giai doan 7.4: late/stale replies summary ---- */
+    /* ---- Phase 7.4: late/stale replies summary ---- */
     fprintf(stderr, "  [LATE] index quarantine %s: parked=%" PRIu64 " early_release=%" PRIu64
             "; motion replies rejected by the DC age gate=%" PRIu64 " (gate resyncs=%" PRIu64 ")\n",
             g_quarantine ? "on" : "OFF", g_quar_total, g_quar_overflow, g_stale_replies,
@@ -2876,7 +2876,7 @@ int main(int argc, char **argv)
             "reply through a reused index): motion=%" PRIu64 " io=%" PRIu64 "%s\n",
             g_foreign_replies[GROUP_MOTION], g_foreign_replies[GROUP_IO],
             g_reply_check ? "" : "  (--no-reply-check: counted, NOT rejected)");
-    for (int k = 0; k < g_pdo_nget; k++) {   /* GD9.10 */
+    for (int k = 0; k < g_pdo_nget; k++) {   /* Phase 9.10 */
         const ecm_pdo_handle_t *h = &g_pdo_get_h[k];
         uint64_t v = ecm_pdo_get(h, h->group == GROUP_IO ? IOmap_io : IOmap_motion);
         fprintf(stderr, "  [PDO] get %s = 0x%llX (%llu)\n", g_pdo_get_name[k],
@@ -2897,7 +2897,7 @@ int main(int argc, char **argv)
                 " regressions=%" PRIu64 "\n", n, eps, reg);
     }
 
-    /* ---- Giai doan 7.3: policy summary (monitor has joined) ---- */
+    /* ---- Phase 7.3: policy summary (monitor has joined) ---- */
     fprintf(stderr, "  [POLICY] final bus state %s; entered: DEGRADED=%" PRIu64 " LOST=%" PRIu64
             " RECOVER=%" PRIu64 " RUN=%" PRIu64 "; ticks: RUN=%" PRIu64 " DEGRADED=%" PRIu64
             " LOST=%" PRIu64 " RECOVER=%" PRIu64 "\n",

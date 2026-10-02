@@ -19,7 +19,7 @@ typedef uint8_t ecm_group_id_t;   /* holds GROUP_MOTION (1) or GROUP_IO (2) */
 typedef struct {
     uint64_t tick;
     uint8_t  group_id;   /* ecm_group_id_t */
-    uint8_t  ec_idx;     /* Giai doan 7.4: EtherCAT frame index of this send,
+    uint8_t  ec_idx;     /* Phase 7.4: EtherCAT frame index of this send,
                             TX_ORDER_IDX_UNKNOWN if the caller could not tell */
     uint8_t  _pad[6];
 } tx_order_sample_t;
@@ -90,7 +90,7 @@ typedef struct {
     size_t pending_rx_head, pending_rx_tail;
 
     /* Observability counters — never silently swallow a mismatch, per the
-       lesson from the SOEM buffer-overflow bug in Giai đoạn 3
+       lesson from the SOEM buffer-overflow bug in Phase 3
        (giai_doan_3_tong_hop.md §3.5): a clean-looking run is not proof of
        correctness unless the failure paths are actually counted. */
     uint64_t stat_matched;               /* motion completions successfully matched */
@@ -111,7 +111,7 @@ typedef struct {
                                              tx_order_ring pushes actually drained on the TX side. */
     uint64_t stat_rx_io_discarded;       /* same, for the RX/passive-socket side. */
 
-    /* Giai doan 7.4 (L5-07/08): matching by EtherCAT index. Before, the RX
+    /* Phase 7.4 (L5-07/08): matching by EtherCAT index. Before, the RX
        side paired arrivals with sends purely by position, so ONE send whose
        reply never came (NOFRAME, mute) or ONE extra arrival (duplicate,
        late reply) shifted every later pair for the rest of the run. */
@@ -131,7 +131,7 @@ typedef struct {
 
 void turnaround_init(turnaround_ctx_t *c);
 
-/* Giai doan 7.3: forget everything in flight (both FIFOs, the RX lookup)
+/* Phase 7.3: forget everything in flight (both FIFOs, the RX lookup)
    but keep the stat_* counters. Called by the telemetry thread after an
    "exclusion window" (frames sent by another thread, or LOST/RECOVER, see
    docs/fault_policy.md §5.3), when send order no longer equals the order
@@ -170,7 +170,7 @@ void turnaround_on_tx_complete(turnaround_ctx_t *c, uint64_t tx_ts_ns);
    discarded. */
 void turnaround_on_rx_arrival(turnaround_ctx_t *c, uint64_t rx_ts_ns, ecm_hist_t *hist);
 
-/* Giai doan 7.4: same, but paired by the EtherCAT index of the frame
+/* Phase 7.4: same, but paired by the EtherCAT index of the frame
    (byte 17 of the Ethernet frame: 14 Ethernet + 2 EtherCAT header + cmd).
    ec_idx < 0 = unknown -> positional, as the functions above.
    A pending send is paired with the first arrival carrying its index;

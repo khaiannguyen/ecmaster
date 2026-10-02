@@ -177,7 +177,7 @@ void ecm_srec_init(ecm_srec_plan_t *p, int n, uint32_t max_attempts, uint64_t ba
     p->backoff0_ns = backoff0_ns;
 }
 
-/* ---- GD9.7: AL status code classes -------------------------------------- */
+/* ---- Phase 9.7: AL status code classes -------------------------------------- */
 ecm_al_class_t ecm_al_code_class(uint16_t code)
 {
     switch (code) {
@@ -277,7 +277,7 @@ ecm_sact_t ecm_srec_decide(ecm_srec_plan_t *p, int i, const ecm_srec_input_t *in
     s->unhealthy = 1;
     if (s->failed) return ECM_SACT_NONE;
 
-    /* GD9.7: the slave refuses its configuration. Acknowledging and asking
+    /* Phase 9.7: the slave refuses its configuration. Acknowledging and asking
      * again would send the same configuration: final, no attempt counted. */
     if (in->answered && err && ecm_al_code_class(in->al_code) == ECM_AL_CONFIG) {
         s->failed = 1;

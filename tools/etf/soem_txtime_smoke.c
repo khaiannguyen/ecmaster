@@ -1,5 +1,5 @@
 /*
- * soem_txtime_smoke.c -- GD8 8.5 step 6.3: SOEM + soem-txtime.patch end to end,
+ * soem_txtime_smoke.c -- Phase 8.5 step 6.3: SOEM + soem-txtime.patch end to end,
  * before touching libecmaster/ecm_run.
  *
  *   config (BRD/APWR/FPRD/SII/mailbox ... all "asap" frames) -> SAFE-OP -> OP

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""esi_check.py -- GD8 8.2: does an ESI file describe the SII image a slave
+"""esi_check.py -- Phase 8.2: does an ESI file describe the SII image a slave
 (soft_bus, later the LAN9252 EEPROM) actually carries?
 
 Compares, field by field:
@@ -194,7 +194,7 @@ def main():
     cats = sii_categories(words)
     types = [c[0] for c in cats]
     print(f"[categories] in SII order: {types}")
-    # GD9.3: General category CoE details (ETG.2010: bit0 SDO, bit1 SDO Info,
+    # Phase 9.3: General category CoE details (ETG.2010: bit0 SDO, bit1 SDO Info,
     # bit2 PDO assign, bit3 PDO config, bit4 upload at startup, bit5 SDO
     # Complete Access) against the ESI Mailbox/CoE attributes. Without a
     # General category a master sees CoE details 0 (SOEM: no CA).
@@ -231,7 +231,7 @@ def main():
         got = (s_sii["start"], s_sii["len"], s_sii["ctrl"], s_sii["enable"])
         ok = got == want
         if not ok and i >= 2 and want[1] == 0 and got[:1] + got[2:] == want[:1] + want[2:]:
-            # GD9.9: a process data SM with DefaultSize 0 (IS620N) -- the SII
+            # Phase 9.9: a process data SM with DefaultSize 0 (IS620N) -- the SII
             # carries the size of the PDOs assigned by default, as an
             # ESI-generated image does (tools/esi/esi2profile.py)
             dflt = default_pd_bytes(dev, "RxPdo" if i == 2 else "TxPdo", i)
@@ -251,7 +251,7 @@ def main():
         for a, b in zip(sii_p, esi_p):
             check(f"{label} 0x{b['index']:04X} index", a["index"], b["index"])
             if b["sm"] == -1 and a["sm"] == 0xFF:
-                # GD9.9: no Sm attribute = not assigned by default; SII SM 0xFF
+                # Phase 9.9: no Sm attribute = not assigned by default; SII SM 0xFF
                 report("PASS", f"{label} 0x{b['index']:04X} SM: SII 255 (not assigned), ESI no Sm")
             else:
                 check(f"{label} 0x{b['index']:04X} SM", a["sm"], b["sm"], "{}")

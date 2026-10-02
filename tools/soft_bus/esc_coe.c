@@ -11,7 +11,7 @@
  *     master applies to a response, walked by hand against this file
  *     during development (see project chat log for the specific
  *     back-and-forth) rather than assumed from the CANopen spec alone.
- *   - GD9.3: SOES soes/esc_coe.c (commit 6ef7b94) for the slave side of
+ *   - Phase 9.3: SOES soes/esc_coe.c (commit 6ef7b94) for the slave side of
  *     Complete Access (SI0 padded to 16 bit, CA only from subindex 0/1,
  *     CA bit echoed in the response) and for the abort codes; SOEM
  *     ecx_readPDOmap()/ecx_readPDOmapCA() for the PDO objects' layout.
@@ -175,7 +175,7 @@ static int is_pdo_od_index(uint16_t index)
            index == 0x1600 || index == 0x1A00;
 }
 
-/* GD9.9: a profile node (soft_bus --profile) has the dictionary of its ESI
+/* Phase 9.9: a profile node (soft_bus --profile) has the dictionary of its ESI
  * instead of the built-in one; esc_profile.c holds the values. */
 static uint16_t prof_dtype(uint16_t bits)
 {
@@ -484,7 +484,7 @@ static uint32_t od_download(esc_t *esc, uint16_t index, uint8_t sub, int ca,
                             const uint8_t *data, uint32_t len)
 {
     if (ca) {
-        if (esc->prof) {   /* GD9.9: 0x1C12/0x1C13 checked as a whole set */
+        if (esc->prof) {   /* Phase 9.9: 0x1C12/0x1C13 checked as a whole set */
             uint32_t a = esc_prof_check_ca(esc, index, sub, data, len);
             if (a) return a;
             esc->prof_st->ca_bypass = 1;
@@ -528,7 +528,7 @@ static void resp_header(uint8_t *resp, uint16_t length, uint8_t service)
 /* Abort SDO Transfer (ETG.1000.6 / CiA 301): CoE service = SDO REQUEST (2),
  * command 0x80, Index/SubIndex ECHO the request, 4-byte abort code.
  *
- * X-01a (GD8): the Phase 5 version sent service = SDO RESPONSE (3) with
+ * X-01a (Phase 8): the Phase 5 version sent service = SDO RESPONSE (3) with
  * Index = 0. IgH rejects that ("unknown response"): it only recognises an
  * abort by service == 2. The Index = 0 trick existed only because SOEM's
  * ecx_SDOread() takes the "data" branch when service == SDORES AND Index
@@ -712,7 +712,7 @@ static void coe_handle_download_init(esc_t *esc, uint8_t *resp, const uint8_t *r
 
     s->active = 0;
     if (ca && !esc->coe_ca) {
-        /* Complete Access off (default) -- same answer as before GD9.3. */
+        /* Complete Access off (default) -- same answer as before Phase 9.3. */
         coe_send_abort(resp, index, subindex, ABORT_UNSUPPORTED_ACCESS);
         return;
     }
@@ -828,7 +828,7 @@ static void coe_handle_download_segment(esc_t *esc, uint8_t *resp, const uint8_t
  * ========================================================================== */
 void coe_on_mailbox_out_write(esc_t *esc)
 {
-    uint8_t *req  = esc->regs + esc->mbx_out;   /* GD9.9: per node */
+    uint8_t *req  = esc->regs + esc->mbx_out;   /* Phase 9.9: per node */
     uint8_t *resp = esc->regs + esc->mbx_in;
 
     uint8_t mbxtype = (uint8_t)(req[OFF_MBX_TYPE] & 0x0Fu);
@@ -876,7 +876,7 @@ void coe_on_mailbox_out_write(esc_t *esc)
     esc->coe_od.resp_cnt = (uint8_t)(esc->coe_od.resp_cnt % 7u + 1u);
     resp[OFF_MBX_TYPE] = (uint8_t)((resp[OFF_MBX_TYPE] & 0x0Fu) | (esc->coe_od.resp_cnt << 4));
 
-    /* GD9.6 (E-09): a slow slave -- e.g. a drive that stores a parameter
+    /* Phase 9.6 (E-09): a slow slave -- e.g. a drive that stores a parameter
      * before it answers -- posts its download response only after
      * coe_delay_ms. The bytes are in SM1 already; "mailbox full" is set by
      * esc_fault_frame_begin() at the first frame after the release time.
@@ -891,7 +891,7 @@ void coe_on_mailbox_out_write(esc_t *esc)
 }
 
 /* ==========================================================================
- * GD9.7: Emergency message (fault injection only).
+ * Phase 9.7: Emergency message (fault injection only).
  * ========================================================================== */
 #define COES_EMERGENCY 0x01u   /* ECT_COES_EMERGENCY */
 

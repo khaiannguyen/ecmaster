@@ -1,5 +1,5 @@
 /* ==========================================================================
- * igh_x01b.c — GD8 X-01b: an INDEPENDENT master (IgH EtherCAT Master 1.6,
+ * igh_x01b.c — Phase 8 X-01b: an INDEPENDENT master (IgH EtherCAT Master 1.6,
  * userspace library) drives soft_bus to OP, exchanges process data every
  * cycle and runs Distributed Clocks in BUS-SHIFT mode (the application time
  * is written into the reference clock every cycle) -- the opposite of the
@@ -19,7 +19,7 @@
  * Run (needs /dev/EtherCAT0 access, SCHED_FIFO, mlockall):
  *   sudo ./igh_x01b --n 8 --seconds 600
  *
- * GD9.3 X-04 (tools/xcheck/run_x04.sh), against soft_bus --coe-ca:
+ * Phase 9.3 X-04 (tools/xcheck/run_x04.sh), against soft_bus --coe-ca:
  *   --complete-sdo   configure 0x1C12 = {1, 0x1600} and 0x1C13 = {1, 0x1A00}
  *                    on every slave with ecrt_slave_config_complete_sdo()
  *                    (Complete Access download in PREOP, data 01 00 00 16 /
@@ -79,7 +79,7 @@ int main(int argc, char **argv)
     int64_t cycle_ns = 1000000;             /* 1 ms */
     int32_t sync0_shift_ns = 0;
     int use_dc = 1;
-    int complete_sdo = 0;                   /* GD9.3 X-04 */
+    int complete_sdo = 0;                   /* Phase 9.3 X-04 */
     int sdo8002_len = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
 
         /* No ecrt_slave_config_pdos(): use the default mapping from SII.
          * A default soft_bus has no 0x1C12/0x1C13 (IgH gets an abort and
-         * falls back to SII); with --coe-ca (GD9.3) IgH reads the mapping
+         * falls back to SII); with --coe-ca (Phase 9.3) IgH reads the mapping
          * over CoE instead. The PDO assignment is written only on request
          * (--complete-sdo), as raw Complete Access configuration data. */
         if (complete_sdo &&

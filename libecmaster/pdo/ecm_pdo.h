@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /* ==========================================================================
- * ecm_pdo.h — GD9.10: bind process data by (slave, index, subindex).
+ * ecm_pdo.h — Phase 9.10: bind process data by (slave, index, subindex).
  * Pure logic, no SOEM: unit-tested offline (test_pdo_offline.c).
  *
  * SOEM builds the IOmap from bit SIZES only; it keeps no list of the PDO
@@ -24,7 +24,7 @@
  *           entries need not be byte aligned (bit-sized digital I/O).
  *
  * libecmaster never interprets an object: 0x6041 is just a number here
- * (the meaning belongs to the CiA402 layer of GD10).
+ * (the meaning belongs to the CiA402 layer of Phase 10).
  * ========================================================================== */
 
 #define ECM_PDO_MAX_ENTRIES 1024
@@ -90,9 +90,9 @@ void     ecm_pdo_set(const ecm_pdo_handle_t *h, uint8_t *iomap, uint64_t v);
 /* "3:0x6041:0" -> slave, index, sub. 0 ok. */
 int ecm_pdo_parse_ref(const char *s, int *slave, uint16_t *index, uint8_t *sub);
 
-/* GD10.1 -- when a bind needs the bus's own table.
+/* Phase 10.1 -- when a bind needs the bus's own table.
  *
- * N-03 (GD9.9): a vendor device whose mapping differs from its ESI but has
+ * N-03 (Phase 9.9): a vendor device whose mapping differs from its ESI but has
  * the same size passes every size check; an ENI-only table then binds the
  * wrong bytes silently. The ESI/ENI of a slave we did not build is not
  * evidence of what the device maps, so binding into it by (index, sub)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""apply_soem_txtime.py -- ecmaster GD8 8.5 step 6.3: SO_TXTIME launch time in SOEM.
+"""apply_soem_txtime.py -- ecmaster Phase 8.5 step 6.3: SO_TXTIME launch time in SOEM.
 
 Run inside the SOEM tree:   cd ~/projects/SOEM && python3 apply_soem_txtime.py
 Edits oshw/linux/nicdrv.h and oshw/linux/nicdrv.c in place (backups *.orig),
@@ -39,7 +39,7 @@ DEFINE = "#define ECMASTER_SOEM_TXTIME_PATCH 1   /* ecmaster txtime: lets apps t
 if MARK in h:
     print(f"{H}: already patched")
     if "ECMASTER_SOEM_TXTIME_PATCH" not in h:
-        k = h.find("/* ecmaster txtime (GD8 8.5) */\nint ecx_txtime_enable")
+        k = h.find("/* ecmaster txtime (Phase 8.5) */\nint ecx_txtime_enable")
         if k < 0:
             sys.exit(f"{H}: prototypes not found, cannot add the define")
         h = h[:k] + DEFINE + h[k:]
@@ -50,7 +50,7 @@ else:
     if not m:
         sys.exit(f"{H}: '}} ecx_portt;' not found -- send the file to Claude")
     fields = """
-   /* ecmaster txtime (GD8 8.5): SO_TXTIME launch time on the primary socket.
+   /* ecmaster txtime (Phase 8.5): SO_TXTIME launch time on the primary socket.
     * All times are CLOCK_TAI ns. txtime_enabled == 0 keeps the plain send() path. */
    int txtime_enabled;
    int64_t txtime_next;        /* launch time for the next frame, 0 = none */
@@ -61,7 +61,7 @@ else:
    uint32_t txtime_late;       /* scheduled time already too close: sent at now + asap */
    uint32_t txtime_send_err;   /* sendmsg() failures (ETF drop -> ENOBUFS) */"""
     h = h[:m.start()] + fields + h[m.start():]
-    protos = "\n" + DEFINE + """/* ecmaster txtime (GD8 8.5) */
+    protos = "\n" + DEFINE + """/* ecmaster txtime (Phase 8.5) */
 int ecx_txtime_enable(ecx_portt *port, int so_priority, int64_t asap_ns, uint32_t ns_per_byte);
 void ecx_txtime_set_next(ecx_portt *port, int64_t tai_ns);
 """
@@ -119,7 +119,7 @@ else:
     c = c.replace(out_old, out_new, 1)
 
     helper = r'''
-/* ---- ecmaster txtime (GD8 8.5) -------------------------------------------
+/* ---- ecmaster txtime (Phase 8.5) -------------------------------------------
  * Launch time via SO_TXTIME + ETF qdisc. See ecmaster docs / giai_doan_8. */
 
 static int64_t ecx_tai_now_ns(void)

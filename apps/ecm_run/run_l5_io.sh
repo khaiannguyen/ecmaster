@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_l5_io.sh — Giai doan 7.4: L5-07 (late replies), L5-08 (duplicate /
+# run_l5_io.sh — Phase 7.4: L5-07 (late replies), L5-08 (duplicate /
 # reordered replies), L5-09 (stale inputs), L5-12 (mailbox repeat /
 # duplicate), each with a negative control.
 #
@@ -24,7 +24,7 @@ ECM_RUN=${ECM_RUN:-$HERE/ecm_run}
 L4_TEST=${L4_TEST:-$HERE/../l4_test/l4_test}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 N=${N:-8}; M=${M:-4}
-# GD9.1: M=0 -> no --motion-slaves, every slave in GROUP_MOTION, GROUP_IO empty
+# Phase 9.1: M=0 -> no --motion-slaves, every slave in GROUP_MOTION, GROUP_IO empty
 # (one-slave bus: N=1 M=0 L509_SLAVE=1; the IO-only checks are then skipped)
 if [ "$M" = 0 ]; then GRP=(); else GRP=(--motion-slaves "$M"); fi
 L509_SLAVE=${L509_SLAVE:-3}; L509_NODE=$((L509_SLAVE - 1))

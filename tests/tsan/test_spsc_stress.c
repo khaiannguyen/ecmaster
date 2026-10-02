@@ -1,10 +1,10 @@
 /* ==========================================================================
- * test_spsc_stress.c — Giai doan 7.6: every lock-free RT <-> non-RT queue of
+ * test_spsc_stress.c — Phase 7.6: every lock-free RT <-> non-RT queue of
  * the project under ThreadSanitizer, one producer thread + one consumer
  * thread each, with a check of what comes out:
  *
- *   ring_spsc_t       (telemetry, GD4)  RT -> telemetry, rt_sample_t
- *   tx_order_ring_t   (telemetry, GD4)  RT -> telemetry, send order
+ *   ring_spsc_t       (telemetry, Phase 4)  RT -> telemetry, rt_sample_t
+ *   tx_order_ring_t   (telemetry, Phase 4)  RT -> telemetry, send order
  *   ecm_evring_t      (policy, 7.3)     RT -> monitor, events
  *   ecm_cmdq_t        (policy, 7.3)     monitor -> RT, recovery commands
  *   ecm_diag_handoff_t(diag, 7.2)       RT -> monitor, 2-slot "latest wins"

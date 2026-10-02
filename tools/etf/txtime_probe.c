@@ -1,5 +1,5 @@
 /*
- * txtime_probe.c -- GD8 8.5 step 6.2 (T-03..T-06): launch-time accuracy of
+ * txtime_probe.c -- Phase 8.5 step 6.2 (T-03..T-06): launch-time accuracy of
  * the i226 with and without the ETF qdisc, before touching SOEM.
  *
  * One EtherCAT-typed frame (EtherType 0x88A4, one NOP datagram carrying a

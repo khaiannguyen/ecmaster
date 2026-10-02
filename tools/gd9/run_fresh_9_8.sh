@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_fresh_9_8.sh — Giai doan 9.8: input freshness per slave, against
+# run_fresh_9_8.sh — Phase 9.8: input freshness per slave, against
 # soft_bus over veth. Plan: claude/giai_doan_9_ke_hoach.md §10.
 #
 #   sudo -E ./run_fresh_9_8.sh            all cases

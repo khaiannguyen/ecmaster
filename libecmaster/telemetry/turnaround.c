@@ -160,7 +160,7 @@ void turnaround_on_tx_complete_idx(turnaround_ctx_t *c, uint64_t tx_ts_ns, int e
 
     if (s.group_id == GROUP_IO) {
         c->stat_tx_io_discarded++;
-        return;   /* not part of the 4 core measured quantities in Giai đoạn 4, see §5.2 */
+        return;   /* not part of the 4 core measured quantities in Phase 4, see §5.2 */
     }
 
     /* TX physically happens before RX (the frame must leave before it can

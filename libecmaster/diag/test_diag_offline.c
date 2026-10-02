@@ -311,7 +311,7 @@ static void t_format(void)
 
 static void t_emcy(void)
 {
-    printf("\n[D9] GD9.7 emergency messages (M-01/M-02 offline)\n");
+    printf("\n[D9] Phase 9.7 emergency messages (M-01/M-02 offline)\n");
     ecm_diag_init(&D, 4, OP);
     raw_clean(4, 1);
     ecm_diag_ingest(&D, &R);

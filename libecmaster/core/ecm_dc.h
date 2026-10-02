@@ -33,7 +33,7 @@ typedef struct {
     int64_t  lock_window_ns;  /* |e| inside -> counts toward lock (5 us)       */
     uint32_t lock_samples;    /* consecutive in-window samples to lock (100)   */
     int64_t  unlock_ns;       /* |e| above this while locked -> unlock (c/4)   */
-    int64_t  gate_ns;         /* Giai doan 7.4 reply-age gate: reject a sample
+    int64_t  gate_ns;         /* Phase 7.4 reply-age gate: reject a sample
                                * whose DC time moved more than this away from
                                * the host clock; 0 = off (default). Only valid
                                * if the caller accepts replies within less
@@ -69,7 +69,7 @@ typedef struct {
     /* counters for telemetry (single writer: RT thread) */
     uint64_t samples, stale, wraps, clamps, locks, unlocks;
 
-    /* Giai doan 7.4 (L5-07): reply-age gate (cfg.gate_ns, off by default).
+    /* Phase 7.4 (L5-07): reply-age gate (cfg.gate_ns, off by default).
      * A sample whose reference time advanced by more than gate_ns more or
      * less than the host clock did
      * (host time = when the frame was SENT) belongs to another frame. Why one

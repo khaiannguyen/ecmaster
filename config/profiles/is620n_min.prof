@@ -1,7 +1,7 @@
-# Hand-written REDUCED soft_bus profile of an Inovance IS620N servo (GD9.9).
+# Hand-written REDUCED soft_bus profile of an Inovance IS620N servo (Phase 9.9).
 #
 # The vendor ESI is not in the repo and nothing generated from it is
-# committed (roadmap GD9, licence note of 30/9: the ESI was downloaded for
+# committed (roadmap Phase 9, licence note of 30/9: the ESI was downloaded for
 # local use only). This file carries only what the mixed-bus tests need:
 #   identity, SII config words, mailbox and SyncManagers (public facts, also
 #   in config/eni/eni_mixed.xml), the 4 fixed PDOs the tests use (0x1701,

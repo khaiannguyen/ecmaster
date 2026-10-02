@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""apply_soem_txtime_v2.py -- ecmaster GD8 8.5, R-02 fix: only the scheduled frame uses ETF.
+"""apply_soem_txtime_v2.py -- ecmaster Phase 8.5, R-02 fix: only the scheduled frame uses ETF.
 
 Run inside the SOEM tree AFTER apply_soem_txtime.py (v1):
     cd ~/projects/SOEM && python3 ~/projects/ecmaster/tools/etf/apply_soem_txtime_v2.py

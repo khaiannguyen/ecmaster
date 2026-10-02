@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""apply_ecm_run_etf_v2.py -- GD8 8.5 R-02 fix for `ecm_run --link etf`.
+"""apply_ecm_run_etf_v2.py -- Phase 8.5 R-02 fix for `ecm_run --link etf`.
 
 Run from the ecmaster repo root AFTER apply_ecm_run_etf.py (v1):
     python3 tools/etf/apply_ecm_run_etf_v2.py
@@ -29,7 +29,7 @@ C = "apps/ecm_run/ecm_run.c"
 if not os.path.isfile(C):
     sys.exit(f"{C} not found -- run from the ecmaster repo root")
 src = open(C).read()
-if "Giai doan 8.5" not in src:
+if "Phase 8.5" not in src:
     sys.exit(f"{C}: v1 (apply_ecm_run_etf.py) not applied")
 if "8.5 v2" in src:
     print(f"{C}: already v2")

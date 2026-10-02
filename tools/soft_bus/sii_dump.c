@@ -1,9 +1,9 @@
 /* sii_dump.c -- write the SII image that soft_bus generates for one node,
  * as raw little-endian bytes, so it can be compared byte-for-byte with what
- * a master reads back (IgH: ethercat sii_read). GD8 X-01a.
+ * a master reads back (IgH: ethercat sii_read). Phase 8 X-01a.
  * Usage: ./sii_dump [pdo_size] [--coe-pdo-od|--coe-ca] > sii.bin
- *        ./sii_dump --profile FILE > sii.bin          (GD9.9)
- * (GD9.3: the flags as for soft_bus; --coe-ca adds the General category) */
+ *        ./sii_dump --profile FILE > sii.bin          (Phase 9.9)
+ * (Phase 9.3: the flags as for soft_bus; --coe-ca adds the General category) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

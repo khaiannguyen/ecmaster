@@ -1,5 +1,5 @@
 /* ==========================================================================
- * test_dc_offline.c — Giai doan 7.4: ecm_dc reply-age gate (L5-07);
+ * test_dc_offline.c — Phase 7.4: ecm_dc reply-age gate (L5-07);
  * W1/W2 (26/9): closed loop across 32-bit wraps, one late send.
  * Synthetic reference clock: ref = host * (1 + drift) + offset, sampled once
  * per 1 ms cycle at the setpoint phase.   make test

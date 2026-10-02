@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pcap_coe.py -- GD9.3: list the CoE SDO traffic of a master session.
+"""pcap_coe.py -- Phase 9.3: list the CoE SDO traffic of a master session.
 
 Reads a classic pcap (tshark -F pcap) captured on the master's interface
 and prints one line per CoE SDO request the master wrote into a mailbox

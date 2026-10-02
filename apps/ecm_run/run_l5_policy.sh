@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_l5_policy.sh — Giai doan 7.3: L5-01, L5-02, L5-03/04, L5-05, L5-11b,
+# run_l5_policy.sh — Phase 7.3: L5-01, L5-02, L5-03/04, L5-05, L5-11b,
 # L5-13 against soft_bus, each with its negative control where one exists.
 # Policy: docs/fault_policy.md. One ecm_run session per case.
 #
@@ -12,7 +12,7 @@
 # soft_bus node k = SOEM slave k+1; slaves 1..M are GROUP_MOTION (DC).
 #
 # Env: SOFT_BUS ECM_RUN SBCTL IF_M IF_S N M
-#      M=0             GD9.1: no --motion-slaves, every slave in GROUP_MOTION and
+#      M=0             Phase 9.1: no --motion-slaves, every slave in GROUP_MOTION and
 #                      GROUP_IO empty (one-slave bus: N=1 M=0 L505_SLAVE=1)
 #      L505_SLAVE      slave taken to SAFE-OP in L5-05 (default 3)
 #      SB_PRIO / SB_CPU  soft_bus SCHED_FIFO priority + core (as run_l6_tests.sh)

@@ -1,5 +1,5 @@
 /*
- * ecm_eni_soem.c -- SOEM glue for ecm_eni (GD8 8.4). Not RT: every call here
+ * ecm_eni_soem.c -- SOEM glue for ecm_eni (Phase 8.4). Not RT: every call here
  * happens during startup or during a recovery that already owns the bus.
  */
 #include "ecm_eni_soem.h"
@@ -10,7 +10,7 @@
 static const ecm_eni_t *g_hook_eni;
 static int g_hook_failures;
 static int g_sdo_timeout_us = EC_TIMEOUTRXM;
-static int g_elist_foreign;   /* GD9.7: another thread reads SOEM's error list */
+static int g_elist_foreign;   /* Phase 9.7: another thread reads SOEM's error list */
 
 void ecm_eni_soem_elist_foreign(int on)
 {
@@ -49,7 +49,7 @@ int ecm_eni_soem_supported(const ecm_eni_t *eni, int allow_unknown_reg)
             fprintf(stderr, " not supported by ecm_run (only IP, PS)\n");
             bad++;
         }
-        /* GD9.3: Complete Access InitCmds are run with ecx_SDOwrite/
+        /* Phase 9.3: Complete Access InitCmds are run with ecx_SDOwrite/
          * ecx_SDOread(CA = TRUE), data verbatim from the ENI. SOEM itself
          * clamps a CA subindex > 1 to 1; the ENI never has one (ETG.2100). */
     }
@@ -95,7 +95,7 @@ int ecm_eni_soem_check_layout(ecx_contextt *ctx, const ecm_eni_t *eni)
     return check_common("process data layout", bad, msg);
 }
 
-/* GD9.3: the error list is shared with SOEM's own configuration. When the
+/* Phase 9.3: the error list is shared with SOEM's own configuration. When the
  * PS InitCmds run from the PO2SO hook, the list may still hold what SOEM
  * queued for the PREVIOUS slave after its hook (for example the abort of
  * its 0x1C00 read before it falls back to the SII PDO categories), and

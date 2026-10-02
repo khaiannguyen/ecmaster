@@ -1,5 +1,5 @@
 /*
- * ecm_pdo.c -- GD9.10 PDO entry table and bind (no SOEM dependency).
+ * ecm_pdo.c -- Phase 9.10 PDO entry table and bind (no SOEM dependency).
  */
 #include "ecm_pdo.h"
 

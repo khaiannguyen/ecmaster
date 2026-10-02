@@ -1,4 +1,4 @@
-SUDO ?= sudo   # GD9.0: make caps SUDO= when already root
+SUDO ?= sudo   # Phase 9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra
 TARGET  = ecm_run
@@ -16,8 +16,8 @@ MAILBOX_SRC = $(MAILBOX_DIR)/ecm_mailbox.c
 DC_SRC = ../../libecmaster/core/ecm_dc.c
 DIAG_SRC = ../../libecmaster/diag/ecm_diag.c ../../libecmaster/diag/ecm_diag_soem.c
 POLICY_SRC = ../../libecmaster/policy/ecm_policy.c
-ENI_SRC = ../../libecmaster/config/ecm_eni.c ../../libecmaster/config/ecm_eni_soem.c   # Giai doan 8.4
-PDO_SRC = ../../libecmaster/pdo/ecm_pdo.c ../../libecmaster/pdo/ecm_pdo_soem.c       # GD9.10
+ENI_SRC = ../../libecmaster/config/ecm_eni.c ../../libecmaster/config/ecm_eni_soem.c   # Phase 8.4
+PDO_SRC = ../../libecmaster/pdo/ecm_pdo.c ../../libecmaster/pdo/ecm_pdo_soem.c       # Phase 9.10
 
 all: $(TARGET)
 

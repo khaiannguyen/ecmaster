@@ -1,5 +1,5 @@
 /*
- * ecm_pdo_soem.c -- GD9.10 SOEM glue for ecm_pdo (scan, locate, check).
+ * ecm_pdo_soem.c -- Phase 9.10 SOEM glue for ecm_pdo (scan, locate, check).
  */
 #include "ecm_pdo_soem.h"
 

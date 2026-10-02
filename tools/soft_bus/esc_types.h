@@ -28,7 +28,7 @@
  * 128 byte, ~112 usable after the 16-byte SDO header). */
 #define COE_SEGTEST_BLOB_SIZE  200
 
-/* GD9.3: 0x8002, read/write OCTET_STRING (1..COE_OCTET_RW_MAX bytes) --
+/* Phase 9.3: 0x8002, read/write OCTET_STRING (1..COE_OCTET_RW_MAX bytes) --
  * the target of normal and segmented SDO download tests (L4-07, X-04).
  * 400 byte with 128 byte mailboxes = init frame (112) + 3 segments. */
 #define COE_OCTET_RW_MAX       400
@@ -217,9 +217,9 @@ typedef struct {
                             * = 128 byte, ~112 usable) so a plain SDOread on
                             * it can ONLY complete via genuine multi-frame
                             * segmentation -- exercises L4-05. */
-    uint8_t  octet_rw[COE_OCTET_RW_MAX];  /* GD9.3: 0x8002:00 value          */
+    uint8_t  octet_rw[COE_OCTET_RW_MAX];  /* Phase 9.3: 0x8002:00 value          */
     uint16_t octet_rw_len;                /* its current length (1..MAX)     */
-    uint8_t  pdo_assign_n[2];     /* GD9.3: 0x1C12:00 / 0x1C13:00 (0 or 1)   */
+    uint8_t  pdo_assign_n[2];     /* Phase 9.3: 0x1C12:00 / 0x1C13:00 (0 or 1)   */
     uint16_t pdo_assign_idx[2];   /* 0x1C12:01 / 0x1C13:01 (0x1600/0x1A00)   */
     uint8_t  resp_cnt;     /* [Phase 7.4] mailbox counter of the last response
                             * (ETG.1000.4: 1..7, 0 reserved). A NEW response
@@ -244,8 +244,8 @@ typedef struct {
     uint32_t total_size;
     uint32_t done;          /* bytes sent (upload) or received (download) so far */
     uint8_t  expected_toggle; /* next continuation frame's expected toggle bit (0x00/0x10) */
-    uint8_t  is_ca;         /* GD9.3: Complete Access transfer               */
-    uint8_t  xfer[COE_XFER_BUF_MAX]; /* GD9.3: download data received so far  */
+    uint8_t  is_ca;         /* Phase 9.3: Complete Access transfer               */
+    uint8_t  xfer[COE_XFER_BUF_MAX]; /* Phase 9.3: download data received so far  */
 } coe_session_t;
 
 /* Phase 7: per-node fault-injection state. Frame-scoped flags (*_frame)
@@ -262,17 +262,17 @@ typedef struct {
     uint8_t  mbx_dup_pending;   /* re-post at the start of the next frame      */
     uint16_t app_seq;           /* --app-seq: slave application counter        */
     uint64_t mbx_repeats_served;/* master repeat requests answered (0x080E)    */
-    uint32_t coe_delay_ms;      /* GD9.6: SDO download responses held this long */
-    uint32_t emcy_left;         /* GD9.7: EMCY still to post (ctl "emcy")      */
+    uint32_t coe_delay_ms;      /* Phase 9.6: SDO download responses held this long */
+    uint32_t emcy_left;         /* Phase 9.7: EMCY still to post (ctl "emcy")      */
     uint16_t emcy_code;
     uint8_t  emcy_reg;
     uint16_t emcy_seq;          /* data[0..1] = sequence number, LE (order check) */
     uint64_t emcy_posted;
     uint8_t  mbx_held;          /* a response is in SM1 but not yet "full"     */
     uint64_t mbx_release_ns;    /* when it becomes visible (frame arrival time)*/
-    uint16_t reject_al_code;    /* GD9.7: AL status code of the next rejection (0 = 0x0012) */
-    uint8_t  reject_al_state;   /* GD9.7: only reject a request TO this state (0 = any)      */
-    uint8_t  reject_al_sticky;  /* GD9.7: reject every such request until "clear"            */
+    uint16_t reject_al_code;    /* Phase 9.7: AL status code of the next rejection (0 = 0x0012) */
+    uint8_t  reject_al_state;   /* Phase 9.7: only reject a request TO this state (0 = any)      */
+    uint8_t  reject_al_sticky;  /* Phase 9.7: reject every such request until "clear"            */
 } esc_node_fault_t;
 
 /* Phase 7: process data watchdog (Section I §13.1, Section II §2.10). */
@@ -306,14 +306,14 @@ typedef struct {
     esc_node_fault_t fault;      /* Phase 7: per-node fault injection (esc_fault.c) */
     esc_wd_state_t   wd;         /* Phase 7: process data watchdog model */
     uint32_t  sii_cmd_reads;
-    uint8_t   coe_pdo_od;  /* GD9.3 --coe-pdo-od: 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
-    uint8_t   coe_ca;      /* GD9.3 --coe-ca: SDO Complete Access + SII General cat. */
-    /* GD9.9: mailbox location of THIS node (SII words 24..27). The default
+    uint8_t   coe_pdo_od;  /* Phase 9.3 --coe-pdo-od: 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
+    uint8_t   coe_ca;      /* Phase 9.3 --coe-ca: SDO Complete Access + SII General cat. */
+    /* Phase 9.9: mailbox location of THIS node (SII words 24..27). The default
      * soft_bus node keeps SII_SM0/SM1_OFFSET; a node with a profile takes
      * its ESI's MBoxOut/MBoxIn (IS620N: 0x1000 / 0x1400). */
     uint16_t  mbx_out, mbx_out_len, mbx_in, mbx_in_len;
-    const struct esc_profile *prof;      /* GD9.9: NULL = built-in SOFTBUS-PD4 */
-    struct esc_prof_state    *prof_st;   /* GD9.9: this node's OD values      */
+    const struct esc_profile *prof;      /* Phase 9.9: NULL = built-in SOFTBUS-PD4 */
+    struct esc_prof_state    *prof_st;   /* Phase 9.9: this node's OD values      */
 } esc_t;
 
 
@@ -322,7 +322,7 @@ typedef struct {
  * testable offline (test_offline.c) with no veth/socket involved. */
 void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes);
 
-/* GD9.3: optional CoE features, both off by default (the wire traffic of a
+/* Phase 9.3: optional CoE features, both off by default (the wire traffic of a
  * default soft_bus does not change). pdo_od adds the PDO mapping/assign
  * objects to the object dictionary; ca adds SDO Complete Access and an SII
  * General category advertising it (CoE details SDO|PDOASSIGN|SDOCA), and

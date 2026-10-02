@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x01c_regs.py -- GD8 X-01c: which ESC registers does each master touch?
+"""x01c_regs.py -- Phase 8 X-01c: which ESC registers does each master touch?
 
 Reads two pcap files (SOEM run, IgH run) captured on the master side of a
 soft_bus rig, walks every EtherCAT datagram in frames SENT BY THE MASTER, and
@@ -7,7 +7,7 @@ prints a per-register table. Registers touched by only one master are flagged:
 those are soft_bus code paths the other master never exercised.
 
 Usage: python3 x01c_regs.py soem.pcap igh.pcap [--data]
-Master frames: soft_bus sets bit 1 of the source MAC in its replies (GD7.1).
+Master frames: soft_bus sets bit 1 of the source MAC in its replies (Phase 7.1).
 Only pcap (not pcapng) -- capture with `tshark -F pcap`.
 """
 import struct

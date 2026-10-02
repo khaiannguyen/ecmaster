@@ -112,8 +112,8 @@ int main(void)
           expect_parse_error("enicfg 1\nslaves 1\nslave 1 vendor 0x499\n", "missing 'product'"));
     check("trans list IP,PS -> 2 bits", ecm_eni_trans_parse("IP,PS") == (ECM_ENI_T_IP | ECM_ENI_T_PS));
 
-    /* ------------------------------------------------------------ GD9.6 */
-    printf("[GD9.6: every committed ENI loads as enicfg 2]\n");
+    /* ------------------------------------------------------------ Phase 9.6 */
+    printf("[Phase 9.6: every committed ENI loads as enicfg 2]\n");
     static const char *const v2[] = { "eni_1node_1pdo", "eni_8node", "eni_8node_dc", "eni_8node_dc_sdo",
                                       "eni_8node_ca", "eni_mixed", "eni_mixed_rev", "eni_2servo" };
     for (size_t i = 0; i < sizeof(v2) / sizeof(v2[0]); i++) {
@@ -183,7 +183,7 @@ int main(void)
     check("long data printed truncated with '..'",
           ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "32..: "));
 
-    printf("[GD9.6 parser]\n");
+    printf("[Phase 9.6 parser]\n");
     check("enicfg 2 without pd_cmd",
           expect_parse_error("enicfg 2\nslaves 1\nslave 1 vendor 0x1 product 0x1 rev 0x1 check_rev 0 addr 1 "
                              "osize_bits 0 isize_bits 0 dc 0 refclock 0 sync0_ns 0 sync1_ns 0 shift_ns 0 assign 0\n",
@@ -199,8 +199,8 @@ int main(void)
     check("transition OP (OP -> PREOP) parses",
           ecm_eni_trans_parse("SP,OP") == (ECM_ENI_T_SP | ECM_ENI_T_OP));
 
-    /* ------------------------------------------------------------ GD9.5 */
-    printf("[GD9.5: DC register InitCmds agree with the DC element]\n");
+    /* ------------------------------------------------------------ Phase 9.5 */
+    printf("[Phase 9.5: DC register InitCmds agree with the DC element]\n");
     const char *s3 =
         "enicfg 2\npd_cmd lrw\nslaves 1\n"
         "slave 1 name \"a\" vendor 0x499 product 0x1 rev 0x1 check_rev 1 addr 0x03E9 "
@@ -231,8 +231,8 @@ int main(void)
     check("separate 0x09A4 write vs sync1 0 -> refused",
           ecm_eni_check_supported(&eni, 0, &warn, err, sizeof(err)) == 1 && strstr(err, "SYNC1 cycle"));
 
-    /* ------------------------------------------------------------ GD9.10 */
-    printf("[GD9.10: PDO entries from the ENI]\n");
+    /* ------------------------------------------------------------ Phase 9.10 */
+    printf("[Phase 9.10: PDO entries from the ENI]\n");
     rc = ecm_eni_load("config/eni/eni_mixed.enicfg", &eni, err, sizeof(err));
     check("eni_mixed: 27 PDO entries", rc == 0 && eni.npdo == 27);
     check("P1 first output 0x6040:00 16 bit in PDO 0x1600",

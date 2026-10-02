@@ -1,5 +1,5 @@
 /* ==========================================================================
- * esc_profile.h — GD9.9: a soft_bus node that stands in for another slave
+ * esc_profile.h — Phase 9.9: a soft_bus node that stands in for another slave
  * (a vendor servo, our P1 draft), described by a profile file generated
  * from that slave's ESI by tools/esi/esi2profile.py.
  *
@@ -16,7 +16,7 @@
  *     code 0x001D (outputs) / 0x001E (inputs), like a real drive (IS620N
  *     on LinuxCNC with a PDO mismatch: 0x001E)
  * What it does NOT model: the drive itself (CiA402 state machine, motion);
- * inputs stay what the fault injection puts there (GD10 adds a servo model).
+ * inputs stay what the fault injection puts there (Phase 10 adds a servo model).
  * ========================================================================== */
 #ifndef ESC_PROFILE_H
 #define ESC_PROFILE_H

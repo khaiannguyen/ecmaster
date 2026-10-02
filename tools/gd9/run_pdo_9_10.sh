@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_pdo_9_10.sh — Giai doan 9.10: bind process data by (slave, index,
+# run_pdo_9_10.sh — Phase 9.10: bind process data by (slave, index,
 # sub), against soft_bus over veth. Plan: claude/giai_doan_9_ke_hoach.md §12.
 #
 #   sudo -E ./run_pdo_9_10.sh             all cases

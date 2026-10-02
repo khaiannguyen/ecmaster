@@ -1,5 +1,5 @@
 /* ==========================================================================
- * test_coe.c — GD9.3 C-01 / C-01-neg: the CoE/SDO server of soft_bus
+ * test_coe.c — Phase 9.3 C-01 / C-01-neg: the CoE/SDO server of soft_bus
  * (esc_coe.c) driven byte by byte, no network.
  *
  * Each request is built exactly as SOEM ecx_SDOread()/ecx_SDOwrite() build
@@ -466,12 +466,12 @@ static void test_ca_negative(void)
     check("  total bits = 1920*8", (long)bits, 1920L * 8);
 }
 
-/* GD9.6 E-09 (offline part): coe_delay holds a DOWNLOAD response, an
+/* Phase 9.6 E-09 (offline part): coe_delay holds a DOWNLOAD response, an
  * upload is answered at once, the held one appears at the first frame
  * after the release time. */
 static void test_coe_delay(void)
 {
-    printf("\n[GD9.6] coe_delay: slow SDO download responses\n");
+    printf("\n[Phase 9.6] coe_delay: slow SDO download responses\n");
     static esc_fault_bus_t fb;
     esc_fault_init(&fb, NULL, 0);
     uint8_t frame[64] = { 0 };
@@ -503,11 +503,11 @@ static void test_coe_delay(void)
           !!(g_esc.regs[REG_SM1_STATUS] & SM_STATUS_MAILBOX_FULL), 1);
 }
 
-/* GD9.7: EMCY layout as SOEM's ec_emcyt reads it, and queueing behind a
+/* Phase 9.7: EMCY layout as SOEM's ec_emcyt reads it, and queueing behind a
  * response the master has not fetched yet. */
 static void test_emcy(void)
 {
-    printf("\n[GD9.7] CoE Emergency injection\n");
+    printf("\n[Phase 9.7] CoE Emergency injection\n");
     static esc_fault_bus_t fb;
     esc_fault_init(&fb, NULL, 0);
     uint8_t frame[64] = { 0 };
@@ -538,7 +538,7 @@ static void test_emcy(void)
 int main(void)
 {
     printf("=========================================================\n");
-    printf(" test_coe — CoE/SDO server (GD9.3 C-01), NO network\n");
+    printf(" test_coe — CoE/SDO server (Phase 9.3 C-01), NO network\n");
     printf("=========================================================\n");
 
     test_default_unchanged();

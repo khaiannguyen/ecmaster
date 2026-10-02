@@ -5,20 +5,20 @@
  * physical hardware involved.
  *
  * Known limitations of this implementation (stated, not hidden):
- *  - FMMU: [RESOLVED, GD8 8.3 X-02s] bit-oriented mappings are handled
+ *  - FMMU: [RESOLVED, Phase 8.3 X-02s] bit-oriented mappings are handled
  *    (LogicalStartBit/StopBit, PhysicalStartBit), byte-aligned ones keep the
  *    original byte path. TwinCAT maps the SM1 "mailbox full" signal with a
  *    1-bit FMMU (MBoxState, 0x080D.0) — see fmmu_apply_bits().
  *  - AL Control/Status (ESM state transitions) not implemented — that is
  *    Phase 3 scope (state machine).
  *  - Distributed Clocks (0x0900+) not implemented — Phase 4 scope.
- *  - SM watchdog: [RESOLVED, Giai doan 7] process data watchdog modelled
+ *  - SM watchdog: [RESOLVED, Phase 7] process data watchdog modelled
  *    (0x0400/0x0420/0x0440/0x0442, trigger on complete writes to SMs with
  *    control bit6) — see esc_wd_check(). PDI watchdog is not modelled.
- *  - Error counters 0x0300..0x0313: [Giai doan 7] clear-on-write groups and
+ *  - Error counters 0x0300..0x0313: [Phase 7] clear-on-write groups and
  *    saturation modelled; they are only incremented by fault injection
  *    (esc_fault.c), since a software bus has no physical layer errors.
- *  - No CoE SDO mailbox server: [RESOLVED, Giai doan 5] esc_coe.c now
+ *  - No CoE SDO mailbox server: [RESOLVED, Phase 5] esc_coe.c now
  *    implements one on SM0/SM1 (see esc_coe.h for scope: expedited +
  *    segmented upload/download, Abort for unknown objects; no SDO Info,
  *    no Emergency, no Complete Access).
@@ -154,7 +154,7 @@ static size_t append_sm_category(uint16_t *out, size_t pos, size_t cap,
     return pos;
 }
 
-/* SII General category (type 30), GD9.3 --coe-ca only. ETG.2010 layout,
+/* SII General category (type 30), Phase 9.3 --coe-ca only. ETG.2010 layout,
  * 32 byte body: GroupIdx(0) ImgIdx(1) OrderIdx(2) NameIdx(3) reserved(4)
  * CoE details(5) FoE(6) EoE(7) SoE(8) DS402Channels(9) SysmanClass(10)
  * Flags(11) CurrentOnEBus(12-13) GroupIdx(14) reserved(15) PhysicalPort
@@ -213,7 +213,7 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
     while (words < SII_CATEGORY_START_WORD && words < ESC_SII_IMAGE_MAX_WORDS)
         esc->sii_image_buf[words++] = 0x0000;
 
-    /* GD9.3: General first, as in ESI-generated images (order below). */
+    /* Phase 9.3: General first, as in ESI-generated images (order below). */
     if (esc->coe_ca)
         words = append_general_category(esc->sii_image_buf, words, ESC_SII_IMAGE_MAX_WORDS,
                                         SII_COEDET_SDO | SII_COEDET_PDOASSIGN | SII_COEDET_SDOCA);
@@ -239,7 +239,7 @@ static void esc_build_sii(esc_t *esc, uint16_t pdo_size_bytes)
 
 void esc_set_coe_features(esc_t *esc, int pdo_od, int ca)
 {
-    if (esc->prof) return;   /* GD9.9: a profile node keeps its ESI's features */
+    if (esc->prof) return;   /* Phase 9.9: a profile node keeps its ESI's features */
     esc->coe_ca     = ca ? 1 : 0;
     esc->coe_pdo_od = (pdo_od || ca) ? 1 : 0;
     esc_build_sii(esc, esc->pdo_size_bytes);
@@ -270,7 +270,7 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     esc->regs[REG_RAM_SIZE]        = 4; /* KB, matches LAN9252 */
     esc->regs[REG_PORT_DESCRIPTOR] = ESC_PORTDESC_2ETH;
 
-    /* 0x0008 bit0 = 0: bit-oriented FMMU operation (GD8 8.3). Until X-02s
+    /* 0x0008 bit0 = 0: bit-oriented FMMU operation (Phase 8.3). Until X-02s
      * this was 1 (byte-oriented) and TwinCAT ignored it anyway. */
     wr_le16(esc->regs + REG_ESC_FEATURES, 0x0000);
 
@@ -290,17 +290,17 @@ void esc_init(esc_t *esc, uint8_t position_in_chain, uint16_t pdo_size_bytes)
     esc->wd.react = 1;
     memset(&esc->fault, 0, sizeof(esc->fault));
 
-    esc->mbx_out = SII_SM0_OFFSET; esc->mbx_out_len = SII_SM0_SIZE;   /* GD9.9 */
+    esc->mbx_out = SII_SM0_OFFSET; esc->mbx_out_len = SII_SM0_SIZE;   /* Phase 9.9 */
     esc->mbx_in  = SII_SM1_OFFSET; esc->mbx_in_len  = SII_SM1_SIZE;
     esc->prof = NULL;
     esc->prof_st = NULL;
 
-    esc->coe_pdo_od = 0;   /* GD9.3: esc_set_coe_features() turns them on */
+    esc->coe_pdo_od = 0;   /* Phase 9.3: esc_set_coe_features() turns them on */
     esc->coe_ca     = 0;
     esc_build_sii(esc, pdo_size_bytes);
 
     coe_od_init(&esc->coe_od);
-    /* Explicit since GD9.3: offline tests re-run esc_init() on one esc_t. */
+    /* Explicit since Phase 9.3: offline tests re-run esc_init() on one esc_t. */
     memset(&esc->coe_session, 0, sizeof(esc->coe_session));
 
     /* DL Status is filled in by esc_chain_wire() — depends on position. */
@@ -365,7 +365,7 @@ static void esc_sii_refresh_data(esc_t *esc)
  * (esc_coe.c, repeat request, fault injection).
  * TwinCAT polls THIS bit through its 1-bit MBoxState FMMU (logical
  * 0x09000000.0 <- 0x080D.0) and never fetches a response without it:
- * "Object 0x1000 could not be read" (X-02s, GD8 8.3). SOEM and IgH test
+ * "Object 0x1000 could not be read" (X-02s, Phase 8.3). SOEM and IgH test
  * bit3 with FPRD, which is why this went unnoticed. */
 static inline void esc_sm1_sync_irq_write(esc_t *esc)
 {
@@ -604,7 +604,7 @@ static void esc_phys_write(esc_t *esc, uint16_t phys_offset, const uint8_t *data
             (esc->regs[REG_DL_CONTROL_ALIAS_BYTE] & DLCTRL_ALIAS_ENABLE_BIT) ? 1 : 0;
     }
 
-    /* Giai doan 5: a write landing anywhere in SM0's mailbox-out DPRAM
+    /* Phase 5: a write landing anywhere in SM0's mailbox-out DPRAM
      * range is a fresh CoE/SDO request from the master. Processed
      * synchronously right here, still inside this same FPWR/FPRW's
      * datagram handling -- soft_bus has no separate slave-side polling
@@ -722,7 +722,7 @@ static void fmmu_apply(esc_t *esc, uint32_t log_addr, uint8_t *data,
 
         if (length == 0) continue;
         if (lstart_bit != 0 || lstop_bit != 7 || pstart_bit != 0) {
-            /* bit-oriented mapping (GD8 8.3) */
+            /* bit-oriented mapping (Phase 8.3) */
             uint64_t lbit0    = (uint64_t)log_start * 8u + lstart_bit;
             uint64_t lbit_end = ((uint64_t)log_start + length - 1u) * 8u + lstop_bit + 1u;
             if (lbit_end <= lbit0) continue;                /* invalid entry */
@@ -801,7 +801,7 @@ void esc_al_control_write(esc_t *esc)
      *  - without it: nothing changes, an error stays until acknowledged
      *    ([Phase 7] SOEM's ecx_recover_slave() writes INIT to a slave that
      *    has just powered up in INIT).
-     * [GD8 8.3 X-02s, fix #10] The ack bit on a slave WITHOUT an error used
+     * [Phase 8.3 X-02s, fix #10] The ack bit on a slave WITHOUT an error used
      * to fall through to the transition table, which has no INIT->INIT, so
      * TwinCAT's Scan (APWR 0x0120 = 0x0011 on a slave already in INIT) got
      * INIT+ERR 0x0011 back. */
@@ -813,7 +813,7 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
-    /* GD9.7: the rejection may wait for a request TO one state and carry
+    /* Phase 9.7: the rejection may wait for a request TO one state and carry
      * a chosen AL status code (ctl "reject_al <node> <code> <state>"), so a
      * slave can refuse e.g. PREOP->SAFEOP with 0x0036 like a real drive
      * refusing its SYNC settings; "sticky" refuses every such request until
@@ -821,7 +821,7 @@ void esc_al_control_write(esc_t *esc)
     if (esc->force_reject_al && requested != current &&
         (!esc->fault.reject_al_state || requested == esc->fault.reject_al_state)) {
         uint16_t code = esc->fault.reject_al_code ? esc->fault.reject_al_code : ALSTATUSCODE_UNKNOWNALCONTROL;
-        if (!esc->fault.reject_al_sticky) {   /* one-shot, unless "sticky" (GD9.7) */
+        if (!esc->fault.reject_al_sticky) {   /* one-shot, unless "sticky" (Phase 9.7) */
             esc->force_reject_al = 0;
             esc->fault.reject_al_code = 0;
             esc->fault.reject_al_state = 0;
@@ -838,7 +838,7 @@ void esc_al_control_write(esc_t *esc)
         case ESM_SAFEOP: valid_transition = (requested == ESM_PREOP || requested == ESM_INIT
                                              || requested == ESM_OP); break;
         /* ETG.1000.6 ESM: OP -> PREOP is a valid direct transition (X-02s,
-         * GD8 8.3: TwinCAT's ENI goes OP -> PREOP when leaving OP; SOEM and
+         * Phase 8.3: TwinCAT's ENI goes OP -> PREOP when leaving OP; SOEM and
          * IgH never use it, so the old table rejected it with 0x0011 and the
          * slave stuck in OP+ERR). */
         case ESM_OP:     valid_transition = (requested == ESM_SAFEOP || requested == ESM_PREOP
@@ -852,7 +852,7 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
-    /* GD9.9: a profile node checks the SM2/SM3 sizes against the PDOs
+    /* Phase 9.9: a profile node checks the SM2/SM3 sizes against the PDOs
      * assigned in 0x1C12/0x1C13, like a real drive (0x001D / 0x001E). */
     if (esc->prof && current == ESM_PREOP && requested == ESM_SAFEOP) {
         uint16_t code = esc_prof_check_pd(esc);
@@ -870,7 +870,7 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
-    /* Hợp lệ — chuyển state, xoá cờ lỗi. */
+    /* Valid -- change state, clear the error flag. */
     wr_le16(esc->regs + REG_AL_STATUS, requested);
     wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);
 

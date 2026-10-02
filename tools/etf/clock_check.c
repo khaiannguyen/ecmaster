@@ -1,5 +1,5 @@
 /*
- * clock_check.c -- GD8 8.5 step 6.1 (T-01, T-02): is the i226 PHC tracking
+ * clock_check.c -- Phase 8.5 step 6.1 (T-01, T-02): is the i226 PHC tracking
  * the kernel's CLOCK_TAI, and is CLOCK_TAI - CLOCK_MONOTONIC free of steps?
  *
  * With ETF offload the NIC launches a frame when its PHC reaches txtime,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eni_dc_variant.py -- GD9.5: make a DC variant of a TwinCAT ENI, edited the
+"""eni_dc_variant.py -- Phase 9.5: make a DC variant of a TwinCAT ENI, edited the
 way TwinCAT itself would write it (DC element AND the matching PS register
 InitCmds), so tools/eni/eni2cfg.py and the loader see a coherent file.
 

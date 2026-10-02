@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_dc_9_5.sh — Giai doan 9.5: DC per slave from the ENI, against soft_bus
+# run_dc_9_5.sh — Phase 9.5: DC per slave from the ENI, against soft_bus
 # over veth. Plan: claude/giai_doan_9_ke_hoach.md §7.
 #
 #   sudo -E ./run_dc_9_5.sh               all cases

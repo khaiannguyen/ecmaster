@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_tsan.sh — Giai doan 7.6: ThreadSanitizer on every lock-free queue.
+# run_tsan.sh — Phase 7.6: ThreadSanitizer on every lock-free queue.
 #
 #   ./run_tsan.sh [items_per_queue]      (default 2 000 000; no root needed)
 #

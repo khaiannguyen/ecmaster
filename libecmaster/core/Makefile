@@ -1,4 +1,4 @@
-# libecmaster/core — ecm_dc (Giai doan 6) + reply-age gate test (Giai doan 7.4)
+# libecmaster/core — ecm_dc (Phase 6) + reply-age gate test (Phase 7.4)
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra -std=gnu11
 

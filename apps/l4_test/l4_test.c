@@ -1,5 +1,5 @@
 /* ==========================================================================
- * l4_test.c — automated L4-01..L4-05 test tool (Giai doan 5, mailbox/CoE).
+ * l4_test.c — automated L4-01..L4-05 test tool (Phase 5, mailbox/CoE).
  *
  * Exercises the REAL SOEM ecx_SDOread/ecx_SDOwrite path (through
  * libecmaster/mailbox/ecm_mailbox.c, already validated end-to-end
@@ -17,10 +17,10 @@
  *   L4-05  --     SDOread 0x8001:00 (200 byte) -- segmented, reassembled correctly
  *   L4-07  OP     SDOwrite 0x8002:00, 16 byte (normal) and 250 byte (init +
  *                 2 segments), read back identical; write to the read-only
- *                 0x8001 -> abort 0x06010002 (GD9.3)
+ *                 0x8001 -> abort 0x06010002 (Phase 9.3)
  *   L4-08  PREOP/OP  --ca only (soft_bus --coe-ca): Complete Access read of
  *                 0x1C12 = 01 00 00 16, CA write of it in PREOP ok, in OP
- *                 refused with abort 0x08000022 (GD9.3)
+ *                 refused with abort 0x08000022 (Phase 9.3)
  *
  * L4-06 (SM watchdog) is covered separately in ecm_run.c + a tshark
  * capture, not repeated here.
@@ -222,7 +222,7 @@ static void test_l4_03(uint16_t slave)
  * surfaced by ecm_mailbox_sdo_read() as rc == -4 (see ecm_mailbox.h's
  * documented return codes).
  *
- * Giai doan 9.0: rc == -4 alone is not enough -- ecx_SDOread() returns a
+ * Phase 9.0: rc == -4 alone is not enough -- ecx_SDOread() returns a
  * WKC <= 0 for an Abort AND for other protocol failures (wrong service,
  * timeout on a segment). The Abort code itself is in SOEM's error list
  * (ecx_SDOerror -> ecx_pusherror). CiA 301 abort 0x06020000 = "object does
@@ -300,7 +300,7 @@ static int pop_sdo_aborts(uint16_t slave, uint16_t index, uint32_t *code, int *o
     return found;
 }
 
-/* L4-07 (GD9.3): normal and segmented SDO download. 0x8002 is a RW
+/* L4-07 (Phase 9.3): normal and segmented SDO download. 0x8002 is a RW
  * OCTET_STRING in soft_bus (1..400 byte). 16 byte fit the init frame
  * (normal transfer); 250 byte need the init frame (112) and two download
  * segments (119 + 19) with 128 byte mailboxes. Runs in OP, so the
@@ -338,7 +338,7 @@ static void test_l4_07(uint16_t slave)
     report("L4-07 write to read-only object refused", wrc != 0 && found == 1 && code == 0x06010002u, detail);
 }
 
-/* L4-08 (GD9.3, --ca): Complete Access against soft_bus --coe-ca. */
+/* L4-08 (Phase 9.3, --ca): Complete Access against soft_bus --coe-ca. */
 static void test_l4_08_preop(uint16_t slave)
 {
     uint8_t r[8] = { 0 };
@@ -374,7 +374,7 @@ static void test_l4_08_op(uint16_t slave)
 /* ==========================================================================
  * Bring-up, sequencing, teardown.
  * ========================================================================== */
-/* L5-12 (Giai doan 7.4): mailbox repeat request and duplicated responses.
+/* L5-12 (Phase 7.4): mailbox repeat request and duplicated responses.
  * Round i writes 0x8000:01 = 0x10000+i and reads it back. Every 10 rounds
  * soft_bus is told (control FIFO) to post the next response of node 0
  * twice (mbx_dup) and, 5 rounds later, to lose the frame carrying the next
@@ -423,9 +423,9 @@ int main(int argc, char **argv)
     const char *ifname = NULL;
     int n = 8;
     uint32_t expected_vendor_id = 0x00000499u; /* SII_VENDOR_ID placeholder default */
-    int l512_rounds = 0;               /* Giai doan 7.4: --l512 N */
+    int l512_rounds = 0;               /* Phase 7.4: --l512 N */
     const char *ctl = NULL;            /* soft_bus control FIFO for --l512 */
-    int ca = 0;                        /* GD9.3: --ca, L4-08 (soft_bus --coe-ca) */
+    int ca = 0;                        /* Phase 9.3: --ca, L4-08 (soft_bus --coe-ca) */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {

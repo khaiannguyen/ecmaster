@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# check_golden.sh — Giai doan 7.5: regression check of the master's frame
+# check_golden.sh — Phase 7.5: regression check of the master's frame
 # structure against tools/golden/golden_ecm_run.txt.
 #
 #   sudo ./check_golden.sh              capture, compare; exit 1 on a difference
@@ -12,7 +12,7 @@
 # Env: ECM_RUN SOFT_BUS IF_M IF_S ENI (passed to capture_ecm_run.sh), GOLDEN,
 #      ATTEMPTS (default 2)
 #   ENI=config/eni/eni_8node_dc_sdo.enicfg ./check_golden.sh
-#                                       ENI mode (GD8 E-05); golden defaults to
+#                                       ENI mode (Phase 8 E-05); golden defaults to
 #                                       golden_ecm_run_eni.txt
 # Lines starting with '#' (counts) are not compared.
 # ==========================================================================

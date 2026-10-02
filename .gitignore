@@ -60,5 +60,5 @@ log_gd9_*/
 libecmaster/pdo/test_pdo_offline
 libecmaster/pdo/test_pdo_offline_asan
 
-# GD9.9: profiles generated from a vendor ESI stay local (licence note 30/9)
+# Phase 9.9: profiles generated from a vendor ESI stay local (licence note 30/9)
 config/profiles/is620n.prof

@@ -36,7 +36,7 @@ typedef struct {
     int64_t hop_ns;             /* simulated forward delay per node          */
     int64_t ref_drift_ppb;      /* drift of node 0 (the future ref clock)    */
     int64_t other_drift_ppb;    /* amplitude for nodes 1..n-1 (spread +-)    */
-    uint64_t no_dc_mask;        /* GD9.5: bit i = node i reports no DC unit
+    uint64_t no_dc_mask;        /* Phase 9.5: bit i = node i reports no DC unit
                                  * (0x0008 bit2 = 0), e.g. a coupler; its
                                  * port timing still runs so the chain stays
                                  * consistent. 0 = every node DC capable.    */

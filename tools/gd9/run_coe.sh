@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_coe.sh — Giai doan 9.3: SDO Complete Access and normal/segmented
+# run_coe.sh — Phase 9.3: SDO Complete Access and normal/segmented
 # download against soft_bus over veth. Plan: claude/giai_doan_9_ke_hoach.md §5.
 #
 #   sudo -E ./run_coe.sh                  all cases

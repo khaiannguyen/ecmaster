@@ -118,8 +118,8 @@ ecm_mailbox_t *ecm_mailbox_create(ecx_contextt *ctx);
  * Part 3: the mailbox worker LOOP -- not a thread spawner.
  *
  * ecm_run.c already has a dedicated "mailbox" thread as part of its
- * fixed 5-thread skeleton (master_plan_v2.md §2.4): telemetry / ứng
- * dụng / mailbox / giám sát / RT. Rather than have this module spawn
+ * fixed 5-thread skeleton (master_plan_v2.md §2.4): telemetry /
+ * application / mailbox / monitor / RT. Rather than have this module spawn
  * its OWN worker thread (which would make it a 6th thread), call this
  * function from INSIDE that existing thread's entry point, after it
  * has already called set_non_rt_thread():
@@ -160,7 +160,7 @@ void ecm_mailbox_destroy(ecm_mailbox_t *mbx);
  * issued this call, each one a genuine extra sendto() on the wire, NOT
  * gated by budget alone but by whether the SM1 "full" bit was actually
  * set) is silently discarded by that wrapper. A caller that needs to
- * keep an independent frame-order tracker in sync (e.g. Giai doan 4's
+ * keep an independent frame-order tracker in sync (e.g. Phase 4's
  * tx_order_ring turnaround measurement) needs BOTH counts, in the same
  * order these two calls make them: ecx_mbxinhandler()'s ecx_FPRD calls
  * happen before ecx_mbxouthandler()'s ecx_FPWR calls.

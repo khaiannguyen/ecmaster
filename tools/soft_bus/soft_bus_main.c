@@ -12,17 +12,17 @@
  * The main loop waits with ppoll() on the raw socket AND the FIFO, with a
  * timeout set by the earliest delayed reply (late/reorder injections).
  *
- * GD9.3 (both off by default, so the wire traffic of a default run is
+ * Phase 9.3 (both off by default, so the wire traffic of a default run is
  * unchanged -- golden_ecm_run.txt):
  *   --coe-pdo-od  object dictionary gets 0x1C00/0x1C12/0x1C13/0x1600/0x1A00,
  *                 SOEM maps process data over CoE (ecx_readPDOmap)
- *   --coe-delay-ms MS  SDO download responses posted MS ms late (GD9.6 E-09;
+ *   --coe-delay-ms MS  SDO download responses posted MS ms late (Phase 9.6 E-09;
  *                 same as the ctl command "coe_delay all MS")
  *   --coe-ca      SDO Complete Access + SII General category (CoE details
  *                 0x25), implies --coe-pdo-od; SOEM uses ecx_readPDOmapCA.
  *                 ESI: config/esi/softbus_esi_ca.xml
  *
- * GD9.9:
+ * Phase 9.9:
  *   --profile N=FILE  SOEM slave N (1-based) stands in for another slave:
  *                 identity, SII, CoE dictionary and PDO assignment rules of
  *                 the profile FILE (tools/esi/esi2profile.py, from an ESI).
@@ -91,9 +91,9 @@ int main(int argc, char **argv)
     int sm_wd_react = 1;
 
     int sii_poke_word[8], sii_poke_val[8], n_poke = 0;   /* --sii-poke W=V (negative controls) */
-    int coe_pdo_od = 0, coe_ca = 0;                      /* GD9.3, both off by default */
-    int coe_delay_ms = 0;                                /* GD9.6, off by default */
-    int prof_node[16], n_prof = 0;                       /* GD9.9 --profile N=FILE */
+    int coe_pdo_od = 0, coe_ca = 0;                      /* Phase 9.3, both off by default */
+    int coe_delay_ms = 0;                                /* Phase 9.6, off by default */
+    int prof_node[16], n_prof = 0;                       /* Phase 9.9 --profile N=FILE */
     const char *prof_file[16];
 
     for (int i = 1; i < argc; i++) {
@@ -107,7 +107,7 @@ int main(int argc, char **argv)
             const char *v = argv[++i];                 /* off | 32 | 64 */
             dc_cfg.width = (strcmp(v, "off") == 0) ? 0 : atoi(v);
         } else if (strcmp(argv[i], "--no-dc-nodes") == 0 && i + 1 < argc) {
-            /* GD9.5: SOEM slave numbers (1-based) without a DC unit, "1" or "1,3" */
+            /* Phase 9.5: SOEM slave numbers (1-based) without a DC unit, "1" or "1,3" */
             char *list = argv[++i], *save = NULL;
             for (char *t = strtok_r(list, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
                 int k = atoi(t);
@@ -131,7 +131,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--coe-pdo-od") == 0) {
             coe_pdo_od = 1;                            /* 0x1C00/0x1C12/0x1C13/0x1600/0x1A00 */
         } else if (strcmp(argv[i], "--coe-delay-ms") == 0 && i + 1 < argc) {
-            coe_delay_ms = atoi(argv[++i]);            /* GD9.6 E-09: slow SDO download responses */
+            coe_delay_ms = atoi(argv[++i]);            /* Phase 9.6 E-09: slow SDO download responses */
         } else if (strcmp(argv[i], "--coe-ca") == 0) {
             coe_ca = 1;                                /* SDO Complete Access, implies --coe-pdo-od */
         } else if (strcmp(argv[i], "--profile") == 0 && i + 1 < argc) {
@@ -163,8 +163,8 @@ int main(int argc, char **argv)
                 "       [--dc off|32|64] [--dc-hop-ns N] [--dc-drift-ppm X] [--dc-other-ppm X]\n"
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
                 "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n"
-                "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, GD9.5)\n"
-                "       [--profile N=FILE ...] (slave N emulates the profile's slave, GD9.9)\n",
+                "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, Phase 9.5)\n"
+                "       [--profile N=FILE ...] (slave N emulates the profile's slave, Phase 9.9)\n",
                 argv[0]);
         return 1;
     }
@@ -258,7 +258,7 @@ int main(int argc, char **argv)
 
     /* Real NICs filter multicast in hardware. TwinCAT sends EtherCAT frames
      * to 01:01:05:01:00:00, which the i226 drops unless the interface is
-     * promiscuous (X-02s, GD8 8.3: rx_packets stood still until tshark
+     * promiscuous (X-02s, Phase 8.3: rx_packets stood still until tshark
      * happened to switch promisc on). SOEM does the same in nicdrv.c. A
      * socket membership (not `ip link ... promisc on`) is released
      * automatically when soft_bus exits. veth never filtered, so this was

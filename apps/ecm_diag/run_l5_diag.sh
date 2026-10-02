@@ -11,7 +11,7 @@
 #   3. restore_node <D>   -> "slave D+1 is on the bus ... ignores station
 #                            address"                         (L5-11b diagnosis)
 # ecm_run runs with --no-recover: this script grades DIAGNOSIS only. Since
-# Giai doan 7.3 ecm_run would otherwise re-address the restored slave (path
+# Phase 7.3 ecm_run would otherwise re-address the restored slave (path
 # B) before the snapshot is taken; the recovery itself is graded by
 # apps/ecm_run/run_l5_policy.sh (case l511b).
 # soft_bus node k = SOEM slave k+1.

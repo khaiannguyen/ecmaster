@@ -1,4 +1,4 @@
-# libecmaster/pdo — GD9.10 bind process data by (slave, index, sub).
+# libecmaster/pdo — Phase 9.10 bind process data by (slave, index, sub).
 #   make test        offline unit tests (no SOEM, no network)
 #   make test_asan   same, with ASan/UBSan
 CC      = gcc

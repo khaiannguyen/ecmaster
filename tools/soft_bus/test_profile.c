@@ -1,5 +1,5 @@
 /* ==========================================================================
- * test_profile.c — GD9.9: soft_bus profile nodes (esc_profile.c), offline.
+ * test_profile.c — Phase 9.9: soft_bus profile nodes (esc_profile.c), offline.
  *
  * A node takes a profile generated from an ESI (config/profiles/NAME.prof) and
  * must then look like that slave: SII identity / mailbox / PDO categories,

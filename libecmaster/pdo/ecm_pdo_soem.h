@@ -1,7 +1,7 @@
 #ifndef ECM_PDO_SOEM_H
 #define ECM_PDO_SOEM_H
 /*
- * ecm_pdo_soem.h -- GD9.10: fill an ecm_pdo_table_t / ecm_pdo_loc_t from a
+ * ecm_pdo_soem.h -- Phase 9.10: fill an ecm_pdo_table_t / ecm_pdo_loc_t from a
  * SOEM context. Not RT: call at PREOP after ecx_config_map_group(), before
  * any thread uses the bus.
  */

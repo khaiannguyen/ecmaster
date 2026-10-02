@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# capture_ecm_run.sh — Giai doan 7.5: run the fixed golden scenario and
+# capture_ecm_run.sh — Phase 7.5: run the fixed golden scenario and
 # write its structure (tools/golden/pcap2struct.py) to stdout.
 #
 #   sudo ./capture_ecm_run.sh [out.pcap] > structure.txt
@@ -10,12 +10,12 @@
 # enumerate -> PREOP -> SM watchdog -> DC -> SAFEOP -> OP -> 2 s cyclic
 # (with 1 s diagnostics) -> INIT.
 # Env: SOFT_BUS ECM_RUN IF_M IF_S ECM_RUN_BIN_NOTE
-#      ENI=config/eni/X.enicfg  run the same scenario in ENI mode (GD8 8.4,
+#      ENI=config/eni/X.enicfg  run the same scenario in ENI mode (Phase 8.4,
 #      E-05): ecm_run --eni, identity/layout checks, CoE InitCmds, ENI DC
-#      N=1 GROUP_ARGS=           GD9.1 (G-08): one-slave bus, every slave in
+#      N=1 GROUP_ARGS=           Phase 9.1 (G-08): one-slave bus, every slave in
 #                                GROUP_MOTION, GROUP_IO empty
 #                                (defaults: N=8 GROUP_ARGS="--motion-slaves 4")
-#      SB_ARGS="--coe-ca"         GD9.3 (C-02/C-05): extra soft_bus options
+#      SB_ARGS="--coe-ca"         Phase 9.3 (C-02/C-05): extra soft_bus options
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)

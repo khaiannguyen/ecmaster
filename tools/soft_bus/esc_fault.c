@@ -156,7 +156,7 @@ int esc_fault_frame_begin(esc_fault_bus_t *f, esc_t *chain, int n,
             f->mbx_dup++;
             LOG(f, now_ns, "mbx_dup: node %d re-posted its last mailbox response", i);
         }
-        /* GD9.7: one EMCY per frame while SM1 is free and the slave has a
+        /* Phase 9.7: one EMCY per frame while SM1 is free and the slave has a
          * mailbox (PREOP and up); data[0..1] carry a sequence number so the
          * master side can check order and loss. */
         if (e->fault.emcy_left && (e->regs[REG_AL_STATUS] & 0x0F) >= 0x02 && !e->coe_session.active) {
@@ -172,7 +172,7 @@ int esc_fault_frame_begin(esc_fault_bus_t *f, esc_t *chain, int n,
         }
         if (e->fault.mbx_held && now_ns >= e->fault.mbx_release_ns) {
             e->fault.mbx_held = 0;
-            e->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;   /* GD9.6 coe_delay */
+            e->regs[REG_SM1_STATUS] |= SM_STATUS_MAILBOX_FULL;   /* Phase 9.6 coe_delay */
             LOG(f, now_ns, "coe_delay: node %d posted its held SDO download response", i);
         }
         if (esc_wd_check(e, now_ns)) {
@@ -307,7 +307,7 @@ static void node_power_on(esc_t *chain, int n, int k)
     esc_t *e = &chain[k];
     uint16_t pdo = e->pdo_size_bytes;
     uint8_t react = e->wd.react;
-    const esc_profile_t *prof = e->prof;          /* GD9.9: the node stays that slave */
+    const esc_profile_t *prof = e->prof;          /* Phase 9.9: the node stays that slave */
     struct esc_prof_state *ps = e->prof_st;
     memset(e, 0, sizeof(*e));          /* power-on: everything forgotten */
     esc_init(e, (uint8_t)k, pdo);
@@ -361,7 +361,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
     char *hash = strchr(tmp, '#');
     if (hash) *hash = '\0';
 
-    char *argv[6] = { 0 };   /* GD9.7: up to 5 tokens (emcy) */
+    char *argv[6] = { 0 };   /* Phase 9.7: up to 5 tokens (emcy) */
     int argc = 0;
     for (char *t = strtok(tmp, " \t\r\n"); t && argc < 6; t = strtok(NULL, " \t\r\n"))
         argv[argc++] = t;
@@ -454,7 +454,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
         }
         LOG(f, now_ns, "coe_delay: SDO download responses of %s delayed %d ms", argv[1], ms);
     } else if (!strcmp(cmd, "reject_al") && argc >= 2 && argc <= 5) {
-        /* GD9.7: optional AL status code, target state (1/2/4/8), "sticky" */
+        /* Phase 9.7: optional AL status code, target state (1/2/4/8), "sticky" */
         unsigned long code = argc >= 3 ? strtoul(argv[2], NULL, 0) : 0;
         unsigned long tst  = argc >= 4 ? strtoul(argv[3], NULL, 0) : 0;
         int sticky = argc == 5 && !strcmp(argv[4], "sticky");
@@ -473,7 +473,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             tst ? (tst == 1 ? " to INIT" : tst == 2 ? " to PREOP" : tst == 4 ? " to SAFEOP" : " to OP") : "",
             argv[1], code ? code : 0x0012ul);
     } else if (!strcmp(cmd, "pdo_out") && argc == 2) {
-        /* GD9.10: what the master wrote into the node's outputs (SM2) */
+        /* Phase 9.10: what the master wrote into the node's outputs (SM2) */
         NEED_NODE(1);
         const uint8_t *sm2 = chain[node].regs + REG_SM_BASE + 2 * REG_SM_ENTRY_SIZE;
         uint16_t start = rd16(sm2 + SM_OFF_PHYS_START), len = rd16(sm2 + SM_OFF_LENGTH);
@@ -482,7 +482,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
             snprintf(hex + 3 * k, sizeof(hex) - 3 * (size_t)k, "%02X ", chain[node].regs[start + k]);
         LOG(f, now_ns, "pdo_out: node %d (SOEM slave %d) %u byte: %s", node, node + 1, len, hex);
     } else if (!strcmp(cmd, "pdo_in") && argc == 4) {
-        /* GD9.10: pdo_in <node> <byte> <hex>: put bytes into the node's inputs (SM3) */
+        /* Phase 9.10: pdo_in <node> <byte> <hex>: put bytes into the node's inputs (SM3) */
         NEED_NODE(1);
         const uint8_t *sm3 = chain[node].regs + REG_SM_BASE + 3 * REG_SM_ENTRY_SIZE;
         uint16_t start = rd16(sm3 + SM_OFF_PHYS_START), len = rd16(sm3 + SM_OFF_LENGTH);
@@ -495,7 +495,7 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
         }
         LOG(f, now_ns, "pdo_in: node %d (SOEM slave %d) input byte %lu = %s", node, node + 1, off, argv[3]);
     } else if (!strcmp(cmd, "emcy") && argc >= 3 && argc <= 5) {
-        /* GD9.7: emcy <node> <code> [reg] [count] */
+        /* Phase 9.7: emcy <node> <code> [reg] [count] */
         NEED_NODE(1);
         unsigned long code = strtoul(argv[2], NULL, 0);
         unsigned long reg  = argc >= 4 ? strtoul(argv[3], NULL, 0) : 0x01;

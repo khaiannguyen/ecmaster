@@ -1,4 +1,4 @@
-# hand-written GD9.3 test config (C-03/C-04), NOT generated from an ENI:
+# hand-written Phase 9.3 test config (C-03/C-04), NOT generated from an ENI:
 # eni_8node_dc_sdo.enicfg + Complete Access PDO assign (0x1C12/0x1C13, PS) on
 # every slave + a 16 byte normal download (0x8002) on slave 1. Replaced by
 # the TwinCAT eni_8node_ca.xml -> .enicfg in step 9.4.

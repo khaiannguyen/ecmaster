@@ -1,5 +1,5 @@
 /* ==========================================================================
- * esc_profile.c — GD9.9 soft_bus node profiles (see esc_profile.h).
+ * esc_profile.c — Phase 9.9 soft_bus node profiles (see esc_profile.h).
  * ========================================================================== */
 #include "esc_profile.h"
 

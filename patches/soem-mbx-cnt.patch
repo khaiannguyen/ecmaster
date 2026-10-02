@@ -14,7 +14,7 @@
     int mbxhandlerstate;
     /** mailbox handler robust mailbox protocol state */
     int mbxrmpstate;
-+   /** ecmaster patch (Giai doan 7.4, L5-12): mailbox counter (Cnt, 1..7) of the
++   /** ecmaster patch (Phase 7.4, L5-12): mailbox counter (Cnt, 1..7) of the
 +    *  last mailbox response accepted from this slave, 0 = none yet. A response
 +    *  carrying the same non-zero Cnt is a duplicate (ETG.1000.4) and dropped. */
 +   uint8 mbxincnt;
@@ -29,7 +29,7 @@
                 /* keep track of work limit */
                 if (++limitcnt >= limit) maxcnt = 0;
                 wkc = ecx_FPRD(&context->port, configadr, mbxro, mbxl, mbx, EC_TIMEOUTRET); /* get mailbox */
-+               /* ecmaster patch (Giai doan 7.4, L5-12): a response with the
++               /* ecmaster patch (Phase 7.4, L5-12): a response with the
 +                * same non-zero Cnt as the last accepted one is that response
 +                * delivered twice (ETG.1000.4). Without this, the NEXT request
 +                * takes it as its own answer and every later request gets the

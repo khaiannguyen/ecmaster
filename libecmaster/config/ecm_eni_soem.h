@@ -1,5 +1,5 @@
 /*
- * ecm_eni_soem.h -- apply an ecm_eni_t to a SOEM context (GD8 8.4).
+ * ecm_eni_soem.h -- apply an ecm_eni_t to a SOEM context (Phase 8.4).
  *
  * Order in ecm_run (docs/eni.md section 5):
  *   ecx_config_init()
@@ -31,17 +31,17 @@
 
 /* 0 if ecm_run can do everything the ENI asks for, else the number of
  * refusals, each printed: CoE InitCmds of other transitions than IP/PS,
- * and (GD9.6) ecm_eni_check_supported(): LRD/LWR process data (E-06) and
+ * and (Phase 9.6) ecm_eni_check_supported(): LRD/LWR process data (E-06) and
  * register InitCmds outside the known table (E-08; with allow_unknown_reg
  * they are printed as warnings and not counted). Call right after loading,
  * before the bus is touched. */
 int ecm_eni_soem_supported(const ecm_eni_t *eni, int allow_unknown_reg);
 
-/* GD9.6: SDO timeout of a CoE InitCmd whose ENI Timeout is 0 (default
+/* Phase 9.6: SDO timeout of a CoE InitCmd whose ENI Timeout is 0 (default
  * EC_TIMEOUTRXM). ecm_run --sdo-timeout-ms. */
 void ecm_eni_soem_set_sdo_timeout_us(int us);
 
-/* GD9.7: once ecm_run's RT thread is the reader of SOEM's error list, the
+/* Phase 9.7: once ecm_run's RT thread is the reader of SOEM's error list, the
  * InitCmds re-run by recovery (PO2SO hook) must not pop it: on = do not
  * touch the list; a failed InitCmd is still reported, its abort code comes
  * through the RT thread's [SDO] line. */

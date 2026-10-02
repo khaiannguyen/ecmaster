@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_etf_veth.sh -- GD8 8.5: `ecm_run --link etf` regression on a multi-queue veth
+# run_etf_veth.sh -- Phase 8.5: `ecm_run --link etf` regression on a multi-queue veth
 # pair with mqprio + ETF in SOFTWARE mode (veth has no launch-time offload).
 #
 # Functional check only: config, cyclic, mailbox, diag and fault policy must still

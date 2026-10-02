@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""esi2profile.py -- GD9.9: turn an ESI device description into a soft_bus
+"""esi2profile.py -- Phase 9.9: turn an ESI device description into a soft_bus
 node profile, so soft_bus can stand in for a vendor slave (Inovance IS620N)
 or for the draft of our own slave (P1) on a virtual bus.
 

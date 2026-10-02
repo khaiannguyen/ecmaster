@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pcap2struct.py -- Giai doan 7.5: structure of an EtherCAT master session.
+"""pcap2struct.py -- Phase 7.5: structure of an EtherCAT master session.
 
 Reads a classic pcap captured on the master's interface (tshark -F pcap)
 and prints a normalised, timing-independent description of what the master

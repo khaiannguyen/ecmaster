@@ -111,7 +111,7 @@ void ecm_diag_handoff_init(ecm_diag_handoff_t *h);
 int  ecm_diag_handoff_put(ecm_diag_handoff_t *h, const ecm_diag_raw_t *raw);   /* 1 ok, 0 dropped */
 int  ecm_diag_handoff_get(ecm_diag_handoff_t *h, ecm_diag_raw_t *out);          /* 1 got one */
 
-/* ---- GD9.7: CoE emergency messages ----------------------------------------
+/* ---- Phase 9.7: CoE emergency messages ----------------------------------------
  * The RT thread drains SOEM's error list (the only reader) and passes each
  * EMCY to the monitor as an event; the monitor calls ecm_diag_add_emcy().
  * Layout (ETG.1000.6 / CiA 301): error code (16 bit), error register
@@ -147,7 +147,7 @@ typedef struct {
     uint64_t no_answer;          /* reads without an answer                  */
     uint16_t station_addr, dl_status, al_status, al_code;
     uint64_t seen_read;          /* d->reads value when last included        */
-    uint64_t emcy_count;         /* GD9.7: EMCY received from this slave     */
+    uint64_t emcy_count;         /* Phase 9.7: EMCY received from this slave     */
     ecm_emcy_t emcy[ECM_DIAG_EMCY_KEEP];   /* ring, newest at emcy_next - 1  */
     int      emcy_next;
 } ecm_diag_slave_t;
@@ -162,7 +162,7 @@ typedef struct {
     int      ngroups;
     ecm_wkc_stats_t wkc[ECM_DIAG_MAX_GROUPS];
     ecm_diag_slave_t s[ECM_DIAG_MAX_SLAVES];
-    uint64_t emcy_total;         /* GD9.7 */
+    uint64_t emcy_total;         /* Phase 9.7 */
     uint64_t emcy_lost;          /* events dropped between RT and monitor    */
     uint64_t emcy_bad_slave;     /* EMCY with a slave number outside 1..n    */
 } ecm_diag_t;
@@ -170,7 +170,7 @@ typedef struct {
 void ecm_diag_init(ecm_diag_t *d, int n, uint16_t expected_state);
 void ecm_diag_ingest(ecm_diag_t *d, const ecm_diag_raw_t *raw);
 
-/* GD9.7: record one EMCY of slave (1-based). Monitor only. */
+/* Phase 9.7: record one EMCY of slave (1-based). Monitor only. */
 void ecm_diag_add_emcy(ecm_diag_t *d, int slave, const ecm_emcy_t *e);
 /* k-th newest EMCY of slave (k = 0 newest), NULL if fewer were received. */
 const ecm_emcy_t *ecm_diag_emcy(const ecm_diag_t *d, int slave, int k);
@@ -189,10 +189,10 @@ typedef enum {
     ECM_FIND_STATE,              /* a = slave, b = AL status, c = AL status code   */
     ECM_FIND_SATURATED,          /* a = slave                                      */
     ECM_FIND_DIAG_LOST,          /* diagnostic frames lost                         */
-    ECM_FIND_EMCY,               /* GD9.7: a = slave, c = last code, b = last register,
+    ECM_FIND_EMCY,               /* Phase 9.7: a = slave, c = last code, b = last register,
                                   * count = EMCY received; WARN while the last
                                   * code is not 0 (error not reset), else INFO      */
-    ECM_FIND_EMCY_LOST,          /* GD9.7: count = EMCY events lost before the monitor */
+    ECM_FIND_EMCY_LOST,          /* Phase 9.7: count = EMCY events lost before the monitor */
 } ecm_find_type_t;
 
 typedef enum { ECM_SEV_INFO = 0, ECM_SEV_WARN, ECM_SEV_ERROR } ecm_sev_t;

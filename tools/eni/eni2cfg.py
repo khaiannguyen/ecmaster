@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eni2cfg.py -- GD8 8.4: convert an ENI (EtherCATConfig XML, e.g. exported by
+"""eni2cfg.py -- Phase 8.4: convert an ENI (EtherCATConfig XML, e.g. exported by
 TwinCAT) into the line-based .enicfg that libecmaster loads at runtime.
 
 Why not SOEM's eniconv.py / add_eni(): see docs/eni.md. In short, SOEM's
@@ -19,7 +19,7 @@ What is read, per Config/Slave:
   Mailbox/CoE/InitCmds/InitCmd (Disabled=1 skipped)
 And Config/Cyclic/CycleTime.
 
-GD9.6 (enicfg 2) also records, for the loader to CHECK (not to execute):
+Phase 9.6 (enicfg 2) also records, for the loader to CHECK (not to execute):
   every register InitCmd of every slave and of the master (reg records):
             the loader holds the table of the ones SOEM + libecmaster do
             themselves and refuses an ENI with any other (E-08)
@@ -48,7 +48,7 @@ numbers in hex with 0x prefix except counts/times in decimal):
         preop_ms <n> safeop_ms <n> op_ms <n>          (0 = not in the ENI)
   reg <pos> trans <IP,..> cmd <n> ado 0x.... len <n> data <hex|->
   pdo <pos> dir out|in pdo 0x.... index 0x.... sub 0x.. bits <n>
-        (GD9.10: every mapped PDO entry in process image order; index 0 =
+        (Phase 9.10: every mapped PDO entry in process image order; index 0 =
         padding; the order of PDOs follows the 0x1C12/0x1C13 InitCmds)
         (pos 0 = master InitCmd; data truncated to 32 byte, len is the real one)
   coe <pos> trans <IP,PS,..> ccs <1|2> index 0x.... sub 0x.. ca 0|1 timeout_ms <n> data <hex|->
@@ -107,7 +107,7 @@ def pdo_bits(pd, tag):
 
 
 def pdo_assignment(coe, sm_index):
-    """GD9.10: the PDO assignment the ENI's CoE InitCmds leave in 0x1C12
+    """Phase 9.10: the PDO assignment the ENI's CoE InitCmds leave in 0x1C12
     (outputs) / 0x1C13 (inputs), in order; None if the ENI does not write
     it. Complete Access: data = SI0 (16 bit, padded) + 16-bit PDO numbers.
     Without CA: SI0 = n and SIk = PDO, as separate downloads (last wins)."""
@@ -131,7 +131,7 @@ def pdo_assignment(coe, sm_index):
 
 
 def pdo_entries(pd, tag, assign, who):
-    """GD9.10: (pdo, index, sub, bits) of every entry the slave maps, in
+    """Phase 9.10: (pdo, index, sub, bits) of every entry the slave maps, in
     process image order: PDOs in the order of the assignment the ENI writes
     (or file order when it writes none), entries in PDO order. Index 0 =
     padding gap, kept: it shifts every entry after it."""
@@ -182,7 +182,7 @@ def reg_initcmds(inits, who):
 def pd_command(cfg):
     """Datagram command of the cyclic process data: 'lrw', 'lrd_lwr' or 'none'.
     An LRD inside Master/MailboxStates polls the mailbox state, it is not
-    process data (every TwinCAT ENI has one, GD9.4)."""
+    process data (every TwinCAT ENI has one, Phase 9.4)."""
     start = num(cfg.findtext("Master/MailboxStates/StartAddr"), None)
     count = num(cfg.findtext("Master/MailboxStates/Count"), 0)
     mbx = range(start, start + (count + 7) // 8) if start is not None else range(0)

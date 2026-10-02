@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_emcy_9_7.sh — Giai doan 9.7: CoE Emergency (EMCY) and AL status code
+# run_emcy_9_7.sh — Phase 9.7: CoE Emergency (EMCY) and AL status code
 # classes, against soft_bus over veth. Plan: claude/giai_doan_9_ke_hoach.md §9.
 #
 #   sudo -E ./run_emcy_9_7.sh             all cases

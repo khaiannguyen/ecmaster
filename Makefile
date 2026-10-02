@@ -1,9 +1,9 @@
-# ecmaster top-level Makefile (Giai doan 9.0)
+# ecmaster top-level Makefile (Phase 9.0)
 #
 #   make all SOEM_DIR=...     build soft_bus and every app against a patched SOEM
 #   make caps [SUDO=]         setcap on every binary that opens a raw socket
 #                             (one sudo; rebuilding a binary drops its
-#                             capabilities -- GD8 operating trap), then getcap
+#                             capabilities -- Phase 8 operating trap), then getcap
 #   make all caps             the usual sequence after a change
 #   make test-offline         the CI "offline" job (no SOEM, no network)
 #

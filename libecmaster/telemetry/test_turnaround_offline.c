@@ -72,7 +72,7 @@ int main(void) {
            (unsigned long long)ctx.stat_evicted_no_match);
 
 
-    /* ---- Giai doan 7.4 (L5-07/08): pairing by EtherCAT index ---------- */
+    /* ---- Phase 7.4 (L5-07/08): pairing by EtherCAT index ---------- */
     /* Helper scenario: ticks t = 1000.., motion frame idx = t % 16, TX at
      * t*1e6, reply 20 us later. */
 #define TXT(t) ((uint64_t)(t) * 1000000ull)

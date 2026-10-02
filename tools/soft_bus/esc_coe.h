@@ -7,13 +7,13 @@
 /* ==========================================================================
  * esc_coe.h — minimal CoE/SDO server, one mailbox session per node.
  *
- * Scope (Giai doan 5, "Mailbox SM0/SM1 + CoE" per roadmap_master_ethercat.md;
- * extended in GD9.3):
+ * Scope (Phase 5, "Mailbox SM0/SM1 + CoE" per roadmap_master_ethercat.md;
+ * extended in Phase 9.3):
  *  - SDO Upload (read), expedited, normal and segmented.
- *  - SDO Download (write), expedited, normal and segmented (GD9.3: the
+ *  - SDO Download (write), expedited, normal and segmented (Phase 9.3: the
  *    last two used to answer Abort 0x06070012). Every write is checked
  *    completely before anything is stored.
- *  - SDO Complete Access upload/download (GD9.3), only when the node was
+ *  - SDO Complete Access upload/download (Phase 9.3), only when the node was
  *    set up with esc_set_coe_features(ca=1) (soft_bus --coe-ca); otherwise
  *    a CA request gets Abort 0x06010000 exactly as before.
  *  - SDO Abort with CiA 301 codes (object / subindex missing, read-only,
@@ -29,7 +29,7 @@
  *  - SDO Info (ECT_COES_SDOINFO) -- ecx_readODlist/readOE would get no
  *    reply. Not used by ecm_run.c today.
  *  - Emergency messages (ECT_COES_EMERGENCY): only on request, from the
- *    fault injection (GD9.7, ctl "emcy"), never spontaneously.
+ *    fault injection (Phase 9.7, ctl "emcy"), never spontaneously.
  *  - Changing the process data layout: 0x1C12/0x1C13 only accept the one
  *    fixed PDO (0x1600/0x1A00), mapping objects are read-only.
  *
@@ -59,7 +59,7 @@ void coe_od_init(coe_od_t *od);
  * only, matching the scope above. */
 void coe_on_mailbox_out_write(esc_t *esc);
 
-/* GD9.7: put one CoE Emergency message (ETG.1000.6: CoE service 1, error
+/* Phase 9.7: put one CoE Emergency message (ETG.1000.6: CoE service 1, error
  * code, error register, 5 byte manufacturer data; mailbox length 10) into
  * SM1 and set "mailbox full", with the next Cnt like any response.
  * Returns 0 if SM1 is still full (or a held response waits): nothing

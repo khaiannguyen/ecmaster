@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""make_ca_variant.py -- GD9.3: derive the ESI of `soft_bus --coe-ca` from
+"""make_ca_variant.py -- Phase 9.3: derive the ESI of `soft_bus --coe-ca` from
 config/esi/softbus_esi.xml, for the TwinCAT session of step 9.4 (ENI with
 Complete Access PDO assign InitCmds, eni_8node_ca.xml).
 

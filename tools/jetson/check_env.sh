@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# check_env.sh — Giai doan 9.0: read-only check of the Jetson before a
+# check_env.sh — Phase 9.0: read-only check of the Jetson before a
 # measurement session (soak, rt_tail, golden, L-series, R-01/R-02, D-01).
 # It changes nothing; every WARN/FAIL line says what to run.
 #
@@ -9,7 +9,7 @@
 #   tools/jetson/check_env.sh --soak                leftovers are FAIL, not WARN
 #   tools/jetson/check_env.sh --no-iface            host checks only (veth rigs)
 #
-# Collects the traps found so far: isolcpus lost (GD8 8.5 measured the
+# Collects the traps found so far: isolcpus lost (Phase 8.5 measured the
 # wake tail "without isolcpus"), NetworkManager resetting the qdisc, ETF
 # left on the i226 before L1/golden/soak, rebuilt binaries without
 # capabilities, IgH still loaded (its idle thread scans the bus), stale

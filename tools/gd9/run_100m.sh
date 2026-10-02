@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_100m.sh — Giai doan 9.2: the i226 at 100 Mbit/s (LAN9252 and most
+# run_100m.sh — Phase 9.2: the i226 at 100 Mbit/s (LAN9252 and most
 # servos only speak 100BASE-TX). Plan: claude/giai_doan_9_ke_hoach.md §4.
 #
-# Rig (GD8 8.5): loopback cable i226 enP1p1s0 (ecm_run) <-> onboard enP8p1s0
+# Rig (Phase 8.5): loopback cable i226 enP1p1s0 (ecm_run) <-> onboard enP8p1s0
 # (soft_bus). The onboard port is forced to 100/Full, the i226 negotiates
 # down. SSH must NOT go over either port (use USB-C 192.168.55.1 or Wi-Fi).
 #
@@ -16,7 +16,7 @@
 #   h03  txtime_probe on the i226 with mqprio + etf offload (delta 400 us),
 #        H03_S s (default 600): missed / invalid / launch_err at 100 Mbit/s,
 #        plus the af_packet baseline (-n, 60 s). Numbers are NOT derived
-#        from the 1 Gbit/s run (GD8 8.5)
+#        from the 1 Gbit/s run (Phase 8.5)
 #   h04  R-02 short: ecm_run N=8 (4 motion + 4 IO) against soft_bus on the
 #        onboard port, R04_S s (default 600) per backend: af_packet, then
 #        --link etf (lead 350 / asap 150, ns/byte from the link speed = 80)
@@ -144,7 +144,7 @@ h03)
     chk "H-03 etf offload on (after)" "offload_on"
     miss=$(grep "ETF drops:" "$LOG/probe_etf.txt" | head -1 | grep -oE "missed [0-9]+" | awk "{print \$2}"); inv=$(grep "ETF drops:" "$LOG/probe_etf.txt" | head -1 | grep -oE "invalid_param [0-9]+" | awk "{print \$2}")
     chk "H-03 ETF missed = 0 (got ${miss:-?})" "[ '${miss:-x}' = 0 ]"
-    chk "H-03 ETF invalid <= 1 (got ${inv:-?}; 1 = a wake-tail > lead, GD8)" "[ '${inv:-9}' -le 1 ]"
+    chk "H-03 ETF invalid <= 1 (got ${inv:-?}; 1 = a wake-tail > lead, Phase 8)" "[ '${inv:-9}' -le 1 ]"
     tc -s qdisc show dev $I226 > "$LOG/qdisc_h03.txt"
     ;;
 h04)

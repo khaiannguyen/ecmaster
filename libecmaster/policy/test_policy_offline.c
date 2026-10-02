@@ -245,10 +245,10 @@ static void p7_fresh(void)
     check("P7o 8-bit 4 -> 200 is backward", ecm_fresh_update(&g, 200), ECM_FRESH_REGRESSION);
 }
 
-/* GD9.7 P-03: AL status code classes and the planner */
+/* Phase 9.7 P-03: AL status code classes and the planner */
 static void p8_alclass(void)
 {
-    printf("P8 AL status code classes (GD9.7)\n");
+    printf("P8 AL status code classes (Phase 9.7)\n");
     check("P8a 0x0000 -> ok", ecm_al_code_class(0x0000), ECM_AL_OK);
     check("P8b 0x001A sync error -> transient (L5-05)", ecm_al_code_class(0x001A), ECM_AL_TRANSIENT);
     check("P8c 0x001B SM watchdog -> transient (L5-13)", ecm_al_code_class(0x001B), ECM_AL_TRANSIENT);

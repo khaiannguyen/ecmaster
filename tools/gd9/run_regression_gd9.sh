@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_regression_gd9.sh — Giai doan 9.11: the whole GD9 regression in one
-# run on the Jetson (plan claude/giai_doan_9_ke_hoach.md §13): GD8 §4
+# run_regression_gd9.sh — Phase 9.11: the whole Phase 9 regression in one
+# run on the Jetson (plan claude/giai_doan_9_ke_hoach.md §13): Phase 8 §4
 # (offline, golden, L4, L5, L6) + G, C, DC, E, M, P, F, V, B.
 #
 #   make all SOEM_DIR=~/projects/SOEM && make caps      (as your user, first)
@@ -100,7 +100,7 @@ esac
 done
 
 {
-    echo "# GD9 regression $(date '+%Y-%m-%d %H:%M') — $(uname -r), $(git -C "$ROOT" log --oneline -1)"
+    echo "# Phase 9 regression $(date '+%Y-%m-%d %H:%M') — $(uname -r), $(git -C "$ROOT" log --oneline -1)"
     echo
     echo "| Step | Content | Status | RESULT | Time |"
     echo "|---|---|---|---|---|"

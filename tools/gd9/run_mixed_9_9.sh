@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_mixed_9_9.sh — Giai doan 9.9: soft_bus nodes that stand in for real
+# run_mixed_9_9.sh — Phase 9.9: soft_bus nodes that stand in for real
 # slaves (profile from the ESI), and a mixed virtual bus P1 + IS620N driven
 # by the ENI. Plan: claude/giai_doan_9_ke_hoach.md §11.
 #
@@ -26,9 +26,9 @@
 #         eni_mixed on the reversed bus: refused at the identity check
 #   b02m  bind on the mixed bus (B-02 of 9.10): set 0x607A of the IS620N and
 #         0x6040 of P1, soft_bus sees those bytes; 0x6041 of the IS620N set
-#         by soft_bus comes back through --pdo-get. GD10.1: with --pdo-scan
+#         by soft_bus comes back through --pdo-get. Phase 10.1: with --pdo-scan
 #         (binding into another vendor's slave from the ENI alone is refused)
-#   b05   GD10.1 scan rule: bind into the IS620N from the ENI alone ->
+#   b05   Phase 10.1 scan rule: bind into the IS620N from the ENI alone ->
 #         refused before SAFE-OP, slave and vendor named; bind only into P1
 #         (own vendor) from the ENI -> OP; --pdo-trust-eni -> OP + WARNING;
 #         --pdo-own-vendor 0x00100000 -> OP, no warning
@@ -44,7 +44,7 @@
 #         object): without --pdo-scan the bus goes to OP and the data is
 #         silently misread (size checks cannot see it -- documented, not a
 #         pass condition of the master); with --pdo-scan the entry-by-entry
-#         check refuses and names both entries. n03c (GD10.1): the n03a
+#         check refuses and names both entries. n03c (Phase 10.1): the n03a
 #         setup plus a bind into the IS620N -> refused, the misread is now
 #         impossible without --pdo-scan or an explicit --pdo-trust-eni
 #   v04   IgH (optional, IGH=1 and the ethercat tool present): ethercat
@@ -179,7 +179,7 @@ b02m)
     chk "B-02m get 1:0x6041:0 = 0x1237 (set by soft_bus at byte 2)" "grep -q '\[PDO\] get 1:0x6041:0 = 0x1237' $E"
     ;;
 b05)
-    echo "=== B-05 GD10.1: bind into a slave of another vendor needs --pdo-scan"
+    echo "=== B-05 Phase 10.1: bind into a slave of another vendor needs --pdo-scan"
     run b05a 2 "--profile 1=$IS --profile 2=$P1" "--eni $ENIR --pdo-get 1:0x6041:0"
     chk "B-05a ENI only, bind into the IS620N: refused, slave 1 and vendor named" \
         "[ $RC != 0 ] && grep -q 'of another vendor from the ENI alone: slave 1 (vendor 0x00100000)' $E"
@@ -226,7 +226,7 @@ n03)
     chk "N-03b with --pdo-scan: refused, 0x60F4/0x60FD named" \
         "[ $RC != 0 ] && grep -q 'PDO table of the ENI differs from the bus' $E && grep -q '0x60F4:00' $E && grep -q '0x60FD:00' $E"
     run n03c 2 "--profile 1=$P1 --profile 2=$LOG/is620n_swap.prof" "--eni $ENI --pdo-get 2:0x60FD:0"
-    chk "N-03c (GD10.1) n03a + bind into the IS620N: refused, no silent misread" \
+    chk "N-03c (Phase 10.1) n03a + bind into the IS620N: refused, no silent misread" \
         "[ $RC != 0 ] && grep -q 'slave 2 (vendor 0x00100000)' $E && ! grep -q 'all slaves in OPERATIONAL' $E"
     ;;
 v04)
@@ -244,7 +244,7 @@ v04)
         chk "V-04 IgH names from the SII Strings" "grep -q 'IS620N' $LOG/igh_slaves.txt && grep -q 'P1-H723' $LOG/igh_slaves.txt"
         chk "V-04 IgH PDOs: 0x1701 and 0x1B01 on the IS620N" "grep -q '0x1701' $LOG/igh_pdos.txt && grep -q '0x1B01' $LOG/igh_pdos.txt"
     else
-        skip "V-04 IgH: IGH=1 with the IgH master bound to $IF_M (GD8 X-01 setup)"
+        skip "V-04 IgH: IGH=1 with the IgH master bound to $IF_M (Phase 8 X-01 setup)"
     fi
     ;;
 *) echo "unknown case $c"; FAIL=$((FAIL+1)) ;;

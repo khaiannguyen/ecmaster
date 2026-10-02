@@ -178,7 +178,7 @@ void esc_dc_frame_end(esc_t *chain, int n, int has_pd)
         if (chain[i].dc.read_systime && ref < 0) ref = i;
         chain[i].dc.read_systime = 0;
     }
-    /* GD9.5: the ref need not be node 0 (--no-dc-nodes 1 makes it node 1) */
+    /* Phase 9.5: the ref need not be node 0 (--no-dc-nodes 1 makes it node 1) */
     if (has_pd && ref >= 0 && chain[ref].dc.sync0_active) {
         if (ref != g_ref_idx) { if (g_ref_idx >= 0) g_ref_changes++; g_ref_idx = ref; }
         int64_t mn = 0, mx = 0;                  /* the ref itself: offset 0 */

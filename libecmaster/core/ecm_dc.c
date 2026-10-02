@@ -32,7 +32,7 @@ void ecm_dc_default_cfg(ecm_dc_cfg_t *cfg, int64_t cycle_ns, int64_t setpoint_ns
     cfg->lock_samples   = 100;
     cfg->lock_window_ns = cycle_ns / 100;
     cfg->unlock_ns      = cycle_ns / 20;
-    cfg->gate_ns        = 0;            /* Giai doan 7.4: reply-age gate off unless the caller sets it */
+    cfg->gate_ns        = 0;            /* Phase 7.4: reply-age gate off unless the caller sets it */
 }
 
 void ecm_dc_init(ecm_dc_t *dc, const ecm_dc_cfg_t *cfg)
@@ -86,7 +86,7 @@ int64_t ecm_dc_update(ecm_dc_t *dc, uint64_t dc_raw, uint64_t host_ns)
         dc->adjust_ns = 0;
         return 0;
     }
-    /* Giai doan 7.4: reply-age gate, see ecm_dc.h */
+    /* Phase 7.4: reply-age gate, see ecm_dc.h */
     {
         int64_t pred  = (int64_t)(host_ns - dc->prev_host_ns);
         int64_t d_lo  = (int64_t)(uint32_t)(lo - dc->prev_lo);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# run_soak_n1.sh — GD10.1: long soak of a one-slave bus (open item of GD9.1:
+# run_soak_n1.sh — Phase 10.1: long soak of a one-slave bus (open item of Phase 9.1:
 # the 30 min soak saw 1 isolated NOFRAME in 1.8 million cycles; the 8 h
 # soak says whether that is a rate or a one-off, and WHEN each one hit).
 # Plan: claude/giai_doan_10_ke_hoach.md §3 item 2.
@@ -16,7 +16,7 @@
 #
 # Verdict (exit 0 = PASS):
 #   PASS  0 overrun, DC LOCKED with 0 unlocks, policy LOST=0 RECOVER=0,
-#         NOFRAME <= NOFRAME_MAX (default 2: the GD9.1 rate, 1 per 1.8 M,
+#         NOFRAME <= NOFRAME_MAX (default 2: the Phase 9.1 rate, 1 per 1.8 M,
 #         is ~16 in 8 h; a handful of isolated ones is "rate", a burst or
 #         a LOST is a finding)
 #   The report always lists every second in which a mismatch happened.
