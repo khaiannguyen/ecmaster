@@ -26,6 +26,8 @@ const char *ecm_cia402_err_str(int err)
     case ECM_AXERR_SHUTDOWN: return "enable refused: shutting down";
     case ECM_AXERR_HANDSHAKE: return "PP set-point not acknowledged";
     case ECM_AXERR_HOMING:   return "homing failed";
+    case ECM_AXERR_CONFIG:   return "slave refused its configuration";
+    case ECM_AXERR_SLAVE_FAILED: return "slave recovery failed";
     default:                 return "?";
     }
 }
@@ -84,6 +86,12 @@ int ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_ax
     return c->naxes++;
 }
 
+void ecm_cia402_set_ext_error(ecm_cia402_t *c, int axis, int err)
+{
+    if (axis < 0 || axis >= c->naxes) return;
+    atomic_store_explicit(&c->ext_err[axis], (uint8_t)err, memory_order_release);
+}
+
 void ecm_cia402_set_home_timeout(ecm_cia402_t *c, uint32_t ms)
 {
     c->home_timeout_ticks = (uint32_t)(((uint64_t)ms * 1000000ull + c->cycle_ns - 1) / c->cycle_ns);
@@ -140,6 +148,10 @@ static void apply_cmd(ecm_cia402_t *c, ecm_cia402_axis_t *a, const ecm_xcmd_t *x
     switch (x->op) {
     case ECM_CIA_OP_ENABLE:
         if (c->shutdown) { a->err = ECM_AXERR_SHUTDOWN; break; }                       /* S6 */
+        {
+            uint8_t xe = atomic_load_explicit(&c->ext_err[a - c->ax], memory_order_acquire);
+            if (xe && !ECM_CIA402_LATCH_OFF(10)) { a->err = xe; a->target = ECM_TGT_DISABLED; break; }   /* 10.8 */
+        }
         if (a->ds == ECM_DS_FAULT || a->ds == ECM_DS_FRA) { a->err = ECM_AXERR_IN_FAULT; a->target = ECM_TGT_DISABLED; break; }
         if (!mode_allowed(a, a->mode_req)) { a->err = ECM_AXERR_MODE; a->target = ECM_TGT_DISABLED; break; }
         a->target = ECM_TGT_ENABLED;
@@ -231,6 +243,12 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
     }
     if (ECM_CIA402_LATCH_OFF(7) && a->ds == ECM_DS_FAULT && a->err == ECM_AXERR_FAULT && !a->reset_pulse)
         a->reset_pulse = 2;                     /* negative control: reset without a command */
+    /* 10.8: an error found by the monitor (slave configuration refused,
+     * recovery gave up): latched like a fault, the root cause is shown */
+    {
+        uint8_t xe = atomic_load_explicit(&c->ext_err[idx], memory_order_acquire);
+        if (xe && !ECM_CIA402_LATCH_OFF(10)) { a->target = ECM_TGT_DISABLED; a->err = xe; }
+    }
     /* S1: Operation enabled left without a command (recovery took the slave
      * out of OP, drive-side quick stop / DI, ...) -> latched disabled, never
      * walked back up by the master */

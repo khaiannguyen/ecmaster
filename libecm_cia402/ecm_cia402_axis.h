@@ -65,11 +65,13 @@
  * ECM_CIA402_BROKEN (bit n = Sn) switches a latch off: test builds only,
  * for the negative controls. Never set it in a product build. 10.7 adds
  * bit 8 (PP without the set-point handshake) and bit 9 (homing done on a
- * statusword that may predate the start).
+ * statusword that may predate the start); 10.8 bit 10 (errors set by the
+ * monitor ignored).
  * ========================================================================== */
 #ifndef ECM_CIA402_AXIS_H
 #define ECM_CIA402_AXIS_H
 
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "ecm_cia402_cfg.h"
@@ -95,6 +97,9 @@ enum {
     ECM_AXERR_SHUTDOWN,       /* S6: ENABLE refused, the master is stopping   */
     ECM_AXERR_HANDSHAKE,      /* PP: set-point not acknowledged in time       */
     ECM_AXERR_HOMING,         /* HM: homing error (bit 13) or homing timeout  */
+    ECM_AXERR_CONFIG,         /* 10.8: the slave refused its configuration
+                               * (CONFIG class AL code): no retry, operator   */
+    ECM_AXERR_SLAVE_FAILED,   /* 10.8: slave recovery gave up                 */
 };
 
 #define ECM_CIA402_PP_QUEUE   16     /* PP points waiting, per axis          */
@@ -177,6 +182,7 @@ typedef struct {
     ecm_xst_t         clock;              /* tick, t_send_ns, in_valid, bus_lost */
     uint64_t          cmd_applied, cmd_deferred, cmd_bad;
     uint8_t           shutdown;           /* S6, RT thread only */
+    _Atomic uint8_t   ext_err[ECM_AXIS_MAX];   /* 10.8: set by the monitor, latched by RT */
 } ecm_cia402_t;
 
 /* statusword -> drive state (CiA 402, bits 0..3, 5, 6) */
@@ -190,6 +196,11 @@ void ecm_cia402_init(ecm_cia402_t *c, uint64_t cycle_ns, uint32_t step_timeout_m
 int  ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_axis_bind_t *b);
 /* Not RT. S4 limits per cycle (CSP: increments, CSV: velocity units); 0 = off. */
 void ecm_cia402_set_step_limit(ecm_cia402_t *c, int axis, int64_t max_pos, int64_t max_vel);
+/* 10.8, any thread (the monitor): an error found outside the process data
+ * (ECM_AXERR_CONFIG, ECM_AXERR_SLAVE_FAILED; 0 = cleared by an operator).
+ * While set, the axis is disabled with that error and ENABLE is refused. */
+void ecm_cia402_set_ext_error(ecm_cia402_t *c, int axis, int err);
+
 /* Not RT. Homing timeout (10.7), every axis. */
 void ecm_cia402_set_home_timeout(ecm_cia402_t *c, uint32_t ms);
 /* CiA 402 mode value (ECM_OPMODE_*) <-> name ("PP" ...) */

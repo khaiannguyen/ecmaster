@@ -1,0 +1,9 @@
+# Inovance IS620N vendor EMCY codes (Phase 10.8).
+# Load with: ecm_run ... --emcy-map config/emcy/is620n.emcy
+#
+# Empty on purpose: the codes come from the IS620N manual (fault list,
+# Er.xxx -> EMCY 0x603F mapping) and from R-07 on the real drive (Phase
+# 10.0: cable pulled, mains off in OP, emergency stop DI). Do not guess
+# them -- an unknown code still shows its CiA 301 class.
+# Format: one "0xCODE text" per line after the vendor line.
+vendor 0x00100000

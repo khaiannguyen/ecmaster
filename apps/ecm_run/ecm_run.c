@@ -170,6 +170,7 @@
 #include "libecm_cia402/ecm_cia402_cfg.h"   /* Phase 10.3 */
 #include "libecmaster/xchg/ecm_xchg.h"         /* Phase 10.4 */
 #include "libecm_cia402/ecm_cia402_axis.h"     /* Phase 10.5 */
+#include "libecm_cia402/ecm_cia402_diag.h"     /* Phase 10.8 */
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -1714,6 +1715,52 @@ static void diag_report_changes(const ecm_diag_finding_t *f, int nf)
     }
 }
 
+static double mono_now_s(void);
+
+/* Phase 10.8: one diagnosis line per CiA402 axis (monitor thread, or the
+ * main thread after the monitor has stopped): state + axis error + code of
+ * the fault with its text and source (0x603F / the slave's EMCY). */
+static size_t cia402_axis_line(int k, char *buf, size_t cap)
+{
+    ecm_cia402_state_t s;
+    if (ecm_cia402_read(&g_cia, k, &s)) { snprintf(buf, cap, "axis %d: state not readable", k); return strlen(buf); }
+    uint16_t slave = g_cia.ax[k].cfg.slave;
+    int on = 0, faulted = 0;
+    for (int j = 0; j < g_cia.naxes; j++) {
+        if (g_cia.ax[j].cfg.slave != slave) continue;
+        on++;
+        ecm_cia402_state_t o;
+        if (!ecm_cia402_read(&g_cia, j, &o) && (o.ds == ECM_DS_FAULT || o.ds == ECM_DS_FRA)) faulted++;
+    }
+    ecm_cia402_emcy_in_t em = { 0 };
+    const ecm_emcy_t *m = ecm_diag_emcy(&g_diag, slave, 0);
+    if (m) { em.have = 1; em.code = m->code; em.reg = m->reg; em.tick = m->tick; }
+    uint32_t vendor = slave <= (uint16_t)ctx.slavecount ? ctx.slavelist[slave].eep_man : 0;
+    return ecm_cia402_axis_diag(g_cia.ax[k].cfg.name, slave, &s, on, faulted, &em, vendor, buf, cap);
+}
+
+/* Phase 10.8, monitor: print an axis line when the axis' state or error
+ * changes into something worth a diagnosis (fault, axis error). */
+static void cia402_axis_watch(void)
+{
+    static uint8_t prev_ds[ECM_AXIS_MAX], prev_err[ECM_AXIS_MAX];
+    static uint16_t prev_code[ECM_AXIS_MAX];
+    if (g_hook != hook_cia402) return;
+    for (int k = 0; k < g_cia.naxes; k++) {
+        ecm_cia402_state_t s;
+        if (ecm_cia402_read(&g_cia, k, &s)) continue;
+        int bad = s.ds == ECM_DS_FAULT || s.ds == ECM_DS_FRA || s.err;
+        const ecm_emcy_t *m = ecm_diag_emcy(&g_diag, g_cia.ax[k].cfg.slave, 0);
+        uint16_t code = s.ecode ? s.ecode : (m ? m->code : 0);
+        if (bad && (s.ds != prev_ds[k] || s.err != prev_err[k] || code != prev_code[k])) {
+            char line[512];
+            cia402_axis_line(k, line, sizeof(line));
+            fprintf(stderr, "ecm_run: [AXIS] t_mono=%.3f %s\n", mono_now_s(), line);
+        }
+        prev_ds[k] = s.ds; prev_err[k] = s.err; prev_code[k] = code;
+    }
+}
+
 static void diag_process_pending(void)
 {
     static ecm_diag_raw_t raw;
@@ -1725,6 +1772,15 @@ static void diag_process_pending(void)
     if (!got) return;
     int nf = ecm_diag_analyze(&g_diag, f, 128);
     size_t len = ecm_diag_format(&g_diag, f, nf, names, "ecm_run", al_code_str, text, sizeof(text));
+    if (g_hook == hook_cia402 && g_cia.naxes && len + 64 < sizeof(text)) {      /* Phase 10.8 */
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "\nCiA402 axes:\n");
+        for (int k = 0; k < g_cia.naxes && len + 600 < sizeof(text); k++) {
+            text[len++] = ' '; text[len++] = ' ';
+            len += cia402_axis_line(k, text + len, sizeof(text) - len - 2);
+            text[len++] = '\n';
+            text[len] = '\0';
+        }
+    }
     if (ecm_diag_write_file(g_diag_path, text, len) != 0) {
         static int warned;
         if (!warned) { warned = 1; fprintf(stderr, "ecm_run: cannot write %s\n", g_diag_path); }
@@ -1892,6 +1948,14 @@ static void recovery_step(void)
         if (rec)
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d back in OP (recovery #%llu)\n",
                     s, (unsigned long long)g_srec.s[i].recoveries);
+        if (gu && g_hook == hook_cia402)          /* Phase 10.8: the slave's axes get the error */
+            for (int k = 0; k < g_cia.naxes; k++) {
+                if (g_cia.ax[k].cfg.slave != (uint16_t)s) continue;
+                int xe = g_srec.s[i].failed_config ? ECM_AXERR_CONFIG : ECM_AXERR_SLAVE_FAILED;
+                ecm_cia402_set_ext_error(&g_cia, k, xe);
+                fprintf(stderr, "ecm_run: [AXIS] axis %s (slave %d): %s -> axis disabled, ENABLE refused until an operator clears it\n",
+                        g_cia.ax[k].cfg.name, s, ecm_cia402_err_str(xe));
+            }
         if (gu && g_srec.s[i].failed_config)      /* Phase 9.7 */
             fprintf(stderr, "ecm_run: [RECOVERY] slave %d: AL 0x%02x code 0x%04x (%s) is a CONFIGURATION "
                     "error -> FAILED(config) at once, no retry (the same configuration would be refused "
@@ -1999,6 +2063,7 @@ static void *monitor_thread_fn(void *arg)
             atomic_store_explicit(&g_recover_done, req, memory_order_release);
             continue;
         }
+        if (it % 10 == 9) cia402_axis_watch();   /* Phase 10.8 */
         if (++it % 10 == 0 && g_diag_enabled) {
             uint64_t before = g_diag.reads;
             diag_process_pending();
@@ -2007,6 +2072,7 @@ static void *monitor_thread_fn(void *arg)
     }
     print_events();
     if (g_diag_enabled) diag_process_pending();   /* last read before exit */
+    cia402_axis_watch();
     return NULL;
 }
 
@@ -2085,6 +2151,10 @@ int main(int argc, char **argv)
             if (*e || g_hm_method < -128 || g_hm_method > 127) {
                 fprintf(stderr, "ecm_run: --axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]\n"); return 1;
             }
+        } else if (strcmp(argv[i], "--emcy-map") == 0 && i + 1 < argc) {      /* Phase 10.8 */
+            char eerr[256];
+            if (ecm_cia402_emcy_load(argv[++i], eerr, sizeof(eerr))) { fprintf(stderr, "ecm_run: --emcy-map: %s\n", eerr); return 1; }
+            fprintf(stderr, "ecm_run: EMCY texts from %s (%d vendor codes loaded)\n", argv[i], ecm_cia402_emcy_count());
         } else if (strcmp(argv[i], "--axis-home-timeout-ms") == 0 && i + 1 < argc) {
             g_hm_timeout_ms = (uint32_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--axis-max-step") == 0 && i + 1 < argc) {   /* Phase 10.6 S4 */
@@ -2238,7 +2308,8 @@ int main(int argc, char **argv)
             "       [--hook empty|xchg] [--xchg-out S:IDX:SUB,...] [--xchg-in S:IDX:SUB,...]\n"
             "       [--xchg-sine AMP:HZ] [--xchg-lead TICKS] [--xchg-starve SECOND:MS]   (Phase 10.4, test hooks)\n"
             "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--axis-max-step POS[:VEL] (Phase 10.6, default 100000:0, 0 = off)]\n"
-            "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP) [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
+            "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP)\n"
+            "       [--emcy-map FILE ...]   (Phase 10.8: vendor EMCY texts, config/emcy/*.emcy) [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -3463,6 +3534,11 @@ int main(int argc, char **argv)
                     k, g_cia.ax[k].cfg.name, ecm_cia402_ds_str((ecm_ds_t)s.ds), s.sw, s.cw, s.mode_disp, s.apos, s.avel,
                     ecm_cia402_err_str(s.err), s.ecode, s.used, s.late, s.underrun, s.dropped,
                     g_capp.track_max[k], g_capp.track_n[k]);
+            {
+                char line[512];
+                cia402_axis_line(k, line, sizeof(line));
+                fprintf(stderr, "  [AXIS] %s\n", line);                /* Phase 10.8 */
+            }
             fprintf(stderr, "  [CIA402] PH axis %d mode=%s homed=%u pp_acked=%u pp_queued=%u pp_lost=%" PRIu64 "\n", k,
                     ecm_cia402_mode_str(s.mode_disp), s.homed, s.pp_acked, s.pp_n, g_cia.ax[k].pp_lost);
             fprintf(stderr, "  [CIA402] S4 axis %d step_refused=%u last_step=%" PRId64 "\n", k, s.step_refused, g_cia.ax[k].step_seen);

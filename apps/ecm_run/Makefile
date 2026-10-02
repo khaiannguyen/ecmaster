@@ -20,7 +20,7 @@ ENI_SRC = ../../libecmaster/config/ecm_eni.c ../../libecmaster/config/ecm_eni_so
 PDO_SRC = ../../libecmaster/pdo/ecm_pdo.c ../../libecmaster/pdo/ecm_pdo_soem.c       # Phase 9.10
 CIA402_SRC = ../../libecm_cia402/ecm_cia402_cfg.c                                    # Phase 10.3
 XCHG_SRC = ../../libecmaster/xchg/ecm_xchg.c                                         # Phase 10.4
-CIA402AX_SRC = ../../libecm_cia402/ecm_cia402_axis.c                                 # Phase 10.5
+CIA402AX_SRC = ../../libecm_cia402/ecm_cia402_axis.c ../../libecm_cia402/ecm_cia402_diag.c   # Phase 10.5, 10.8
 
 all: $(TARGET)
 

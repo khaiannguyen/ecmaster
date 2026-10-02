@@ -55,8 +55,15 @@
  *         at the virtual switch (a stale "attained" is not taken)
  *         (neg. control: bit 9); method 33 -> HOMING; timeout -> HOMING
  *   P2-04 HM -> PP -> CSP while enabled: no jump at the switch (S2)
+ *
+ * Phase 10.8:
+ *   E2-01 drv_fault 0x2310: axis FAULT, 0x603F 0x2310, the axis line names
+ *         the code, its text and source; the drive's EMCY (SM1) is the same
+ *   E2-02 error from the monitor (CONFIG) while enabled: disabled at once,
+ *         ENABLE refused while set; cleared -> ENABLE works (neg. ctl bit 10)
  */
 #include "ecm_cia402_axis.h"
+#include "ecm_cia402_diag.h"
 #include "../tools/soft_bus/esc_cia402.h"
 #include "../tools/soft_bus/esc_core.h"
 #include "../tools/soft_bus/esc_profile.h"
@@ -694,6 +701,46 @@ static void p204(void)
     check("  no error", st(0).err, 0);
 }
 
+/* ---- Phase 10.8 ------------------------------------------------------------ */
+
+static void e201(void)
+{
+    printf("[E2-01 drive fault -> axis diagnosis]\n");
+    enable_csp(0);
+    drv("drv_fault 0 0 0x2310");
+    tick(3);
+    drv("drv_clear 0 0");
+    tick(20);
+    ecm_cia402_state_t s = st(0);
+    check("FAULT, 0x603F 0x2310", s.err * 0x10000 + s.ecode, ECM_AXERR_FAULT * 0x10000 + 0x2310);
+    ecm_cia402_emcy_in_t em = { .have = E->fault.emcy_code != 0, .code = E->fault.emcy_code };
+    char line[512];
+    ecm_cia402_axis_diag("1:0", 1, &s, 1, 1, &em, 0, line, sizeof(line));
+    printf("    %s\n", line);
+    check("  the drive's EMCY carries the same code", em.code, 0x2310);
+    check_true("  axis line: code, text, class, source",
+               strstr(line, "error drive fault; code 0x2310 continuous over current [current] (0x603F, = EMCY)") != NULL);
+}
+
+static void e202(void)
+{
+    printf("[E2-02 error set by the monitor]\n");
+    enable_csp(0);
+    check("enabled", st(0).ds, ECM_DS_OE);
+    ecm_cia402_set_ext_error(&C, 0, ECM_AXERR_CONFIG);
+    tick(10);
+    check("CONFIG: walked down, Switch on disabled", st(0).err * 10 + st(0).ds, ECM_AXERR_CONFIG * 10 + ECM_DS_SOD);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    long oe = 0;
+    for (int i = 0; i < 100; i++) { tick(1); if (st(0).ds == ECM_DS_OE) oe++; }
+    check("  ENABLE refused while set (no retry)", oe * 10 + st(0).err, ECM_AXERR_CONFIG);
+    ecm_cia402_set_ext_error(&C, 0, 0);
+    tick(2);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(10);
+    check("cleared by the operator: ENABLE works", st(0).ds * 10 + st(0).err, ECM_DS_OE * 10);
+}
+
 static void t08(void)
 {
     printf("[T-08 statusword decode]\n");
@@ -712,6 +759,7 @@ static const struct { const char *name; void (*fn)(void); } TESTS[] = {
     { "t01", t01 }, { "t02", t02 }, { "t03", t03 }, { "t04", t04 }, { "t05", t05 }, { "t06", t06 },
     { "t07", t07 }, { "t08", t08 },
     { "p201", p201 }, { "p202", p202 }, { "p203", p203 }, { "p204", p204 },
+    { "e201", e201 }, { "e202", e202 },
     { "s01", s01 }, { "s02", s02 }, { "s03", s03 }, { "s04", s04 }, { "s05", s05 }, { "s06", s06 }, { "s07", s07 },
 };
 

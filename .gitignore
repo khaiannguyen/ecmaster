@@ -69,5 +69,7 @@ libecmaster/pdo/test_pdo_offline_asan
 
 # Phase 9.9: profiles generated from a vendor ESI stay local (licence note 30/9)
 config/profiles/is620n.prof
-libecm_cia402/test_cia402_axis_neg?
+libecm_cia402/test_cia402_axis_neg*
 apps/ecm_run/ecm_run_neg6
+libecm_cia402/test_cia402_diag
+libecm_cia402/test_cia402_diag_asan
