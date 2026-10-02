@@ -24,6 +24,7 @@ soft_bus:
 
 apps:
 	@for d in $(APPS); do $(MAKE) -C $$d SOEM_DIR=$(SOEM_DIR) || exit 1; done
+	$(MAKE) -C apps/ecm_run ecm_run_neg6 SOEM_DIR=$(SOEM_DIR)   # Phase 10.6: S6 negative control (test only)
 
 caps:
 	@for d in tools/soft_bus $(APPS); do $(MAKE) -s -C $$d setcap || exit 1; done
@@ -47,7 +48,7 @@ test-offline:
 	$(MAKE) -C libecmaster/policy test test_asan
 	$(MAKE) -C libecmaster/config test
 	$(MAKE) -C libecmaster/pdo test test_asan
-	$(MAKE) -C libecm_cia402 test test_asan
+	$(MAKE) -C libecm_cia402 test test_asan negctl   # Phase 10.6: S1..S7 negative controls
 	$(MAKE) -C libecmaster/xchg test test_asan tsan
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000

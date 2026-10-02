@@ -32,7 +32,20 @@ test_asan: test_cia402_cfg.c $(SRCS) $(HDRS)
 	    -o test_cia402_axis_asan test_cia402_axis.c $(AXSRCS) $(SBSRCS) -lm
 	./test_cia402_axis_asan
 
-clean:
-	rm -f test_cia402_cfg test_cia402_cfg_asan test_cia402_axis test_cia402_axis_asan
+# Phase 10.6: negative controls of the safety latches. Build n has latch Sn
+# switched off (-DECM_CIA402_BROKEN, test builds only): its S-0n test must
+# FAIL. Other tests that rely on the same latch (T-04, T-07: the 10.5
+# bases of S2, S5, S7) may fail too: reported as INFO.
+negctl: test_cia402_axis.c $(AXSRCS) $(AXHDRS) $(SBSRCS)
+	@r=0; for n in 1 2 3 4 5 6 7; do \
+	    $(CC) $(CFLAGS) -DECM_CIA402_BROKEN='(1<<'$$n')' -o test_cia402_axis_neg$$n test_cia402_axis.c $(AXSRCS) $(SBSRCS) -lm || exit 1; \
+	    if ./test_cia402_axis_neg$$n s0$$n > neg$$n.log 2>&1; then echo "  [FAIL] S$$n negative control: S-0$$n still passes with the latch off"; r=1; \
+	    else echo "  [PASS] S$$n negative control: S-0$$n fails with the latch off ($$(grep -c '\[FAIL\]' neg$$n.log) check(s))"; fi; \
+	    others=$$(echo t01 t02 t03 t04 t05 t06 t07 t08 s01 s02 s03 s04 s05 s06 s07 | tr ' ' '\n' | grep -v "^s0$$n$$"); \
+	    if ! ./test_cia402_axis_neg$$n $$others > neg$$n.others.log 2>&1; then echo "  [INFO] S$$n off also changes: $$(grep '\[FAIL\]' neg$$n.others.log | head -2 | sed 's/ *\[FAIL\] *//; s/ *=.*//' | tr '\n' ';')"; fi; \
+	done; rm -f neg?.log neg?.others.log; exit $$r
 
-.PHONY: all test test_asan clean
+clean:
+	rm -f test_cia402_cfg test_cia402_cfg_asan test_cia402_axis test_cia402_axis_asan test_cia402_axis_neg? neg?.log neg?.others.log
+
+.PHONY: all test test_asan negctl clean

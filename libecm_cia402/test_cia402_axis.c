@@ -27,6 +27,22 @@
  *         0x603F; ENABLE while in Fault refused; FAULT_RESET -> one 0x80
  *         pulse, Switch on disabled, axis stays disabled (S7 basis)
  *   T-08  statusword decode table (CiA 402 masks)
+ *
+ * Phase 10.6, safety latches S1..S7 (each one has a negative control: built
+ * with -DECM_CIA402_BROKEN=(1<<n) its S-0n test must fail, see `make negctl`):
+ *   S-01  drive-side quick stop (DI) while enabled -> DROPPED, never walked
+ *         back up; slave out of OP while enabled -> Fault, not re-enabled
+ *   S-02  enabling at 50000: 0x607A = actual in every frame, no motion
+ *   S-03  setpoints stop for 100 ms during a ramp: position held exactly
+ *   S-04  step limit 1000 inc: absolute 0 at 50000 refused (quick stop,
+ *         STEP), 1e6 jump while running refused; 10 inc/cycle ramp passes;
+ *         CSV limit 100: velocity step 5000 refused
+ *   S-05  bus lost 50 ticks while enabled -> BUS_LOST, 500 ticks after the
+ *         bus is back: still disabled
+ *   S-06  shutdown while running: 0x07, 0x06, 0x00, drive OE -> SO -> RTSO
+ *         -> SOD within 8 ticks, all_down; ENABLE refused (SHUTDOWN)
+ *   S-07  fault, no command for 1 s: stays in Fault, no 0x80 sent; reset
+ *         -> Switch on disabled, stays there
  */
 #include "ecm_cia402_axis.h"
 #include "../tools/soft_bus/esc_cia402.h"
@@ -346,6 +362,171 @@ static void t07(void)
     check("  still Switch on disabled 200 ticks later", st(0).ds, ECM_DS_SOD);
 }
 
+/* ---- Phase 10.6: S1..S7 --------------------------------------------------- */
+
+static void enable_csp(int64_t pos)
+{
+    rig(PROF "p1_draft.prof", 1);
+    add_axis(0, ECM_MODE_CSP | ECM_MODE_CSV);
+    tick(5);
+    if (pos) { drv("drv_pos 0 0 50000"); tick(3); }
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(10);
+}
+static int64_t tpos_out(void) { return (int32_t)ecm_pdo_get(&C.ax[0].b.tpos, IO); }
+
+static void s01(void)
+{
+    printf("[S-01 never enabled by the master]\n");
+    enable_csp(0);
+    check("enabled", st(0).ds, ECM_DS_OE);
+    drv("drv_quickstop 0 0");
+    long oe = 0;
+    for (int i = 0; i < 300; i++) { tick(1); if (i > 5 && st(0).ds == ECM_DS_OE) oe++; }
+    /* the motor is at rest: the virtual drive ends its quick stop in the same step */
+    check("drive-side quick stop: DROPPED (left OE to QSA / SOD)", st(0).err * 10 + (st(0).err_ds == ECM_DS_QSA || st(0).err_ds == ECM_DS_SOD), ECM_AXERR_DROPPED * 10 + 1);
+    check("  never walked back up to Operation enabled (300 ticks)", oe, 0);
+    check("  Switch on disabled, target disabled", st(0).ds * 10 + st(0).target, ECM_DS_SOD * 10 + ECM_TGT_DISABLED);
+
+    enable_csp(0);
+    E->regs[REG_AL_STATUS] = ESM_SAFEOP;          /* recovery: the slave out of OP, then back */
+    tick(20);
+    E->regs[REG_AL_STATUS] = ESM_OP;
+    oe = 0;
+    for (int i = 0; i < 300; i++) { tick(1); if (st(0).ds == ECM_DS_OE) oe++; }
+    check("slave left OP while enabled: FAULT, never Operation enabled again", st(0).err * 10 + (oe > 0), ECM_AXERR_FAULT * 10);
+}
+
+static void s02(void)
+{
+    printf("[S-02 target = actual before enable]\n");
+    rig(PROF "p1_draft.prof", 1);
+    add_axis(0, ECM_MODE_CSP);
+    tick(5);
+    drv("drv_pos 0 0 50000");
+    tick(3);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    long moved = 0, bad_t = 0;
+    for (int i = 0; i < 30; i++) {
+        tick(1);
+        if (st(0).apos != 50000) moved++;
+        if (tpos_out() != 50000) bad_t++;
+    }
+    check("enabled", st(0).ds, ECM_DS_OE);
+    check("  0x607A = 50000 (actual) in every frame while enabling", bad_t, 0);
+    check("  the axis never moved", moved, 0);
+}
+
+static void s03(void)
+{
+    printf("[S-03 underrun holds the last position]\n");
+    enable_csp(0);
+    for (int i = 1; i <= 100; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 10 * i); tick(1); }
+    tick(3);
+    int32_t p = st(0).apos;
+    long moved = 0;
+    for (int i = 0; i < 100; i++) { tick(1); if (st(0).apos != p) moved++; }
+    check("ramp stopped at 1000", p, 1000);
+    check("  100 ms without setpoints: position held exactly (no extrapolation)", moved, 0);
+    check_true("  underrun counted", st(0).underrun >= 100);
+}
+
+static void s04(void)
+{
+    printf("[S-04 setpoint step limit]\n");
+    rig(PROF "p1_draft.prof", 1);
+    add_axis(0, ECM_MODE_CSP | ECM_MODE_CSV);
+    ecm_cia402_set_step_limit(&C, 0, 1000, 100);
+    tick(5);
+    drv("drv_pos 0 0 50000");
+    tick(3);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(10);
+    long bad_t = 0;
+    ecm_cia402_setpoint(&C, 0, K + 2, 0);          /* absolute 0 while at 50000 */
+    for (int i = 0; i < 40; i++) { tick(1); if (tpos_out() != 50000 && st(0).apos != tpos_out()) bad_t++; if (tpos_out() == 0) bad_t += 1000; }
+    check("absolute 0 at 50000: STEP, 1 refused", st(0).err * 10 + st(0).step_refused, ECM_AXERR_STEP * 10 + 1);
+    check("  0 never sent, the axis did not move", bad_t + (st(0).apos != 50000), 0);
+    check("  quick stop -> Switch on disabled", st(0).ds, ECM_DS_SOD);
+
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(10);
+    for (int i = 1; i <= 50; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 50000 + 10 * i); tick(1); }
+    check("10 inc/cycle ramp under the limit: running, no error", st(0).ds * 10 + st(0).err, ECM_DS_OE * 10);
+    ecm_cia402_setpoint(&C, 0, K + 2, 1050000);   /* +1e6 */
+    long sent_big = 0;
+    for (int i = 0; i < 40; i++) { tick(1); if (tpos_out() > 60000) sent_big++; }
+    check("+1e6 jump while running: STEP, not sent, axis stopped", st(0).err * 10 + (sent_big > 0), ECM_AXERR_STEP * 10);
+    check_true("  stopped near 50500", labs((long)st(0).apos - 50500) <= 10);
+
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    cmd(0, ECM_CIA_OP_SET_MODE, ECM_OPMODE_CSV);
+    tick(12);
+    for (int i = 1; i <= 20; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 50 * i < 100 ? 50 * i : 100); tick(1); }
+    check("CSV ramp 50/cycle to 100: running", st(0).ds * 10 + st(0).err, ECM_DS_OE * 10);
+    ecm_cia402_setpoint(&C, 0, K + 2, 5000);
+    tick(30);
+    check("CSV velocity step 100 -> 5000 (limit 100): STEP", st(0).err, ECM_AXERR_STEP);
+    check_true("  5000 never commanded", st(0).avel < 200);
+}
+
+static void s05(void)
+{
+    printf("[S-05 bus lost latches disabled]\n");
+    enable_csp(0);
+    for (int i = 0; i < 50; i++) { K++; ecm_cia402_rt(&C, IO, K, 0, 0, 1); }
+    long oe = 0;
+    tick(5);
+    for (int i = 0; i < 500; i++) { tick(1); if (st(0).ds == ECM_DS_OE) oe++; }
+    check("BUS_LOST", st(0).err, ECM_AXERR_BUS_LOST);
+    check("  500 ticks after the bus is back: disabled, never Operation enabled", oe * 10 + (st(0).ds != ECM_DS_SOD), 0);
+}
+
+static void s06(void)
+{
+    printf("[S-06 shutdown sequence]\n");
+    enable_csp(0);
+    for (int i = 1; i <= 20; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 10 * i); tick(1); }
+    check("running", st(0).ds, ECM_DS_OE);
+    check("  all_down = 0 while enabled", ecm_cia402_all_down(&C, 0), 0);
+    ecm_cia402_shutdown(&C);
+    char seq[64] = ""; uint16_t last = 0xFFFF;
+    int n = 0;
+    while (!ecm_cia402_all_down(&C, 0) && n < 50) {
+        tick(1); n++;
+        uint16_t cw = st(0).cw;
+        if (cw != last && strlen(seq) < 50) { snprintf(seq + strlen(seq), sizeof(seq) - strlen(seq), "%s%02X", last == 0xFFFF ? "" : ",", cw); last = cw; }
+    }
+    printf("    controlwords %s, drive down after %d ticks\n", seq, n);
+    check("  controlword 0x07, 0x06, 0x00 in that order", !strcmp(seq, "07,06,00"), 1);
+    check_true("  all_down within 8 ticks", n <= 8 && ecm_cia402_all_down(&C, 0));
+    check("  drive in Switch on disabled", (long)E->drv->ax[0].ds, DS_SOD);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(20);
+    check("ENABLE after shutdown refused (SHUTDOWN), stays disabled", st(0).err * 10 + st(0).ds, ECM_AXERR_SHUTDOWN * 10 + ECM_DS_SOD);
+}
+
+static void s07(void)
+{
+    printf("[S-07 fault reset only on command]\n");
+    enable_csp(0);
+    drv("drv_fault 0 0 0x2310");
+    tick(3);
+    drv("drv_clear 0 0");
+    long pulse = 0, notf = 0;
+    for (int i = 0; i < 1000; i++) {
+        tick(1);
+        if (st(0).cw & 0x80) pulse++;
+        if (i > 50 && st(0).ds != ECM_DS_FAULT) notf++;
+    }
+    check("1 s without a command: still Fault, no 0x80 sent", pulse * 10 + (notf > 0), 0);
+    cmd(0, ECM_CIA_OP_FAULT_RESET, 0);
+    long oe = 0;
+    for (int i = 0; i < 500; i++) { tick(1); if (st(0).ds == ECM_DS_OE) oe++; }
+    check("reset: Switch on disabled, stays there 500 ticks, target disabled",
+          oe * 100 + (st(0).ds != ECM_DS_SOD) * 10 + st(0).target, 0);
+}
+
 static void t08(void)
 {
     printf("[T-08 statusword decode]\n");
@@ -360,12 +541,24 @@ static void t08(void)
     check("11 statuswords decoded per the CiA 402 masks", 11 - bad, 11);
 }
 
-int main(void)
+static const struct { const char *name; void (*fn)(void); } TESTS[] = {
+    { "t01", t01 }, { "t02", t02 }, { "t03", t03 }, { "t04", t04 }, { "t05", t05 }, { "t06", t06 },
+    { "t07", t07 }, { "t08", t08 },
+    { "s01", s01 }, { "s02", s02 }, { "s03", s03 }, { "s04", s04 }, { "s05", s05 }, { "s06", s06 }, { "s07", s07 },
+};
+
+/* ./test_cia402_axis [name ...]   (no name: every test) */
+int main(int argc, char **argv)
 {
     DLOG = getenv("CIA402_VERBOSE") ? stdout : NULL;
+    if (ECM_CIA402_BROKEN) printf("NEGATIVE CONTROL BUILD: ECM_CIA402_BROKEN = 0x%X\n", (unsigned)ECM_CIA402_BROKEN);
+    for (size_t i = 0; i < sizeof(TESTS) / sizeof(TESTS[0]); i++) {
+        int run = argc < 2;
+        for (int k = 1; k < argc; k++) if (!strcmp(argv[k], TESTS[i].name)) run = 1;
+        if (run) TESTS[i].fn();
+    }
     if (E) { esc_cia402_detach(E); if (E->prof_st) { free(E->prof_st->val); free(E->prof_st); } free(E); }
     if (P) esc_prof_free(P);
-    t01(); t02(); t03(); t04(); t05(); t06(); t07(); t08();
     printf("\nRESULT: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

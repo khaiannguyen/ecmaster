@@ -21,6 +21,9 @@ const char *ecm_cia402_err_str(int err)
     case ECM_AXERR_BUS_LOST: return "bus lost";
     case ECM_AXERR_MODE:     return "mode";
     case ECM_AXERR_IN_FAULT: return "enable refused: drive in fault";
+    case ECM_AXERR_DROPPED:  return "left Operation enabled without a command";
+    case ECM_AXERR_STEP:     return "setpoint step above the limit";
+    case ECM_AXERR_SHUTDOWN: return "enable refused: shutting down";
     default:                 return "?";
     }
 }
@@ -66,6 +69,30 @@ int ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_ax
     return c->naxes++;
 }
 
+void ecm_cia402_set_step_limit(ecm_cia402_t *c, int axis, int64_t max_pos, int64_t max_vel)
+{
+    if (axis < 0 || axis >= c->naxes) return;
+    c->ax[axis].max_step_pos = max_pos > 0 ? max_pos : 0;
+    c->ax[axis].max_step_vel = max_vel > 0 ? max_vel : 0;
+}
+
+void ecm_cia402_shutdown(ecm_cia402_t *c)
+{
+    if (ECM_CIA402_LATCH_OFF(6)) return;      /* negative control: leave OP from wherever */
+    c->shutdown = 1;
+    for (int i = 0; i < c->naxes; i++) c->ax[i].target = ECM_TGT_DISABLED;
+}
+
+int ecm_cia402_all_down(const ecm_cia402_t *c, int bus_lost)
+{
+    if (ECM_CIA402_LATCH_OFF(6) || bus_lost) return 1;
+    for (int i = 0; i < c->naxes; i++) {
+        ecm_ds_t ds = c->ax[i].ds;
+        if (ds == ECM_DS_RTSO || ds == ECM_DS_SO || ds == ECM_DS_OE || ds == ECM_DS_QSA) return 0;
+    }
+    return 1;
+}
+
 /* ---- RT ------------------------------------------------------------------ */
 
 static int64_t sext(uint64_t v, uint16_t bits)
@@ -88,6 +115,7 @@ static void apply_cmd(ecm_cia402_t *c, ecm_cia402_axis_t *a, const ecm_xcmd_t *x
     a->last_seq = x->seq;
     switch (x->op) {
     case ECM_CIA_OP_ENABLE:
+        if (c->shutdown) { a->err = ECM_AXERR_SHUTDOWN; break; }                       /* S6 */
         if (a->ds == ECM_DS_FAULT || a->ds == ECM_DS_FRA) { a->err = ECM_AXERR_IN_FAULT; a->target = ECM_TGT_DISABLED; break; }
         if (!mode_allowed(a, a->mode_req)) { a->err = ECM_AXERR_MODE; a->target = ECM_TGT_DISABLED; break; }
         a->target = ECM_TGT_ENABLED;
@@ -95,6 +123,7 @@ static void apply_cmd(ecm_cia402_t *c, ecm_cia402_axis_t *a, const ecm_xcmd_t *x
         a->err_ds = 0;
         a->ds_wait = a->ds;
         a->step_since = tick;
+        a->reached_oe = 0;
         break;
     case ECM_CIA_OP_DISABLE:
         a->target = ECM_TGT_DISABLED;
@@ -146,11 +175,27 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
 
     /* 2. latches: bus lost, drive fault */
     if (bus_lost) {
-        if (a->target != ECM_TGT_DISABLED) { a->target = ECM_TGT_DISABLED; a->err = ECM_AXERR_BUS_LOST; }
+        if (a->target != ECM_TGT_DISABLED && !ECM_CIA402_LATCH_OFF(5)) {            /* S5 */
+            a->target = ECM_TGT_DISABLED; a->err = ECM_AXERR_BUS_LOST;
+        }
     } else if ((a->ds == ECM_DS_FAULT || a->ds == ECM_DS_FRA) && a->target != ECM_TGT_DISABLED) {
         a->target = ECM_TGT_DISABLED;
         a->err = ECM_AXERR_FAULT;
         a->err_ds = (uint8_t)a->ds;
+        if (ECM_CIA402_LATCH_OFF(7)) { a->target = ECM_TGT_ENABLED; a->reached_oe = 0; }   /* neg. control: resume */
+    }
+    if (ECM_CIA402_LATCH_OFF(7) && a->ds == ECM_DS_FAULT && a->err == ECM_AXERR_FAULT && !a->reset_pulse)
+        a->reset_pulse = 2;                     /* negative control: reset without a command */
+    /* S1: Operation enabled left without a command (recovery took the slave
+     * out of OP, drive-side quick stop / DI, ...) -> latched disabled, never
+     * walked back up by the master */
+    if (in_valid && a->target == ECM_TGT_ENABLED) {
+        if (a->ds == ECM_DS_OE) a->reached_oe = 1;
+        else if (a->reached_oe && !ECM_CIA402_LATCH_OFF(1)) {
+            a->target = ECM_TGT_DISABLED;
+            a->err = ECM_AXERR_DROPPED;
+            a->err_ds = (uint8_t)a->ds;
+        }
     }
 
     /* 3. (commands were applied by the caller) 4. controlword */
@@ -220,21 +265,46 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
         break;
     }
     if (running && !got && a->armed) a->underrun++;
+    /* S4: a step above the limit is not sent: quick stop, error STEP */
+    if (got && !ECM_CIA402_LATCH_OFF(4)) {
+        int64_t lim = csp ? a->max_step_pos : csv ? a->max_step_vel : 0;
+        int64_t ref = a->last_sent;             /* CSP: = actual until armed (S2) */
+        int64_t d = a->last_sp - ref;
+        if (lim && (d > lim || d < -lim)) {
+            a->step_seen = d;
+            a->step_refused++;
+            a->err = ECM_AXERR_STEP;
+            a->target = ECM_TGT_QUICKSTOP;
+            if (a->ds == ECM_DS_OE) cw = 0x0002;
+            a->last_sp = ref;
+            got = 0;
+            running = 0;
+            a->armed = 0;
+        }
+    }
     if (csp && b->tpos.bits) {
         int64_t t;
         if (!running || enabling_now || !a->armed) {
-            t = a->apos;                        /* target = actual (enable does not jump) */
+            t = a->apos;                        /* S2: target = actual (enable does not jump) */
+            if (ECM_CIA402_LATCH_OFF(2)) t = a->last_sent;   /* negative control: stale target */
             if (!running) a->armed = 0;
             a->last_sp = t;
+            a->last_delta = 0;
+        } else if (got) {
+            t = a->last_sp;                     /* new setpoint */
+            a->last_delta = t - a->last_sent;
         } else {
-            t = a->last_sp;                     /* new setpoint, or the last one held */
+            t = a->last_sp;                     /* S3: underrun, the last one held */
+            if (ECM_CIA402_LATCH_OFF(3)) { t = a->last_sent + a->last_delta; a->last_sp = t; }  /* neg. control: extrapolate */
         }
         ecm_pdo_set(&b->tpos, io, (uint64_t)t);
+        a->last_sent = t;
     }
     if (csv && b->tvel.bits) {
         int64_t v = (running && got) ? a->last_sp : 0;   /* underrun: velocity 0, not held */
         if (!running) a->armed = 0;
         ecm_pdo_set(&b->tvel, io, (uint64_t)v);
+        a->last_sent = v;
     }
     if (b->mode.bits) ecm_pdo_set(&b->mode, io, (uint64_t)(uint8_t)a->mode_req);
     ecm_pdo_set(&b->cw, io, cw);
@@ -250,7 +320,7 @@ static void publish(ecm_cia402_t *c, int i, uint64_t tick)
         (uint64_t)(uint32_t)a->apos | (uint64_t)(uint32_t)a->avel << 32,
         (uint64_t)a->ecode | (uint64_t)(uint8_t)a->mode_disp << 16 | (uint64_t)a->mode_ok << 24 |
             (uint64_t)(uint8_t)a->mode_req << 32,
-        a->used, a->late, a->underrun, a->last_seq, a->dropped,
+        a->used, a->late, a->underrun, (uint64_t)a->last_seq | (a->step_refused & 0xFFFFFFFFull) << 32, a->dropped,
     };
     ecm_xst_write(&c->st[i], tick, w, ECM_XST_WORDS);
 }
@@ -307,7 +377,7 @@ int ecm_cia402_read(ecm_cia402_t *c, int axis, ecm_cia402_state_t *s)
     s->apos = (int32_t)(uint32_t)w[1]; s->avel = (int32_t)(uint32_t)(w[1] >> 32);
     s->ecode = (uint16_t)w[2]; s->mode_disp = (int8_t)(uint8_t)(w[2] >> 16); s->mode_ok = (uint8_t)(w[2] >> 24);
     s->mode_req = (int8_t)(uint8_t)(w[2] >> 32);
-    s->used = w[3]; s->late = w[4]; s->underrun = w[5]; s->last_seq = (uint32_t)w[6]; s->dropped = w[7];
+    s->used = w[3]; s->late = w[4]; s->underrun = w[5]; s->last_seq = (uint32_t)w[6]; s->step_refused = (uint32_t)(w[6] >> 32); s->dropped = w[7];
     return 0;
 }
 

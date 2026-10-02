@@ -83,7 +83,7 @@ jobs:
       - name: libecmaster/xchg app <-> RT exchange (Phase 10.4 X-01o..X-04o, Q-05 TSan + negative controls)
         run: make -C libecmaster/xchg test test_asan tsan
       - name: libecm_cia402 axis configuration + drive state machine (Phase 10.3, 10.5)
-        run: make -C libecm_cia402 test test_asan
+        run: make -C libecm_cia402 test test_asan negctl
       - name: No CiA402 object index in libecmaster (Phase 10.3 K-05, + negative control)
         run: python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
@@ -110,7 +110,7 @@ jobs:
       - name: Build soft_bus and ecm_run
         run: |
           make -C tools/soft_bus
-          make -C apps/ecm_run SOEM_DIR="$SOEM_DIR"
+          make -C apps/ecm_run ecm_run ecm_run_neg6 SOEM_DIR="$SOEM_DIR"
       - name: veth pair
         run: |
           sudo ip link add veth_m type veth peer name veth_s
@@ -157,6 +157,8 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_hook Q02_SEC=5 Q03_SEC=10 tools/gd10/run_hook_10_4.sh
       - name: Drive state machine + CSP/CSV through SOEM (Phase 10.5 T-01..T-08; tracking informational)
         run: sudo -E env LOG=/tmp/log_gd10_cia402 tools/gd10/run_cia402_10_5.sh
+      - name: Safety latches S1, S2, S4..S7 through SOEM, with negative controls (Phase 10.6)
+        run: sudo -E env LOG=/tmp/log_gd10_safety tools/gd10/run_safety_10_6.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4

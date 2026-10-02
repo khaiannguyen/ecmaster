@@ -29,6 +29,22 @@
  * The master never enables an axis by itself: target ENABLED only comes
  * from an ENABLE command. RT-safe: no syscalls, locks or allocation.
  * Modes handled here: CSP, CSV (PP/PV/HM: Phase 10.7).
+ *
+ * Phase 10.6, safety latches (docs/safety_boundary.md):
+ *   S1  never enabled by the master: an axis that leaves Operation enabled
+ *       without a command (recovery, drive-side quick stop / DI) is latched
+ *       disabled (DROPPED), it is not walked back up
+ *   S2  target = actual before and while enabling (CSP)
+ *   S3  setpoint underrun: CSP holds the last position (no extrapolation)
+ *   S4  step limit: |setpoint - last sent| > max step per cycle -> not sent,
+ *       quick stop, error STEP (CSP position; CSV velocity if set)
+ *   S5  bus lost -> disabled, kept when the bus is back (BUS_LOST)
+ *   S6  shutdown: ecm_cia402_shutdown() walks every axis down (0x07, 0x06,
+ *       0x00) and refuses ENABLE; the caller keeps cycling until
+ *       ecm_cia402_all_down() before it leaves OP
+ *   S7  fault reset only on command; the axis stays disabled after it
+ * ECM_CIA402_BROKEN (bit n = Sn) switches a latch off: test builds only,
+ * for the negative controls. Never set it in a product build.
  * ========================================================================== */
 #ifndef ECM_CIA402_AXIS_H
 #define ECM_CIA402_AXIS_H
@@ -53,7 +69,16 @@ enum {
     ECM_AXERR_BUS_LOST,       /* process data lost while enabled             */
     ECM_AXERR_MODE,           /* mode not configured / not handled           */
     ECM_AXERR_IN_FAULT,       /* ENABLE refused: drive in Fault, reset first */
+    ECM_AXERR_DROPPED,        /* S1: left Operation enabled without a command */
+    ECM_AXERR_STEP,           /* S4: setpoint step above the limit            */
+    ECM_AXERR_SHUTDOWN,       /* S6: ENABLE refused, the master is stopping   */
 };
+
+/* Phase 10.6: negative controls (test builds only) */
+#ifndef ECM_CIA402_BROKEN
+#define ECM_CIA402_BROKEN 0
+#endif
+#define ECM_CIA402_LATCH_OFF(n) (((ECM_CIA402_BROKEN) >> (n)) & 1)
 
 /* commands (ecm_xcmd_t.op), arg0 = mode for SET_MODE */
 enum {
@@ -77,9 +102,13 @@ typedef struct {
     int8_t   mode_req, mode_disp;
     int32_t  apos, avel;
     uint16_t ecode;
-    int64_t  last_sp;
+    int64_t  last_sp, last_delta;   /* last_delta: S3 negative control only */
+    int64_t  last_sent;            /* S4: what went out last (pos or vel)  */
+    int64_t  max_step_pos, max_step_vel;   /* S4, per cycle; 0 = off        */
+    int64_t  step_seen;            /* S4: the refused step                 */
+    uint8_t  reached_oe;           /* S1: OE reached under this ENABLE     */
     uint64_t step_since;
-    uint64_t used, late, underrun, dropped, transitions;
+    uint64_t used, late, underrun, dropped, transitions, step_refused;
     uint32_t last_seq;
 } ecm_cia402_axis_t;
 
@@ -90,7 +119,7 @@ typedef struct {
     int8_t   mode_disp, mode_req;
     int32_t  apos, avel;
     uint64_t used, late, underrun, dropped;
-    uint32_t last_seq;
+    uint32_t last_seq, step_refused;
 } ecm_cia402_state_t;
 
 typedef struct {
@@ -103,6 +132,7 @@ typedef struct {
     ecm_xst_t         st[ECM_AXIS_MAX];
     ecm_xst_t         clock;              /* tick, t_send_ns, in_valid, bus_lost */
     uint64_t          cmd_applied, cmd_deferred, cmd_bad;
+    uint8_t           shutdown;           /* S6, RT thread only */
 } ecm_cia402_t;
 
 /* statusword -> drive state (CiA 402, bits 0..3, 5, 6) */
@@ -114,6 +144,15 @@ const char *ecm_cia402_err_str(int err);
 void ecm_cia402_init(ecm_cia402_t *c, uint64_t cycle_ns, uint32_t step_timeout_ms);
 /* The first mode of cfg->modes (CSP before CSV) is the initial request. -1 if full. */
 int  ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_axis_bind_t *b);
+/* Not RT. S4 limits per cycle (CSP: increments, CSV: velocity units); 0 = off. */
+void ecm_cia402_set_step_limit(ecm_cia402_t *c, int axis, int64_t max_pos, int64_t max_vel);
+
+/* S6, RT thread (the caller of ecm_cia402_rt): from now on every axis is
+ * walked down and ENABLE is refused. ecm_cia402_all_down(): 1 once no axis
+ * is above Switch on disabled (Fault / unknown count as down; with the bus
+ * lost nothing can be sent, so every axis counts as down). */
+void ecm_cia402_shutdown(ecm_cia402_t *c);
+int  ecm_cia402_all_down(const ecm_cia402_t *c, int bus_lost);
 
 /* RT hook, once per tick. */
 void ecm_cia402_rt(ecm_cia402_t *c, uint8_t *iomap, uint64_t tick, uint64_t t_send_ns,

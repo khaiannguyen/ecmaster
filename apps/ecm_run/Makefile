@@ -29,10 +29,15 @@ $(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POL
 	@echo "Using SOEM lib: $(SOEM_LIB)"
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
+# Phase 10.6: negative control of S6 (shutdown sequence) through ecm_run:
+# same program with that latch off. Test builds only; never installed.
+ecm_run_neg6: ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(CIA402_SRC) $(XCHG_SRC) $(CIA402AX_SRC) $(SOEM_LIB)
+	$(CC) $(CFLAGS) -DECM_CIA402_BROKEN='(1<<6)' -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
+
 setcap: $(TARGET)
 	$(SUDO) setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep ./$(TARGET)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) ecm_run_neg6
 
 .PHONY: all setcap clean
