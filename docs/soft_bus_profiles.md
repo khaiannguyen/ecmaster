@@ -26,7 +26,7 @@ Quy tắc của esi2profile:
 - **0x1C12/0x1C13**: chỉ nhận PDO đúng hướng có trong ESI (0x06090030); đổi SIk khi SI0 ≠ 0 → 0x08000022 (ETG.1020); SI0 kích hoạt một tập vi phạm Exclude hoặc lặp PDO → 0x06090030. Ghi CA thì kiểm cả tập mới một lần.
 - **PREOP → SAFEOP**: cỡ SM2/SM3 master ghi phải bằng tổng bit các PDO đang gán (đọc từ object mapping hiện tại), nếu không → PREOP+ERR **0x001D** (output) / **0x001E** (input), như servo thật khi cấu hình PDO lệch.
 - Tắt/bật nguồn (`drop_node` / `restore_node`) → node vẫn là slave đó, dictionary về mặc định ESI.
-- **Không** mô phỏng: hành vi CiA402, chuyển động. Input chỉ là cái `pdo_in` đặt vào (GĐ10 làm servo ảo).
+- Không có `--cia402`: **không** mô phỏng hành vi CiA402 hay chuyển động, input chỉ là cái `pdo_in` đặt vào. Có `--cia402 N[:AXES]` (GĐ10.2): node là drive CiA402 ảo, xem `docs/soft_bus_cia402.md`.
 
 ## ESI hãng và giấy phép
 ESI của Inovance chỉ để dùng cục bộ (roadmap GĐ9, ghi chú 30/9): **không** commit ESI, **không** commit profile sinh từ nó (`config/profiles/is620n.prof` nằm trong `.gitignore`). Repo có `config/profiles/is620n_min.prof`: bản rút gọn viết tay, chỉ identity, SM, 4 PDO test dùng (0x1701/0x1702/0x1B01/0x1B02) và các object cần cho ENI. Máy có ESI (Jetson):

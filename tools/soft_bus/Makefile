@@ -6,30 +6,35 @@ TEST    = test_offline
 TESTF   = test_fault
 TESTC   = test_coe
 TESTP   = test_profile
-SRCS    = esc_core.c esc_coe.c esc_dc.c esc_fault.c esc_profile.c
-HDRS    = esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h esc_fault.h esc_profile.h
+TESTD   = test_cia402
+SRCS    = esc_core.c esc_coe.c esc_dc.c esc_fault.c esc_profile.c esc_cia402.c
+HDRS    = esc_types.h esc_sii.h esc_core.h esc_coe.h esc_dc.h esc_dc_state.h esc_fault.h esc_profile.h esc_cia402.h
+LDLIBS  = -lm
 
 all: $(TARGET)
 
 $(TARGET): soft_bus_main.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ soft_bus_main.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ soft_bus_main.c $(SRCS) $(LDLIBS)
 
 $(TEST): test_offline.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ test_offline.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ test_offline.c $(SRCS) $(LDLIBS)
 sii_dump: sii_dump.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ sii_dump.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ sii_dump.c $(SRCS) $(LDLIBS)
 
 $(TESTF): test_fault.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ test_fault.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ test_fault.c $(SRCS) $(LDLIBS)
 
 $(TESTC): test_coe.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ test_coe.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ test_coe.c $(SRCS) $(LDLIBS)
 
 $(TESTP): test_profile.c $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ test_profile.c $(SRCS)
+	$(CC) $(CFLAGS) -o $@ test_profile.c $(SRCS) $(LDLIBS)
 
-test: $(TEST) $(TESTF) $(TESTC) $(TESTP)
-	./$(TEST) && ./$(TESTF) && ./$(TESTC) && ./$(TESTP)
+$(TESTD): test_cia402.c $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -o $@ test_cia402.c $(SRCS) $(LDLIBS)
+
+test: $(TEST) $(TESTF) $(TESTC) $(TESTP) $(TESTD)
+	./$(TEST) && ./$(TESTF) && ./$(TESTC) && ./$(TESTP) && ./$(TESTD)
 
 # Grants permission to run without sudo. Needs BOTH capabilities: NET_RAW to
 # open a raw socket, NET_ADMIN for promiscuous mode — lesson learned earlier
@@ -40,7 +45,7 @@ setcap: $(TARGET)
 
 clean:
 	rm -f l1_probe
-	rm -f $(TARGET) $(TEST) $(TESTF) $(TESTC) $(TESTP) sii_dump
+	rm -f $(TARGET) $(TEST) $(TESTF) $(TESTC) $(TESTP) $(TESTD) sii_dump
 
 .PHONY: all test setcap clean
 

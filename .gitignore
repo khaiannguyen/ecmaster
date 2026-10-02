@@ -29,6 +29,7 @@ tools/rt_tail/log_rt_tail_*/
 tools/soft_bus/test_fault
 tools/soft_bus/test_coe
 tools/soft_bus/test_profile
+tools/soft_bus/test_cia402
 log_gd9_coe_*/
 log_x04_*/
 __pycache__/

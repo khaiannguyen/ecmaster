@@ -30,6 +30,7 @@
 #include "esc_core.h"
 #include "esc_dc.h"
 #include "esc_fault.h"
+#include "esc_cia402.h"
 #include "esc_coe.h"
 #include "esc_profile.h"
 
@@ -309,6 +310,7 @@ static void node_power_on(esc_t *chain, int n, int k)
     uint8_t react = e->wd.react;
     const esc_profile_t *prof = e->prof;          /* Phase 9.9: the node stays that slave */
     struct esc_prof_state *ps = e->prof_st;
+    struct esc_cia402 *drv = e->drv;              /* Phase 10.2: and keeps its drive     */
     memset(e, 0, sizeof(*e));          /* power-on: everything forgotten */
     esc_init(e, (uint8_t)k, pdo);
     if (prof) {
@@ -316,6 +318,8 @@ static void node_power_on(esc_t *chain, int n, int k)
         esc_prof_attach(e, prof);      /* OD back to the ESI defaults */
     }
     e->wd.react = react;
+    e->drv = drv;
+    esc_cia402_reset(e);               /* the drive powers up too: Not ready to switch on */
     esc_dc_node_reset(e, k);
     esc_chain_wire(chain, n);
 }
@@ -366,6 +370,8 @@ int esc_fault_command(esc_fault_bus_t *f, esc_t *chain, int n, const char *line,
     for (char *t = strtok(tmp, " \t\r\n"); t && argc < 6; t = strtok(NULL, " \t\r\n"))
         argv[argc++] = t;
     if (argc == 0) return 0;                       /* blank / comment */
+    if (!strncmp(argv[0], "drv_", 4))              /* Phase 10.2: virtual CiA402 drive */
+        return esc_cia402_command(chain, n, argc, argv, f->log, now_ns);
 
     const char *cmd = argv[0];
     unsigned long a = 0, b = 0;

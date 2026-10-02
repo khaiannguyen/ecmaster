@@ -314,6 +314,7 @@ typedef struct {
     uint16_t  mbx_out, mbx_out_len, mbx_in, mbx_in_len;
     const struct esc_profile *prof;      /* Phase 9.9: NULL = built-in SOFTBUS-PD4 */
     struct esc_prof_state    *prof_st;   /* Phase 9.9: this node's OD values      */
+    struct esc_cia402        *drv;       /* Phase 10.2: virtual CiA402 drive, NULL = off */
 } esc_t;
 
 

@@ -15,8 +15,9 @@
  *     the PDOs currently assigned, else the node refuses with AL status
  *     code 0x001D (outputs) / 0x001E (inputs), like a real drive (IS620N
  *     on LinuxCNC with a PDO mismatch: 0x001E)
- * What it does NOT model: the drive itself (CiA402 state machine, motion);
- * inputs stay what the fault injection puts there (Phase 10 adds a servo model).
+ * What it does NOT model by itself: the drive (CiA402 state machine,
+ * motion); inputs stay what the fault injection puts there. --cia402
+ * N[:AXES] adds that model on top of a profile node (Phase 10.2, esc_cia402.h).
  * ========================================================================== */
 #ifndef ESC_PROFILE_H
 #define ESC_PROFILE_H

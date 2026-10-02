@@ -39,6 +39,7 @@ test-offline:
 	tools/esi/check_ca_variant.sh
 	tools/esi/check_xsd.sh config/esi/p1_draft_esi.xml
 	tools/eni/check_enicfg.sh
+	python3 tools/esi/make_multiaxis_prof.py --axes 4 | diff -q - config/profiles/cia402_4ax.prof   # Phase 10.2: committed profile = generator
 	$(MAKE) -C tools/soft_bus test
 	$(MAKE) -C libecmaster/telemetry run
 	$(MAKE) -C libecmaster/core test test_asan

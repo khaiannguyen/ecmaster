@@ -53,6 +53,7 @@
 #include "esc_dc.h"
 #include "esc_fault.h"
 #include "esc_profile.h"
+#include "esc_cia402.h"
 
 #define RX_BUF_SIZE  FAULT_FRAME_MAX
 #define CTL_DEFAULT  "/tmp/soft_bus.ctl"
@@ -95,6 +96,7 @@ int main(int argc, char **argv)
     int coe_delay_ms = 0;                                /* Phase 9.6, off by default */
     int prof_node[16], n_prof = 0;                       /* Phase 9.9 --profile N=FILE */
     const char *prof_file[16];
+    int drv_node[16], drv_axes[16], n_drv = 0;           /* Phase 10.2 --cia402 N[:AXES] */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -144,6 +146,18 @@ int main(int argc, char **argv)
             prof_node[n_prof] = k;
             prof_file[n_prof] = eq + 1;
             n_prof++;
+        } else if (strcmp(argv[i], "--cia402") == 0 && i + 1 < argc) {
+            /* Phase 10.2: N[:AXES] -- slave N (needs --profile N=...) is a CiA402 drive */
+            char *v = argv[++i], *colon = strchr(v, ':');
+            int k = atoi(v), ax = colon ? atoi(colon + 1) : 1;
+            if (k < 1 || k > 64 || ax < 1 || ax > CIA402_MAX_AXES || n_drv >= 16) {
+                fprintf(stderr, "--cia402 expects N[:AXES], N = SOEM slave number 1..64, AXES 1..%d\n",
+                        CIA402_MAX_AXES);
+                return 1;
+            }
+            drv_node[n_drv] = k;
+            drv_axes[n_drv] = ax;
+            n_drv++;
         } else if (strcmp(argv[i], "--sii-poke") == 0 && i + 1 < argc) {
             int w, v;
             if (n_poke >= 8 || sscanf(argv[++i], "%i=%i", &w, &v) != 2 || w < 0 || v < 0 || v > 0xFFFF) {
@@ -164,7 +178,8 @@ int main(int argc, char **argv)
                 "       [--dc-report-s S] [--ctl <fifo>|none] [--app-seq <offset>] [--no-sm-wd]\n"
                 "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n"
                 "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, Phase 9.5)\n"
-                "       [--profile N=FILE ...] (slave N emulates the profile's slave, Phase 9.9)\n",
+                "       [--profile N=FILE ...] (slave N emulates the profile's slave, Phase 9.9)\n"
+                "       [--cia402 N[:AXES] ...] (slave N with a profile is a virtual CiA402 drive, Phase 10.2)\n",
                 argv[0]);
         return 1;
     }
@@ -201,6 +216,16 @@ int main(int argc, char **argv)
                "%d PDOs, %d objects, SII %zu words%s\n",
                k, pf->name, pf->path, (unsigned)pf->vendor, (unsigned)pf->product, (unsigned)pf->rev,
                pf->npdo, pf->nobj, chain[k - 1].sii_image_words, pf->dc ? "" : ", no DC");
+    }
+    for (int k = 0; k < n_drv; k++) {
+        int s = drv_node[k];
+        if (s > n || !chain[s - 1].prof) {
+            fprintf(stderr, "--cia402 %d: slave %d needs --profile %d=FILE (the drive works through its PDOs and OD)\n",
+                    s, s, s);
+            return 1;
+        }
+        if (esc_cia402_attach(&chain[s - 1], drv_axes[k])) { fprintf(stderr, "--cia402 %d: out of memory\n", s); return 1; }
+        printf("soft_bus: node %d = virtual CiA402 drive, %d axis/axes (objects + 0x800 per axis)\n", s, drv_axes[k]);
     }
     if (coe_pdo_od || coe_ca)
         printf("soft_bus: CoE %s%s\n", "PDO objects 0x1C00/0x1C12/0x1C13/0x1600/0x1A00",
@@ -384,6 +409,13 @@ int main(int argc, char **argv)
                 int np = esc_fault_frame_begin(&g_fault, chain, n, buf, (size_t)r, t_rx);
                 esc_dc_frame_begin(chain, n, t_rx);
                 if (np > 0) process_frame(chain, np, buf, (size_t)r);
+                /* Phase 10.2: drive cycle of every virtual CiA402 drive that saw
+                 * process data in this frame (outputs consumed, inputs for the
+                 * next frame). Nodes without --cia402 are untouched. */
+                if (g_fault.f_has_pd)
+                    for (int k = 0; k < np; k++)
+                        if (chain[k].drv && !chain[k].fault.skip_logical)
+                            esc_cia402_step(&chain[k], t_rx, stdout);
                 /* A frame no ESC saw is "no frame" for the SYNC0 ground truth. */
                 esc_dc_frame_end(chain, n, np > 0 ? g_fault.f_has_pd : 0);
                 esc_fault_frame_end(&g_fault, chain, n, buf, (size_t)r, t_rx);
@@ -411,6 +443,7 @@ int main(int argc, char **argv)
     }
     esc_dc_report_totals(chain, n, stdout);
     esc_fault_status(&g_fault, chain, n, stdout);
+    for (int i = 0; i < n; i++) esc_cia402_print(&chain[i], stdout);   /* Phase 10.2 */
     if (ctl_fd >= 0) close(ctl_fd);
 
     printf("soft_bus: shutting down, freeing %d node(s).\n", n);
