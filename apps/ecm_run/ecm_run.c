@@ -129,6 +129,7 @@
  * are only declared by glibc's <sched.h> when _GNU_SOURCE is defined. */
 #define _GNU_SOURCE
 
+#include <math.h>      /* Phase 10.4: test producer sine */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -167,6 +168,7 @@
 #include "libecmaster/pdo/ecm_pdo.h"         /* Phase 9.10 */
 #include "libecmaster/pdo/ecm_pdo_soem.h"
 #include "libecm_cia402/ecm_cia402_cfg.h"   /* Phase 10.3 */
+#include "libecmaster/xchg/ecm_xchg.h"         /* Phase 10.4 */
 
 /* ctx.grouplist[] has EC_MAXGROUP entries (SOEM CMake option, default 2)
  * and this file indexes it with GROUP_IO = 2. With the default, every
@@ -262,6 +264,50 @@ static ecm_axis_bind_t  g_axis_b[ECM_AXIS_MAX];
 static int              g_naxes;
 static const char      *g_axis_list, *g_axis_modes_s = "csp", *g_axes_cfg;
 static int              g_axis_no6502;
+
+/* Phase 10.4: cyclic hook in the RT thread + app <-> RT exchange
+ * (docs/app_rt_exchange.md). The hook runs once per tick, after the motion
+ * receive and DC(b), before the next send; it gets the motion IOmap (the RT
+ * thread stays its only owner). Nothing registered -> one predictable
+ * branch, no datagram changes (Q-01). --hook empty measures the bare cost
+ * (Q-02); --hook xchg runs ecm_xchg_rt() on --xchg-out / --xchg-in slots,
+ * fed by a test producer in the application thread (--xchg-sine, Q-03/Q-04). */
+typedef struct {
+    uint8_t *iomap;            /* GROUP_MOTION IOmap                          */
+    uint64_t tick;
+    uint64_t t_send_ns;        /* send (af_packet) or launch (etf) time        */
+    int      in_valid;         /* this tick's motion reply was accepted (WKC)  */
+    int      bus_lost;         /* no process data this tick                    */
+} ecm_hook_args_t;
+typedef void (*ecm_hook_fn)(const ecm_hook_args_t *a, void *ctx);
+static ecm_hook_fn      g_hook;
+static void            *g_hook_ctx;
+static const char      *g_hook_name;
+static ecm_hist_t       g_hook_hist;
+static uint64_t         g_hook_calls;
+static ecm_xchg_t       g_xchg;              /* ~600 KB, static, locked by mlockall */
+static const char      *g_xchg_out_spec, *g_xchg_in_spec;
+static double           g_xchg_amp = 10000.0, g_xchg_hz = 1.0;
+static int              g_xchg_sine, g_xchg_lead = 4;
+static long             g_xchg_starve_s = -1, g_xchg_starve_ms;
+static int              g_xchg_echo_off;     /* test only: shift the echo's expected tick (negative control) */
+static struct {                               /* written by the app thread only */
+    uint64_t pushed, full, gaps, checked, mismatch, torn, starve_from, starve_to;
+    struct { uint64_t tick, got, want, used, under; } mm[4];   /* first mismatches */
+} g_xapp;
+
+static void hook_empty(const ecm_hook_args_t *a, void *ctx) { (void)a; (void)ctx; }
+static void hook_xchg(const ecm_hook_args_t *a, void *ctx)
+{
+    ecm_xchg_rt((ecm_xchg_t *)ctx, a->iomap, a->tick, a->t_send_ns, a->in_valid, a->bus_lost);
+}
+
+/* the test producer's setpoint for slot s at tick t (also its echo check) */
+static int64_t xchg_sine_value(int s, uint64_t t)
+{
+    double ph = 2.0 * M_PI * g_xchg_hz * (double)t * (double)g_xchg.cycle_ns * 1e-9;
+    return (int64_t)llround(g_xchg_amp * sin(ph)) + 1000 * s;
+}
 
 /* Phase 9.6: how long to wait for a bus state. SOEM's EC_TIMEOUTSTATE (2 s)
  * unless the ENI gives a slave a longer one (the Timeout of its AL Control
@@ -1355,7 +1401,68 @@ static void *app_thread_fn(void *arg)
 {
     (void)arg;
     set_non_rt_thread();
-    while (!g_app_stop) usleep(100000);
+    if (!g_xchg_sine) {
+        while (!g_app_stop) usleep(100000);
+        return NULL;
+    }
+    /* Phase 10.4 test producer: a sine for every output slot, g_xchg_lead
+     * ticks ahead of the published tick, checked back through the slot's
+     * state record (echo). Non-RT: wakes every ms, may be late -- that is
+     * exactly what the late / underrun counters are for. */
+    uint64_t next = 0, last_under = 0, last_rec = 0, t0 = 0;
+    int nout = 0, s0 = -1;
+    for (int s = 0; s < g_xchg.nslots; s++)
+        if (g_xchg.slot[s].is_out) { nout++; if (s0 < 0) s0 = s; }
+    while (!g_app_stop) {
+        struct timespec d = { 0, 1000000 };
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &d, NULL);
+        uint64_t k, cw[ECM_XST_WORDS];
+        if (ecm_xchg_read_clock(&g_xchg, &k, cw)) { g_xapp.torn++; continue; }
+        if (k == 0) continue;
+        if (!t0) t0 = k;
+        if (g_xchg_starve_s >= 0) {
+            uint64_t a = t0 + (uint64_t)g_xchg_starve_s * 1000000000ull / g_xchg.cycle_ns;
+            uint64_t b = a + (uint64_t)g_xchg_starve_ms * 1000000ull / g_xchg.cycle_ns;
+            g_xapp.starve_from = a; g_xapp.starve_to = b;
+            if (k >= a && k < b) continue;                  /* Q-04: stop feeding */
+        }
+        if (next < k + 2 && g_xchg_lead >= 2) {             /* fell behind: skip ahead */
+            if (next) g_xapp.gaps++;
+            next = k + 2;
+        } else if (!next) {
+            next = k + (uint64_t)g_xchg_lead;               /* lead 0/1: negative control */
+        }
+        for (; next <= k + (uint64_t)g_xchg_lead; next++)
+            for (int s = 0; s < g_xchg.nslots; s++) {
+                if (!g_xchg.slot[s].is_out) continue;
+                if (ecm_xchg_setpoint(&g_xchg, s, next, xchg_sine_value(s, next))) g_xapp.full++;
+                else g_xapp.pushed++;
+            }
+        if (s0 >= 0) {                                      /* echo check of the first output slot */
+            uint64_t r, w[ECM_XST_WORDS];
+            if (ecm_xchg_read_slot(&g_xchg, s0, &r, w)) { g_xapp.torn++; continue; }
+            /* only a NEW record (the RT thread may not have run since the
+             * last read: the same held value would be checked twice) whose
+             * hook did not underrun (underrun unchanged since the record
+             * before it) carries sine(tick + 1) */
+            if (r == last_rec) continue;
+            int fresh = r == last_rec + 1;
+            last_rec = r;
+            if (fresh && w[ECM_XS_VALID] && w[ECM_XS_UNDERRUN] == last_under && w[ECM_XS_USED]) {
+                uint64_t mask = g_xchg.slot[s0].h.bits >= 64 ? ~0ull : (1ull << g_xchg.slot[s0].h.bits) - 1;
+                g_xapp.checked++;
+                uint64_t want = (uint64_t)xchg_sine_value(s0, r + 1 + (uint64_t)(int64_t)g_xchg_echo_off) & mask;
+                if ((w[ECM_XS_VALUE] & mask) != want) {
+                    if (g_xapp.mismatch < 4)
+                        g_xapp.mm[g_xapp.mismatch] = (typeof(g_xapp.mm[0])){ r, w[ECM_XS_VALUE] & mask, want,
+                                                                             w[ECM_XS_USED], w[ECM_XS_UNDERRUN] };
+                    g_xapp.mismatch++;
+                }
+            }
+            last_under = w[ECM_XS_UNDERRUN];
+        }
+    }
+    (void)nout;
     return NULL;
 }
 
@@ -1784,6 +1891,25 @@ int main(int argc, char **argv)
             g_pdo_scan = 1;
         } else if (strcmp(argv[i], "--pdo-dump") == 0) {
             g_pdo_dump = 1;
+        } else if (strcmp(argv[i], "--hook") == 0 && i + 1 < argc) {      /* Phase 10.4 */
+            g_hook_name = argv[++i];
+        } else if (strcmp(argv[i], "--xchg-out") == 0 && i + 1 < argc) {
+            g_xchg_out_spec = argv[++i];
+        } else if (strcmp(argv[i], "--xchg-in") == 0 && i + 1 < argc) {
+            g_xchg_in_spec = argv[++i];
+        } else if (strcmp(argv[i], "--xchg-sine") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%lf:%lf", &g_xchg_amp, &g_xchg_hz) != 2) {
+                fprintf(stderr, "ecm_run: --xchg-sine AMPLITUDE:HZ\n"); return 1;
+            }
+            g_xchg_sine = 1;
+        } else if (strcmp(argv[i], "--xchg-lead") == 0 && i + 1 < argc) {
+            g_xchg_lead = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--xchg-echo-off") == 0 && i + 1 < argc) {
+            g_xchg_echo_off = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--xchg-starve") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%ld:%ld", &g_xchg_starve_s, &g_xchg_starve_ms) != 2) {
+                fprintf(stderr, "ecm_run: --xchg-starve SECOND:MS\n"); return 1;
+            }
         } else if (strcmp(argv[i], "--axis") == 0 && i + 1 < argc) {      /* Phase 10.3 */
             g_axis_list = argv[++i];
         } else if (strcmp(argv[i], "--axis-modes") == 0 && i + 1 < argc) {
@@ -1908,6 +2034,8 @@ int main(int argc, char **argv)
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
             "       [--axis S[:N],... [--axis-modes csp,csv,pp,pv,hm,cst] | --axes-cfg FILE] [--axis-no-6502]   (Phase 10.3)\n"
+            "       [--hook empty|xchg] [--xchg-out S:IDX:SUB,...] [--xchg-in S:IDX:SUB,...]\n"
+            "       [--xchg-sine AMP:HZ] [--xchg-lead TICKS] [--xchg-starve SECOND:MS]   (Phase 10.4, test hooks)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -1918,6 +2046,22 @@ int main(int argc, char **argv)
         return 1;
     }
     long ticks_per_io = io_cycle_us / motion_cycle_us;
+
+    /* Phase 10.4: hook selection (before the bus is touched) */
+    if (g_hook_name) {
+        if (!strcmp(g_hook_name, "empty"))      { g_hook = hook_empty; g_hook_ctx = NULL; }
+        else if (!strcmp(g_hook_name, "xchg"))  { g_hook = hook_xchg;  g_hook_ctx = &g_xchg; }
+        else { fprintf(stderr, "ecm_run: --hook empty|xchg\n"); return 1; }
+        hist_init(&g_hook_hist);
+    }
+    if ((g_xchg_out_spec || g_xchg_in_spec || g_xchg_sine) && g_hook != hook_xchg) {
+        fprintf(stderr, "ecm_run: --xchg-* need --hook xchg\n"); return 1;
+    }
+    if (g_hook == hook_xchg && !g_xchg_out_spec && !g_xchg_in_spec) {
+        fprintf(stderr, "ecm_run: --hook xchg needs --xchg-out and/or --xchg-in slots\n"); return 1;
+    }
+    if (g_xchg_lead < 0 || g_xchg_lead > 400) { fprintf(stderr, "ecm_run: --xchg-lead 0..400\n"); return 1; }
+    ecm_xchg_init(&g_xchg, (uint64_t)motion_cycle_us * 1000u);
 
     /* Phase 10.3: axes from the command line or a file, checked before the
      * bus is touched (syntax); bound and checked against the drive at PREOP */
@@ -2257,6 +2401,54 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "ecm_run: %d CiA402 axis/axes configured (no cyclic CiA402 yet: Phase 10.4/10.5)\n", g_naxes);
     }
+
+    /* ---- Phase 10.4: exchange slots (motion group only: the hook gets its IOmap) */
+    if (g_xchg_out_spec || g_xchg_in_spec) {
+        if (!g_pdo) {
+            fprintf(stderr, "ecm_run: --xchg-out/--xchg-in need a PDO table: --eni (enicfg 2) or --pdo-scan\n");
+            ecx_close(&ctx); return 1;
+        }
+        const char *specs[2] = { g_xchg_out_spec, g_xchg_in_spec };
+        uint16_t bound[ECM_XCHG_MAX_SLOTS];
+        int nb = 0;
+        for (int w = 0; w < 2; w++) {
+            if (!specs[w]) continue;
+            char buf[512], perr[512];
+            snprintf(buf, sizeof(buf), "%s", specs[w]);
+            for (char *save = NULL, *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+                int sl; uint16_t ix; uint8_t sb;
+                ecm_pdo_handle_t h;
+                if (ecm_pdo_parse_ref(t, &sl, &ix, &sb) || ecm_pdo_bind(g_pdo, g_pdo_loc, sl, ix, sb, &h, perr, sizeof(perr))) {
+                    fprintf(stderr, "ecm_run: --xchg-%s %s: %s\n", w ? "in" : "out", t,
+                            ecm_pdo_parse_ref(t, &sl, &ix, &sb) ? "expected SLAVE:INDEX:SUB" : perr);
+                    ecx_close(&ctx); return 1;
+                }
+                if (h.dir != (w ? ECM_PDO_IN : ECM_PDO_OUT) || h.group != GROUP_MOTION) {
+                    fprintf(stderr, "ecm_run: --xchg-%s %s: must be an %s of a motion-group slave. Refusing\n",
+                            w ? "in" : "out", t, w ? "input" : "output");
+                    ecx_close(&ctx); return 1;
+                }
+                int k = ecm_xchg_add_slot(&g_xchg, &h);
+                if (k < 0) { fprintf(stderr, "ecm_run: more than %d exchange slots\n", ECM_XCHG_MAX_SLOTS); ecx_close(&ctx); return 1; }
+                bound[nb++] = (uint16_t)sl;
+                fprintf(stderr, "ecm_run: xchg slot %d = %s slave %d 0x%04X:%02X (%s, bit %u, %u bit)\n",
+                        k, w ? "in " : "out", sl, ix, sb, w ? "state" : "setpoints", h.bit, h.bits);
+            }
+        }
+        if (g_pdo != &g_pdo_bus) {                     /* Phase 10.1 rule */
+            uint32_t vend[ECM_PDO_MAX_SLAVES + 1] = { 0 };
+            int nv = ctx.slavecount < ECM_PDO_MAX_SLAVES ? ctx.slavecount : ECM_PDO_MAX_SLAVES;
+            for (int s = 1; s <= nv; s++) vend[s] = ctx.slavelist[s].eep_man;
+            char verr[512];
+            int nn = ecm_pdo_scan_required(vend, nv, bound, nb, g_pdo_own, g_pdo_nown, verr, sizeof(verr));
+            if (nn && !g_pdo_trust_eni) {
+                fprintf(stderr, "ecm_run: exchange slots on %d slave(s) of another vendor from the ENI alone: %s. "
+                        "Add --pdo-scan. Refusing\n", nn, verr);
+                ecx_close(&ctx); return 1;
+            }
+        }
+    }
+    if (g_hook) fprintf(stderr, "ecm_run: RT hook '%s' registered (Phase 10.4)\n", g_hook_name);
 
     /* ---- Phase 9.8: freshness per slave. Resolved here, after mapping, so a
      * counter outside a slave's inputs is refused now (by name) instead of
@@ -2688,6 +2880,7 @@ int main(int argc, char **argv)
         uint8_t io_due = (g_io_active && tick % (uint64_t)ticks_per_io == 0) ? 1 : 0;   /* Phase 9.1 */
         uint8_t any_wkc_mismatch = 0;
         int64_t dc_adjust_ns = 0;
+        int hook_in_valid = 0;                         /* Phase 10.4 */
 
         if (g_bus.state == ECM_BUS_RUN || g_bus.state == ECM_BUS_DEGRADED) {
         /* (body below kept at its Phase 6 indentation so the 7.3 diff stays readable) */
@@ -2755,6 +2948,7 @@ int main(int argc, char **argv)
          * matched to this frame by a reused index. Put the inputs back and
          * count the cycle as "no frame". ---- */
         int motion_class = (int)ecm_wkc_classify(motion_wkc, (int)motion.expected_wkc);
+        hook_in_valid = 0;
         if (g_dc_enabled && motion_wkc > 0 && g_dc.last_rejected && !motion.reply_foreign) {
             g_stale_replies++;
             if (g_reply_check) {
@@ -2774,6 +2968,7 @@ int main(int argc, char **argv)
 
         /* Phase 7.4 (L5-09): input freshness, only on replies that were
          * accepted with the full WKC (a missing slave is WKC's business). */
+        hook_in_valid = motion_class == ECM_POL_WKC_OK;   /* Phase 10.4 */
         if (g_fresh_any) {
             if (motion_class == ECM_POL_WKC_OK)
                 for (int s = 1; s <= ctx.slavecount; s++)
@@ -2836,6 +3031,26 @@ int main(int argc, char **argv)
                     if (bus_ev.to == ECM_BUS_RUN) excl_end();
                 }
             }
+        }
+        /* ---- Phase 10.4: the cyclic hook. After the motion receive and
+         * DC(b), before the next send: what it writes goes out in the next
+         * tick's frame. Runs in LOST/RECOVER too (bus_lost = 1) so a layer
+         * above can latch its state; its time counts as occupancy. ---- */
+        if (g_hook) {
+            struct timespec h0, h1;
+            clock_gettime(CLOCK_MONOTONIC, &h0);
+            ecm_hook_args_t ha = {
+                .iomap = IOmap_motion, .tick = tick,
+                .t_send_ns = g_link_etf ? ts_to_ns(&next) : motion.last_send_ns,
+                .in_valid = hook_in_valid,
+                .bus_lost = !(g_bus.state == ECM_BUS_RUN || g_bus.state == ECM_BUS_DEGRADED),
+            };
+            g_hook(&ha, g_hook_ctx);
+            clock_gettime(CLOCK_MONOTONIC, &h1);
+            int64_t hns = ts_diff_ns(&h1, &h0);
+            hist_add(&g_hook_hist, hns);
+            g_hook_calls++;
+            cycle_occupancy_ns += hns;
         }
         atomic_store_explicit(&g_bus_state_pub, (int)g_bus.state, memory_order_relaxed);
 
@@ -2945,6 +3160,33 @@ int main(int argc, char **argv)
     pthread_join(app_tid,       NULL);
     pthread_join(mailbox_tid,   NULL);
     pthread_join(monitor_tid,   NULL);
+
+    /* ---- Phase 10.4: hook and exchange report (every thread joined) ---- */
+    if (g_hook) {
+        fprintf(stderr, "  [HOOK] '%s' calls=%" PRIu64 " p50=%" PRIu64 " p99=%" PRIu64 " p99.99=%" PRIu64
+                " max=%" PRId64 " ns\n", g_hook_name, g_hook_calls,
+                hist_percentile(&g_hook_hist, 0.50), hist_percentile(&g_hook_hist, 0.99),
+                hist_percentile(&g_hook_hist, 0.9999), g_hook_hist.max_ns);
+    }
+    if (g_hook == hook_xchg) {
+        for (int k = 0; k < g_xchg.nslots; k++) {
+            const ecm_xslot_t *sl = &g_xchg.slot[k];
+            fprintf(stderr, "  [XCHG] slot %d %s slave %u bit %u: used=%" PRIu64 " late=%" PRIu64 " underrun=%" PRIu64
+                    " dropped_lost=%" PRIu64 " ring_full=%" PRIu64 "\n", k, sl->is_out ? "out" : "in ",
+                    sl->h.slave, sl->h.bit, sl->used, sl->late, sl->underrun, sl->dropped_lost, g_xchg.sp[k].full_drops);
+        }
+        fprintf(stderr, "  [XCHG] commands applied=%" PRIu64 " deferred=%" PRIu64 " unknown=%" PRIu64 "\n",
+                g_xchg.cmd_applied, g_xchg.cmd_deferred, g_xchg.cmd_unknown);
+        if (g_xchg_sine)
+            fprintf(stderr, "  [XCHG-APP] lead=%d pushed=%" PRIu64 " full=%" PRIu64 " gaps=%" PRIu64
+                    " echo_checked=%" PRIu64 " echo_mismatch=%" PRIu64 " torn=%" PRIu64 " starve=%" PRIu64 "..%" PRIu64 "\n",
+                    g_xchg_lead, g_xapp.pushed, g_xapp.full, g_xapp.gaps, g_xapp.checked, g_xapp.mismatch,
+                    g_xapp.torn, g_xapp.starve_from, g_xapp.starve_to);
+        for (uint64_t k = 0; k < g_xapp.mismatch && k < 4; k++)
+            fprintf(stderr, "  [XCHG-APP] mismatch %" PRIu64 ": record tick %" PRIu64 " value 0x%" PRIx64 " want 0x%" PRIx64
+                    " (used %" PRIu64 ", underrun %" PRIu64 ")\n", k, g_xapp.mm[k].tick, g_xapp.mm[k].got,
+                    g_xapp.mm[k].want, g_xapp.mm[k].used, g_xapp.mm[k].under);
+    }
 
     /* Phase 5: only after the mailbox thread has actually returned
      * from ecm_mailbox_run() (guaranteed by the join right above) --

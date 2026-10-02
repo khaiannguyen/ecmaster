@@ -48,6 +48,7 @@ test-offline:
 	$(MAKE) -C libecmaster/config test
 	$(MAKE) -C libecmaster/pdo test test_asan
 	$(MAKE) -C libecm_cia402 test test_asan
+	$(MAKE) -C libecmaster/xchg test test_asan tsan
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
 

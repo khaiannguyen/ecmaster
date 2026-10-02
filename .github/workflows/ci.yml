@@ -80,6 +80,8 @@ jobs:
         run: make -C libecmaster/config test
       - name: libecmaster/pdo (PDO entry table, bind, bit-level get/set, Phase 9.10)
         run: make -C libecmaster/pdo test test_asan
+      - name: libecmaster/xchg app <-> RT exchange (Phase 10.4 X-01o..X-04o, Q-05 TSan + negative controls)
+        run: make -C libecmaster/xchg test test_asan tsan
       - name: libecm_cia402 axis configuration (Phase 10.3 K-01, K-03o, K-04o)
         run: make -C libecm_cia402 test test_asan
       - name: No CiA402 object index in libecmaster (Phase 10.3 K-05, + negative control)
@@ -151,6 +153,8 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_servo tools/gd10/run_servo_10_2.sh
       - name: CiA402 axis configuration (Phase 10.3 K-01n..K-08)
         run: sudo -E env LOG=/tmp/log_gd10_axes tools/gd10/run_axes_10_3.sh
+      - name: RT hook + app <-> RT exchange (Phase 10.4 Q-01, H-01..H-05; timing Q-02/Q-03 informational)
+        run: sudo -E env LOG=/tmp/log_gd10_hook Q02_SEC=5 Q03_SEC=10 tools/gd10/run_hook_10_4.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -166,6 +170,7 @@ jobs:
             /tmp/log_gd9_mixed
             /tmp/log_gd10_servo
             /tmp/log_gd10_axes
+            /tmp/log_gd10_hook
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

@@ -1,6 +1,6 @@
 # Trao đổi dữ liệu giữa thread ứng dụng và RT thread — thiết kế (GĐ10.1)
 
-**Trạng thái:** thiết kế, chưa có code. Code ở bước 10.4 (`claude/giai_doan_10_ke_hoach.md` §6). Tài liệu này là đầu vào cho 10.4 và cho `libecm_cia402` (10.3, 10.5).
+**Trạng thái:** thiết kế ở 10.1, **code ở 10.4** (`libecmaster/xchg/`, hook trong `apps/ecm_run`). Mục 10 dưới đây ghi những chỗ code khác bản thiết kế và cách chạy. Lớp CiA402 (10.5) dùng lại cơ chế này.
 
 ## 1. Vấn đề
 
@@ -162,3 +162,33 @@ Mỗi kênh có bộ đếm do RT ghi (chỉ RT ghi, đọc qua bản ghi trạn
 1. `lead` mặc định cho setpoint: đo khoảng cách thực tế giữa wake của thread app và tick RT trên Jetson (có tải ROS2/AI mô phỏng như D-01 GĐ11).
 2. Có cần ring setpoint 2 producer (app + homing nội bộ) không: hiện thiết kế 1 producer/trục; homing do drive tự làm (mode HM), master chỉ gửi lệnh.
 3. Kích thước `ECM_XST_WORDS`: chốt khi 10.3 liệt kê đủ payload trạng thái trục (dự kiến 12 word).
+
+## 10. Code 10.4 — khác thiết kế và cách dùng
+
+### Khác bản thiết kế
+- Payload trạng thái 8 word (`ECM_XST_WORDS`), không phải 12: đủ cho slot (giá trị, used, late, underrun, dropped_lost, valid) và bản ghi đồng hồ. Lớp CiA402 sẽ có bản ghi riêng của nó.
+- Slot = một `ecm_pdo_handle_t` (không phải "trục"): `libecmaster` không biết nghĩa object; trục là việc của `libecm_cia402`. Lệnh chung chỉ có `ECM_XOP_SET` (ghi một lần), `NOP`; op ≥ `ECM_XOP_USER` để chủ hook (CiA402) xử lý.
+- Underrun chỉ đếm sau khi slot đã "armed" (đã nhận setpoint/SET đầu tiên); trước đó output không bị đụng.
+- Khi bus mất (`bus_lost`): setpoint của tick đó bị bỏ (`dropped_lost`), không đếm underrun, không ghi output.
+- Hook chạy cả khi LOST/RECOVER (với `bus_lost = 1`) để lớp trên chốt trạng thái (S5). Thời gian hook cộng vào occupancy và có histogram riêng.
+
+### Phát hiện khi test
+- **`memcpy` cỡ cố định làm TSan mù**: gcc nội tuyến `memcpy(…, 32)` thành lệnh copy không được TSan instrument → ring hỏng (publish `relaxed`) **không bị báo**. Đối chứng âm của Q-05 bắt được điều này. Phần tử ring giờ copy từng `uint64_t`. Hàng đợi cũ (GĐ7.6) copy bằng gán struct, TSan thấy được (đối chứng âm GĐ7.6 vẫn đạt).
+- Kiểm echo của bộ sinh test lúc đầu kiểm lại cùng một bản ghi hai lần khi RT chưa chạy tick mới → báo lệch giả. Sửa: chỉ kiểm bản ghi mới liền sau bản trước. Có đối chứng âm `--xchg-echo-off 1` (lệch > 90 %).
+
+### Dùng trong `ecm_run` (công cụ kiểm, lớp CiA402 sẽ đăng ký hook của nó ở 10.5)
+```bash
+ecm_run ... --pdo-scan --hook empty                                   # Q-02: chi phí hook rỗng
+ecm_run ... --pdo-scan --hook xchg --xchg-out 1:0x607A:0 --xchg-in 1:0x6064:0 \
+        --xchg-sine 10000:1 [--xchg-lead 4] [--xchg-starve 2:100]     # bộ sinh sin trong thread ứng dụng
+```
+Báo cáo khi thoát: `[HOOK]` (p50/p99/p99.99/max), `[XCHG] slot …` (used/late/underrun/dropped_lost), `[XCHG-APP]` (pushed, gaps, echo_checked/mismatch, torn = reader bỏ cuộc sau 64 lần thử).
+
+### Test
+| ID | Ở đâu | Kết quả sandbox |
+|---|---|---|
+| X-01o…X-04o, Q-04o | `libecmaster/xchg/test_xchg_offline` (+ ASan) | 42/0 |
+| Q-05 | `libecmaster/xchg/run_xchg_tsan.sh`: 3 thread dưới TSan; âm: ring `relaxed` → TSan báo; seqlock bỏ kiểm seq → thấy bản ghi xé | 3/0 |
+| Q-01 | `tools/gd10/run_hook_10_4.sh q01`: golden 4+4, N=1 không hook; 4+4 với `--hook empty` vẫn y hệt | đạt |
+| H-01…H-05 | nt: 1 lần gọi/tick; setpoint dùng, echo 0 lệch + đối chứng âm; Q-04 dừng 100 ms → underrun 98 (lead 4), giữ giá trị; lead 0 → mọi setpoint trễ; 4 trục 8 slot | đạt |
+| Q-02, Q-03 | nt, `STRICT=1 SB_PRIO=79 Q03_SEC=1800` trên Jetson | chỉ có nghĩa trên Jetson |
