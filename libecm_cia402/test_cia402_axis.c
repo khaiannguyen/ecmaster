@@ -43,6 +43,18 @@
  *         -> SOD within 8 ticks, all_down; ENABLE refused (SHUTDOWN)
  *   S-07  fault, no command for 1 s: stays in Fault, no 0x80 sent; reset
  *         -> Switch on disabled, stays there
+ *
+ * Phase 10.7, profile modes on the 4-axis virtual drive (it has the SDO
+ * objects 0x6081/0x6083/0x6084/0x6098/0x6099/0x607C), axis 1:0:
+ *   P2-01 PP: 3 points queued at once -> each reached in order, one bit 4
+ *         per point, acknowledged, nothing lost; relative point; change
+ *         immediately replaces a move in progress   (neg. control: bit 8)
+ *   P2-02 PV: ramps with 0x6083/0x6084; DISABLE drops the velocity: a new
+ *         ENABLE does not resume it
+ *   P2-03 HM: method 37 -> 0x6064 = 0x607C; method 19 after it: done only
+ *         at the virtual switch (a stale "attained" is not taken)
+ *         (neg. control: bit 9); method 33 -> HOMING; timeout -> HOMING
+ *   P2-04 HM -> PP -> CSP while enabled: no jump at the switch (S2)
  */
 #include "ecm_cia402_axis.h"
 #include "../tools/soft_bus/esc_cia402.h"
@@ -527,6 +539,161 @@ static void s07(void)
           oe * 100 + (st(0).ds != ECM_DS_SOD) * 10 + st(0).target, 0);
 }
 
+/* ---- Phase 10.7: PP, PV, HM ------------------------------------------------ */
+
+static void odw(uint16_t idx, uint8_t sub, uint32_t v)       /* SDO write, as ecm_run does at PREOP */
+{
+    int g = esc_prof_sub(E, idx, sub);
+    if (g < 0) { fprintf(stderr, "no 0x%04X:%02X\n", idx, sub); exit(2); }
+    uint8_t *p = esc_prof_value(E, g);
+    for (int i = 0; i < E->prof->sub[g].len && i < 4; i++) p[i] = (uint8_t)(v >> (8 * i));
+}
+static void enable_mode(int mode)
+{
+    rig(PROF "cia402_4ax.prof", 4);
+    add_axis(0, ECM_MODE_CSP | ECM_MODE_PP | ECM_MODE_PV | ECM_MODE_HM);
+    tick(5);
+    cmd(0, ECM_CIA_OP_SET_MODE, mode);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(12);
+}
+
+static void p201(void)
+{
+    printf("[P2-01 PP set-point handshake]\n");
+    enable_mode(ECM_OPMODE_PP);
+    odw(0x6081, 0, 200000); odw(0x6083, 0, 2000000); odw(0x6084, 0, 2000000);
+    check("enabled in PP (mode display 1)", st(0).ds * 10 + st(0).mode_disp, ECM_DS_OE * 10 + ECM_OPMODE_PP);
+    const int64_t pts[3] = { 10000, 20000, -5000 };
+    for (int i = 0; i < 3; i++) ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PP_POINT, pts[i], (uint32_t)K, 0);
+    long reached[8], nr = 0, edges = 0, bit4_long = 0, run4 = 0;
+    uint16_t sw_prev = st(0).sw, cw_prev = 0;
+    for (int i = 0; i < 3000; i++) {
+        tick(1);
+        ecm_cia402_state_t s = st(0);
+        if ((s.cw & 0x10) && !(cw_prev & 0x10)) edges++;
+        run4 = (s.cw & 0x10) ? run4 + 1 : 0;
+        if (run4 > 3) bit4_long++;
+        if ((s.sw & 0x0400) && !(sw_prev & 0x0400) && nr < 8) reached[nr++] = s.apos;
+        sw_prev = s.sw; cw_prev = s.cw;
+    }
+    check("3 targets reached, in order: 10000, 20000, -5000",
+          nr == 3 && reached[0] == 10000 && reached[1] == 20000 && reached[2] == -5000, 1);
+    check("  one bit-4 edge per point, each acknowledged", edges * 10 + st(0).pp_acked, 33);
+    check("  bit 4 dropped within 3 ticks of being raised (ack seen)", bit4_long, 0);
+    check("  nothing queued or lost, no error", st(0).pp_n + C.ax[0].pp_lost + st(0).err, 0);
+
+    ecm_cia402_cmd2(&C, 0, ECM_CIA_OP_PP_POINT, 1000, ECM_PP_REL, (uint32_t)K, 0);
+    tick(500);
+    check("relative +1000 -> -4000", st(0).apos, -4000);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PP_POINT, 50000, (uint32_t)K, 0);
+    tick(60);
+    int32_t mid = st(0).apos;
+    ecm_cia402_cmd2(&C, 0, ECM_CIA_OP_PP_POINT, 0, ECM_PP_IMM, (uint32_t)K, 0);
+    int32_t maxp = mid;
+    for (int i = 0; i < 1500; i++) { tick(1); if (st(0).apos > maxp) maxp = st(0).apos; }
+    check_true("change immediately: the move to 50000 replaced in flight (never past 30000)", mid > -4000 && maxp < 30000);
+    check("  ends at 0", st(0).apos, 0);
+}
+
+static void p202(void)
+{
+    printf("[P2-02 PV]\n");
+    enable_mode(ECM_OPMODE_PV);
+    odw(0x6083, 0, 1000000); odw(0x6084, 0, 2000000);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PV_VEL, 50000, (uint32_t)K, 0);
+    tick(2 + 25);
+    check_true("accel 1e6 inc/s^2: ~25000 inc/s after 25 ms (+- 1500)", labs(st(0).avel - 25000) <= 1500);
+    tick(50);
+    check("  50000 inc/s reached", st(0).avel, 50000);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PV_VEL, 0, (uint32_t)K, 0);
+    tick(2 + 12);
+    check_true("decel 2e6 inc/s^2: ~26000 inc/s 12 ms later (+- 1500)", labs(st(0).avel - 26000) <= 1500);
+    tick(30);
+    check("  stopped", st(0).avel, 0);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PV_VEL, 20000, (uint32_t)K, 0);
+    tick(40);
+    cmd(0, ECM_CIA_OP_DISABLE, 0);
+    tick(20);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(100);
+    check("DISABLE then ENABLE in PV: velocity not resumed (0x60FF = 0)", st(0).ds * 100000 + st(0).avel, ECM_DS_OE * 100000);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PV_VEL, 1000, (uint32_t)K, 0);
+    tick(5);
+    cmd(0, ECM_CIA_OP_SET_MODE, ECM_OPMODE_PP);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PV_VEL, 1000, (uint32_t)K, 0);
+    tick(5);
+    check("PV_VEL outside PV refused (MODE)", st(0).err, ECM_AXERR_MODE);
+}
+
+static void p203(void)
+{
+    printf("[P2-03 homing]\n");
+    enable_mode(ECM_OPMODE_HM);
+    odw(0x6098, 0, 37); odw(0x607C, 0, 1000);
+    drv("drv_pos 0 0 77777");
+    tick(3);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_HOME, 0, (uint32_t)K, 0);
+    uint64_t t0 = K;
+    while (!st(0).homed && K - t0 < 100) tick(1);
+    check("method 37: homed, 0x6064 = 0x607C = 1000", st(0).homed * 100000 + st(0).apos, 100000 + 1000);
+    check_true("  after the settle window (stale bit 12 not taken: > 2 ticks)", K - t0 > 2);
+    tick(5);
+    check("  bit 4 released", st(0).cw & 0x10, 0);
+
+    odw(0x6098, 0, 19); odw(0x6099, 1, 20000);
+    drv("drv_home_switch 0 0 5000");
+    tick(3);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_HOME, 0, (uint32_t)K, 0);
+    t0 = K;
+    int32_t at_done = 0;
+    do { tick(1); at_done = st(0).apos; } while (st(0).hm_phase != ECM_HM_DONE && K - t0 < 2000);
+    printf("    method 19 done after %ld ticks\n", (long)(K - t0));
+    check("method 19 after 37 (bit 12 still high from 37): done at the switch only", st(0).homed * 100000 + at_done, 100000 + 1000);
+    check_true("  ~200 ms of travel (4000 inc at 20000 inc/s): > 150 ticks", K - t0 > 150);
+
+    odw(0x6098, 0, 33);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_HOME, 0, (uint32_t)K, 0);
+    tick(10);
+    check("method 33 (not offered by the drive): HOMING error (bit 13)", st(0).err * 10 + st(0).hm_phase, ECM_AXERR_HOMING * 10 + ECM_HM_FAILED);
+
+    cmd(0, ECM_CIA_OP_ENABLE, 0);                    /* clears the error */
+    tick(5);
+    ecm_cia402_set_home_timeout(&C, 100);
+    odw(0x6098, 0, 19);
+    drv("drv_home_switch 0 0 10000000");
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_HOME, 0, (uint32_t)K, 0);
+    t0 = K;
+    while (!st(0).err && K - t0 < 1000) tick(1);
+    check("switch never reached, timeout 100 ms: HOMING", st(0).err, ECM_AXERR_HOMING);
+    check_true("  after ~100 ticks (100..105)", K - t0 >= 100 && K - t0 <= 105);
+    tick(5);
+    check("  homing start bit released", st(0).cw & 0x10, 0);
+}
+
+static void p204(void)
+{
+    printf("[P2-04 HM -> PP -> CSP without a jump]\n");
+    enable_mode(ECM_OPMODE_HM);
+    odw(0x6098, 0, 37); odw(0x607C, 0, 0);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_HOME, 0, (uint32_t)K, 0);
+    tick(20);
+    cmd(0, ECM_CIA_OP_SET_MODE, ECM_OPMODE_PP);
+    tick(5);
+    odw(0x6081, 0, 200000);
+    ecm_cia402_cmd(&C, 0, ECM_CIA_OP_PP_POINT, 3000, (uint32_t)K, 0);
+    tick(300);
+    check("homed, then PP to 3000", st(0).homed * 100000 + st(0).apos, 100000 + 3000);
+    cmd(0, ECM_CIA_OP_SET_MODE, ECM_OPMODE_CSP);
+    long moved = 0;
+    for (int i = 0; i < 50; i++) { tick(1); if (st(0).apos != 3000) moved++; }
+    check("switch to CSP while enabled: no jump (target = actual)", st(0).mode_disp * 1000 + moved, ECM_OPMODE_CSP * 1000);
+    for (int i = 1; i <= 20; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 3000 + 5 * i); tick(1); }
+    tick(2);
+    check("  CSP setpoints continue from there", st(0).apos, 3100);
+    check("  no error", st(0).err, 0);
+}
+
 static void t08(void)
 {
     printf("[T-08 statusword decode]\n");
@@ -544,6 +711,7 @@ static void t08(void)
 static const struct { const char *name; void (*fn)(void); } TESTS[] = {
     { "t01", t01 }, { "t02", t02 }, { "t03", t03 }, { "t04", t04 }, { "t05", t05 }, { "t06", t06 },
     { "t07", t07 }, { "t08", t08 },
+    { "p201", p201 }, { "p202", p202 }, { "p203", p203 }, { "p204", p204 },
     { "s01", s01 }, { "s02", s02 }, { "s03", s03 }, { "s04", s04 }, { "s05", s05 }, { "s06", s06 }, { "s07", s07 },
 };
 

@@ -24,7 +24,18 @@ const char *ecm_cia402_err_str(int err)
     case ECM_AXERR_DROPPED:  return "left Operation enabled without a command";
     case ECM_AXERR_STEP:     return "setpoint step above the limit";
     case ECM_AXERR_SHUTDOWN: return "enable refused: shutting down";
+    case ECM_AXERR_HANDSHAKE: return "PP set-point not acknowledged";
+    case ECM_AXERR_HOMING:   return "homing failed";
     default:                 return "?";
+    }
+}
+
+const char *ecm_cia402_mode_str(int m)
+{
+    switch (m) {
+    case ECM_OPMODE_PP: return "PP"; case ECM_OPMODE_PV: return "PV"; case ECM_OPMODE_HM: return "HM";
+    case ECM_OPMODE_CSP: return "CSP"; case ECM_OPMODE_CSV: return "CSV"; case ECM_OPMODE_CST: return "CST";
+    default: return "?";
     }
 }
 
@@ -54,6 +65,7 @@ void ecm_cia402_init(ecm_cia402_t *c, uint64_t cycle_ns, uint32_t step_timeout_m
     c->cycle_ns = cycle_ns ? cycle_ns : 1000000;
     c->step_timeout_ticks = (uint32_t)(((uint64_t)step_timeout_ms * 1000000ull + c->cycle_ns - 1) / c->cycle_ns);
     if (!c->step_timeout_ticks) c->step_timeout_ticks = 1;
+    ecm_cia402_set_home_timeout(c, 30000);
     ecm_xring_init(&c->cmd, ECM_XCHG_CMD_CAP);
     for (int i = 0; i < ECM_AXIS_MAX; i++) ecm_xring_init(&c->sp[i], ECM_XRING_CAP);
 }
@@ -65,8 +77,17 @@ int ecm_cia402_add_axis(ecm_cia402_t *c, const ecm_axis_cfg_t *cfg, const ecm_ax
     memset(a, 0, sizeof(*a));
     a->cfg = *cfg;
     a->b = *b;
-    a->mode_req = (cfg->modes & ECM_MODE_CSP) ? ECM_OPMODE_CSP : (cfg->modes & ECM_MODE_CSV) ? ECM_OPMODE_CSV : 0;
+    const uint32_t m = cfg->modes;
+    a->mode_req = (m & ECM_MODE_CSP) ? ECM_OPMODE_CSP : (m & ECM_MODE_CSV) ? ECM_OPMODE_CSV :
+                  (m & ECM_MODE_PP) ? ECM_OPMODE_PP : (m & ECM_MODE_PV) ? ECM_OPMODE_PV :
+                  (m & ECM_MODE_HM) ? ECM_OPMODE_HM : 0;
     return c->naxes++;
+}
+
+void ecm_cia402_set_home_timeout(ecm_cia402_t *c, uint32_t ms)
+{
+    c->home_timeout_ticks = (uint32_t)(((uint64_t)ms * 1000000ull + c->cycle_ns - 1) / c->cycle_ns);
+    if (!c->home_timeout_ticks) c->home_timeout_ticks = 1;
 }
 
 void ecm_cia402_set_step_limit(ecm_cia402_t *c, int axis, int64_t max_pos, int64_t max_vel)
@@ -107,7 +128,10 @@ static int mode_allowed(const ecm_cia402_axis_t *a, int64_t m)
 {
     if (m == ECM_OPMODE_CSP) return (a->cfg.modes & ECM_MODE_CSP) != 0;
     if (m == ECM_OPMODE_CSV) return (a->cfg.modes & ECM_MODE_CSV) != 0;
-    return 0;                                 /* PP / PV / HM: Phase 10.7 */
+    if (m == ECM_OPMODE_PP)  return (a->cfg.modes & ECM_MODE_PP) != 0;    /* 10.7 */
+    if (m == ECM_OPMODE_PV)  return (a->cfg.modes & ECM_MODE_PV) != 0;
+    if (m == ECM_OPMODE_HM)  return (a->cfg.modes & ECM_MODE_HM) != 0;
+    return 0;
 }
 
 static void apply_cmd(ecm_cia402_t *c, ecm_cia402_axis_t *a, const ecm_xcmd_t *x, uint64_t tick)
@@ -146,6 +170,27 @@ static void apply_cmd(ecm_cia402_t *c, ecm_cia402_axis_t *a, const ecm_xcmd_t *x
             a->mode_ok = 0;
             a->armed = 0;                       /* the next setpoint is of the new kind */
         }
+        break;
+    case ECM_CIA_OP_PP_POINT:                  /* 10.7: only while running in PP */
+        if (!a->running || a->mode_req != ECM_OPMODE_PP) { a->err = ECM_AXERR_MODE; a->pp_lost++; break; }
+        if (a->pp_n == ECM_CIA402_PP_QUEUE) { a->pp_lost++; break; }
+        {
+            int i = (a->pp_head + a->pp_n) % ECM_CIA402_PP_QUEUE;
+            a->pp_q[i] = x->arg0;
+            a->pp_qf[i] = (uint8_t)x->arg1;
+            a->pp_n++;
+        }
+        break;
+    case ECM_CIA_OP_PV_VEL:
+        if (!a->running || a->mode_req != ECM_OPMODE_PV) { a->err = ECM_AXERR_MODE; break; }
+        a->pv_vel = x->arg0;
+        break;
+    case ECM_CIA_OP_HOME:                      /* no homing queued for a later enable */
+        if (!a->running || a->mode_req != ECM_OPMODE_HM) { a->err = ECM_AXERR_MODE; break; }
+        a->hm_phase = ECM_HM_RUNNING;
+        a->hm_since = tick;
+        a->hm_seen_low = 0;
+        a->homed = 0;
         break;
     default:
         c->cmd_bad++;
@@ -245,12 +290,14 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
     /* 6. setpoints for k+1 */
     int csp = a->mode_req == ECM_OPMODE_CSP, csv = a->mode_req == ECM_OPMODE_CSV;
     int running = a->target == ECM_TGT_ENABLED && a->ds == ECM_DS_OE && a->mode_ok;
+    const int cyclic = csp || csv;
+    a->running = (uint8_t)running;
     ecm_xring_t *r = &c->sp[idx];
     ecm_xsp_t e;
     int got = 0, skipped = 0;
     while (ecm_xring_peek(r, &e) == 0) {
         if (e.tick > k1) break;                 /* for a later tick */
-        if (e.tick < k1 || !running) {          /* late, or not usable now: dropped */
+        if (e.tick < k1 || !running || !cyclic) {   /* late, or not usable now: dropped */
             if (skipped == ECM_XCHG_SP_SKIP_MAX) break;
             if (e.tick < k1) a->late++; else a->dropped++;
             ecm_xring_pop(r);
@@ -264,7 +311,7 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
         ecm_xring_pop(r);
         break;
     }
-    if (running && !got && a->armed) a->underrun++;
+    if (running && cyclic && !got && a->armed) a->underrun++;
     /* S4: a step above the limit is not sent: quick stop, error STEP */
     if (got && !ECM_CIA402_LATCH_OFF(4)) {
         int64_t lim = csp ? a->max_step_pos : csv ? a->max_step_vel : 0;
@@ -306,6 +353,61 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
         ecm_pdo_set(&b->tvel, io, (uint64_t)v);
         a->last_sent = v;
     }
+    /* 7. profile modes (10.7) */
+    if (!running) {                             /* nothing in flight survives a stop */
+        if (a->pp_n || a->pp_phase == 1) a->pp_lost += a->pp_n + (a->pp_phase == 1);
+        a->pp_n = 0;
+        a->pp_phase = 0;
+        a->pv_vel = 0;
+        if (a->hm_phase == ECM_HM_RUNNING) { a->hm_phase = ECM_HM_FAILED; a->err = a->err ? a->err : ECM_AXERR_HOMING; }
+    }
+    const uint16_t sw = a->sw;
+    if (a->mode_req == ECM_OPMODE_PP) {
+        if (!running) a->pp_cur = a->apos;
+        else if (a->pp_phase == 0) {
+            if (a->pp_n && ((!(sw & 0x1000) && ((a->pp_qf[a->pp_head] & ECM_PP_IMM) || (sw & 0x0400)))
+                            || ECM_CIA402_LATCH_OFF(8))) {      /* negative control: no handshake */
+                a->pp_cur = a->pp_q[a->pp_head];
+                a->pp_flags = a->pp_qf[a->pp_head];
+                a->pp_head = (uint8_t)((a->pp_head + 1) % ECM_CIA402_PP_QUEUE);
+                a->pp_n--;
+                a->pp_phase = 1;
+                a->pp_since = tick;
+                a->pp_sent++;
+            }
+        } else if (a->pp_phase == 1) {
+            if (ECM_CIA402_LATCH_OFF(8)) { a->pp_phase = 0; a->pp_acked++; }   /* one tick of bit 4 */
+            else if ((sw & 0x1000) && tick >= a->pp_since + 2) { a->pp_phase = 2; a->pp_acked++; }
+            else if (tick - a->pp_since > c->step_timeout_ticks) {
+                a->err = ECM_AXERR_HANDSHAKE;
+                a->target = ECM_TGT_DISABLED;
+                a->pp_phase = 0;
+                a->pp_lost++;
+                cw = 0x0007;
+            }
+        } else if (!(sw & 0x1000)) {
+            a->pp_phase = 0;                    /* ack low again: ready for the next */
+        }
+        if (b->tpos.bits) ecm_pdo_set(&b->tpos, io, (uint64_t)a->pp_cur);
+        if (running && cw == 0x000F && a->pp_phase == 1)
+            cw |= 0x0010 | ((a->pp_flags & ECM_PP_IMM) ? 0x0020 : 0) | ((a->pp_flags & ECM_PP_REL) ? 0x0040 : 0);
+    } else if (a->mode_req == ECM_OPMODE_PV) {
+        if (b->tvel.bits) ecm_pdo_set(&b->tvel, io, (uint64_t)(running ? a->pv_vel : 0));
+    } else if (a->mode_req == ECM_OPMODE_HM && running && a->hm_phase == ECM_HM_RUNNING) {
+        const int seen = tick >= a->hm_since + 2 || ECM_CIA402_LATCH_OFF(9);   /* the first statusword after the start */
+        if (seen && !(sw & 0x1000)) a->hm_seen_low = 1;
+        if (seen && (sw & 0x2000)) {
+            a->hm_phase = ECM_HM_FAILED;
+            a->err = ECM_AXERR_HOMING;
+        } else if (seen && (sw & 0x1400) == 0x1400 && (a->hm_seen_low || tick >= a->hm_since + ECM_CIA402_HM_SETTLE || ECM_CIA402_LATCH_OFF(9))) {
+            a->hm_phase = ECM_HM_DONE;
+            a->homed = 1;
+        } else if (tick - a->hm_since > c->home_timeout_ticks) {
+            a->hm_phase = ECM_HM_FAILED;
+            a->err = ECM_AXERR_HOMING;
+        }
+        if (a->hm_phase == ECM_HM_RUNNING && cw == 0x000F) cw |= 0x0010;
+    }
     if (b->mode.bits) ecm_pdo_set(&b->mode, io, (uint64_t)(uint8_t)a->mode_req);
     ecm_pdo_set(&b->cw, io, cw);
     a->cw = cw;
@@ -319,8 +421,10 @@ static void publish(ecm_cia402_t *c, int i, uint64_t tick)
             (uint64_t)a->err << 48 | (uint64_t)a->err_ds << 56,
         (uint64_t)(uint32_t)a->apos | (uint64_t)(uint32_t)a->avel << 32,
         (uint64_t)a->ecode | (uint64_t)(uint8_t)a->mode_disp << 16 | (uint64_t)a->mode_ok << 24 |
-            (uint64_t)(uint8_t)a->mode_req << 32,
-        a->used, a->late, a->underrun, (uint64_t)a->last_seq | (a->step_refused & 0xFFFFFFFFull) << 32, a->dropped,
+            (uint64_t)(uint8_t)a->mode_req << 32 | (uint64_t)a->homed << 40 | (uint64_t)a->hm_phase << 41 |
+            (uint64_t)a->pp_phase << 43 | (uint64_t)a->pp_n << 45,
+        a->used, a->late, a->underrun, (uint64_t)a->last_seq | (a->step_refused & 0xFFFFFFFFull) << 32,
+        (a->dropped & 0xFFFFFFFFull) | (a->pp_acked & 0xFFFFFFFFull) << 32,
     };
     ecm_xst_write(&c->st[i], tick, w, ECM_XST_WORDS);
 }
@@ -358,6 +462,13 @@ int ecm_cia402_cmd(ecm_cia402_t *c, int axis, int op, int64_t arg, uint32_t seq,
     return ecm_xring_push(&c->cmd, &x);
 }
 
+int ecm_cia402_cmd2(ecm_cia402_t *c, int axis, int op, int64_t arg0, int64_t arg1, uint32_t seq, uint64_t tick)
+{
+    if (axis < 0 || axis >= c->naxes) return -1;
+    ecm_xcmd_t x = { .tick = tick, .target = (uint16_t)axis, .op = (uint16_t)op, .seq = seq, .arg0 = arg0, .arg1 = arg1 };
+    return ecm_xring_push(&c->cmd, &x);
+}
+
 int ecm_cia402_setpoint(ecm_cia402_t *c, int axis, uint64_t tick, int64_t v)
 {
     if (axis < 0 || axis >= c->naxes) return -1;
@@ -377,7 +488,9 @@ int ecm_cia402_read(ecm_cia402_t *c, int axis, ecm_cia402_state_t *s)
     s->apos = (int32_t)(uint32_t)w[1]; s->avel = (int32_t)(uint32_t)(w[1] >> 32);
     s->ecode = (uint16_t)w[2]; s->mode_disp = (int8_t)(uint8_t)(w[2] >> 16); s->mode_ok = (uint8_t)(w[2] >> 24);
     s->mode_req = (int8_t)(uint8_t)(w[2] >> 32);
-    s->used = w[3]; s->late = w[4]; s->underrun = w[5]; s->last_seq = (uint32_t)w[6]; s->step_refused = (uint32_t)(w[6] >> 32); s->dropped = w[7];
+    s->homed = (uint8_t)(w[2] >> 40) & 1; s->hm_phase = (uint8_t)(w[2] >> 41) & 3;
+    s->pp_phase = (uint8_t)(w[2] >> 43) & 3; s->pp_n = (uint8_t)(w[2] >> 45) & 31;
+    s->used = w[3]; s->late = w[4]; s->underrun = w[5]; s->last_seq = (uint32_t)w[6]; s->step_refused = (uint32_t)(w[6] >> 32); s->dropped = (uint32_t)w[7]; s->pp_acked = (uint32_t)(w[7] >> 32);
     return 0;
 }
 

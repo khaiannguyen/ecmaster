@@ -315,6 +315,11 @@ static struct {                              /* app thread only */
 
 static void hook_empty(const ecm_hook_args_t *a, void *ctx) { (void)a; (void)ctx; }
 static int64_t          g_cia_max_pos = 100000, g_cia_max_vel = 0;   /* Phase 10.6 S4, per cycle */
+/* Phase 10.7: profile parameters written by SDO at PREOP (-1 = leave the drive's) */
+static int64_t          g_pp_vel = -1, g_pp_acc = -1, g_pp_dec = -1;
+static int64_t          g_hm_method = -1, g_hm_offset = 0, g_hm_fast = -1, g_hm_slow = -1, g_hm_acc = -1;
+static uint32_t         g_hm_timeout_ms = 30000;
+static int              g_hm_set;              /* --axis-homing given */
 static int              g_cia_bus_lost;     /* RT only: last bus_lost given to the hook */
 static struct {                              /* Phase 10.6 S6, RT only until the loop ends */
     int      state;                          /* 0 running, 1 walking down, 2 down, 3 timeout */
@@ -1464,7 +1469,8 @@ static int cia_parse(const char *src, cia_step_t *st, int max)
         if (!strcmp(s.op, "mode")) {               /* mode AXIS csp|csv: 3rd token is the mode */
             char md[8] = "";
             if (sscanf(p, " %*f %*s %*s %7s", md) != 1) return -1;
-            s.a = !strcmp(md, "csv") ? ECM_OPMODE_CSV : ECM_OPMODE_CSP;
+            s.a = !strcmp(md, "csv") ? ECM_OPMODE_CSV : !strcmp(md, "pp") ? ECM_OPMODE_PP :
+                  !strcmp(md, "pv") ? ECM_OPMODE_PV : !strcmp(md, "hm") ? ECM_OPMODE_HM : ECM_OPMODE_CSP;
         }
         st[n++] = s;
     }
@@ -1509,7 +1515,10 @@ static void *cia402_app(void)
                 else if (!strcmp(s->op, "vel"))  { kind[a] = P_VEL; vel[a] = s->a; next[a] = 0; }
                 else if (!strcmp(s->op, "pos"))  { kind[a] = P_POS; vel[a] = s->a; next[a] = 0; }   /* 10.6: absolute CSP target */
                 else if (!strcmp(s->op, "stop")) kind[a] = P_NONE;
-                if (op) ecm_cia402_cmd(&g_cia, a, op, (int64_t)s->a, ++seq, 0);
+                else if (!strcmp(s->op, "pp")) op = ECM_CIA_OP_PP_POINT;   /* 10.7: pp AXIS TARGET [FLAGS] */
+                else if (!strcmp(s->op, "pv")) op = ECM_CIA_OP_PV_VEL;     /* pv AXIS V */
+                else if (!strcmp(s->op, "home")) op = ECM_CIA_OP_HOME;     /* home AXIS */
+                if (op) ecm_cia402_cmd2(&g_cia, a, op, (int64_t)llround(s->a), (int64_t)llround(s->b), ++seq, 0);
                 fprintf(stderr, "[CIA402-APP] t=%.3f tick=%" PRIu64 " axis %d: %s\n", now, k, a, s->op);
             }
         }
@@ -1537,6 +1546,15 @@ static void *cia402_app(void)
                         s.err == ECM_AXERR_TIMEOUT ? ecm_cia402_ds_str((ecm_ds_t)s.err_ds) : "");
                 g_capp.events++;
             }
+            /* 10.7: profile-mode events */
+            if (s.pp_acked != prev[a].pp_acked)
+                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d PP set-point acknowledged n=%u pos=%d\n", now, s.tick, a, s.pp_acked, s.apos);
+            if (s.mode_disp == ECM_OPMODE_PP && s.ds == ECM_DS_OE && (s.sw & 0x0400) && !(prev[a].sw & 0x0400))
+                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d PP target reached pos=%d\n", now, s.tick, a, s.apos);
+            if (s.hm_phase != prev[a].hm_phase)
+                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d homing %s pos=%d\n", now, s.tick, a,
+                        s.hm_phase == ECM_HM_RUNNING ? "started" : s.hm_phase == ECM_HM_DONE ? "attained" :
+                        s.hm_phase == ECM_HM_FAILED ? "FAILED" : "idle", s.apos);
             if (s.tick == last_rec[a] + 1 && kind[a] == P_SINE && s.ds == ECM_DS_OE && s.mode_disp == ECM_OPMODE_CSP &&
                 sp_ok[a][(s.tick - 1) & 1023] && s.tick > t_start[a] + 8) {
                 int64_t e = (int64_t)s.apos - sp[a][(s.tick - 1) & 1023];
@@ -2050,6 +2068,25 @@ int main(int argc, char **argv)
             g_cia_script = argv[++i];
         } else if (strcmp(argv[i], "--axis-step-timeout-ms") == 0 && i + 1 < argc) {
             g_cia_step_ms = (uint32_t)atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--axis-pp") == 0 && i + 1 < argc) {        /* Phase 10.7 */
+            char *e;
+            g_pp_vel = strtoll(argv[++i], &e, 0);
+            g_pp_acc = *e == ':' ? strtoll(e + 1, &e, 0) : -1;
+            g_pp_dec = *e == ':' ? strtoll(e + 1, &e, 0) : g_pp_acc;
+            if (*e || g_pp_vel < 0) { fprintf(stderr, "ecm_run: --axis-pp VEL[:ACC[:DEC]]\n"); return 1; }
+        } else if (strcmp(argv[i], "--axis-homing") == 0 && i + 1 < argc) {
+            char *e;
+            g_hm_set = 1;
+            g_hm_method = strtoll(argv[++i], &e, 0);
+            if (*e == ':') g_hm_offset = strtoll(e + 1, &e, 0);
+            if (*e == ':') g_hm_fast = strtoll(e + 1, &e, 0);
+            if (*e == ':') g_hm_slow = strtoll(e + 1, &e, 0);
+            if (*e == ':') g_hm_acc = strtoll(e + 1, &e, 0);
+            if (*e || g_hm_method < -128 || g_hm_method > 127) {
+                fprintf(stderr, "ecm_run: --axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]\n"); return 1;
+            }
+        } else if (strcmp(argv[i], "--axis-home-timeout-ms") == 0 && i + 1 < argc) {
+            g_hm_timeout_ms = (uint32_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--axis-max-step") == 0 && i + 1 < argc) {   /* Phase 10.6 S4 */
             char *e;
             g_cia_max_pos = strtoll(argv[++i], &e, 0);
@@ -2200,7 +2237,8 @@ int main(int argc, char **argv)
             "       [--axis S[:N],... [--axis-modes csp,csv,pp,pv,hm,cst] | --axes-cfg FILE] [--axis-no-6502]   (Phase 10.3)\n"
             "       [--hook empty|xchg] [--xchg-out S:IDX:SUB,...] [--xchg-in S:IDX:SUB,...]\n"
             "       [--xchg-sine AMP:HZ] [--xchg-lead TICKS] [--xchg-starve SECOND:MS]   (Phase 10.4, test hooks)\n"
-            "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--axis-max-step POS[:VEL] (Phase 10.6, default 100000:0, 0 = off)] [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
+            "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--axis-max-step POS[:VEL] (Phase 10.6, default 100000:0, 0 = off)]\n"
+            "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP) [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
@@ -2574,10 +2612,17 @@ int main(int argc, char **argv)
          * (an ENI InitCmd may already have; writing it again is harmless) and
          * read it back. With 0x6060 in the PDOs the hook writes it and waits
          * for 0x6061. */
+        if (g_hook == hook_cia402) {
+            for (int k = 0; k < g_naxes; k++) {
+                int ax = ecm_cia402_add_axis(&g_cia, &g_axes[k], &g_axis_b[k]);
+                ecm_cia402_set_step_limit(&g_cia, ax, g_cia_max_pos, g_cia_max_vel);
+            }
+            ecm_cia402_set_home_timeout(&g_cia, g_hm_timeout_ms);
+        }
         for (int k = 0; k < g_naxes && g_hook == hook_cia402; k++) {
             const ecm_axis_cfg_t *a = &g_axes[k];
             if (!g_axis_b[k].mode_by_sdo) continue;
-            int8_t m = (a->modes & ECM_MODE_CSP) ? ECM_OPMODE_CSP : ECM_OPMODE_CSV, rb = 0;
+            int8_t m = g_cia.ax[k].mode_req, rb = 0;              /* the first configured mode */
             int sz = 1;
             uint16_t i6060 = ecm_axis_index(a, 0x6060);
             int w1 = ecx_SDOwrite(&ctx, a->slave, i6060, 0, FALSE, 1, &m, EC_TIMEOUTRXM);
@@ -2590,11 +2635,37 @@ int main(int argc, char **argv)
             }
             fprintf(stderr, "ecm_run: axis %s: 0x%04X:00 = %d set by SDO (not in the PDOs)\n", a->name, i6060, m);
         }
-        if (g_hook == hook_cia402) {
-            for (int k = 0; k < g_naxes; k++) {
-                int ax = ecm_cia402_add_axis(&g_cia, &g_axes[k], &g_axis_b[k]);
-                ecm_cia402_set_step_limit(&g_cia, ax, g_cia_max_pos, g_cia_max_vel);
+        /* Phase 10.7: profile parameters by SDO (not process data), read back */
+        for (int k = 0; k < g_naxes && g_hook == hook_cia402; k++) {
+            const ecm_axis_cfg_t *a = &g_axes[k];
+            const struct { int64_t v; uint16_t base; uint8_t sub, size; uint32_t need; const char *what; int on; } P[] = {
+                { g_pp_vel, 0x6081, 0, 4, ECM_MODE_PP, "profile velocity", g_pp_vel >= 0 },
+                { g_pp_acc, 0x6083, 0, 4, ECM_MODE_PP | ECM_MODE_PV, "profile acceleration", g_pp_acc >= 0 },
+                { g_pp_dec, 0x6084, 0, 4, ECM_MODE_PP | ECM_MODE_PV, "profile deceleration", g_pp_dec >= 0 },
+                { g_hm_method, 0x6098, 0, 1, ECM_MODE_HM, "homing method", g_hm_set },
+                { g_hm_offset, 0x607C, 0, 4, ECM_MODE_HM, "home offset", g_hm_set },
+                { g_hm_fast, 0x6099, 1, 4, ECM_MODE_HM, "homing speed (switch)", g_hm_fast >= 0 },
+                { g_hm_slow, 0x6099, 2, 4, ECM_MODE_HM, "homing speed (zero)", g_hm_slow >= 0 },
+                { g_hm_acc, 0x609A, 0, 4, ECM_MODE_HM, "homing acceleration", g_hm_acc >= 0 },
+            };
+            for (size_t j = 0; j < sizeof(P) / sizeof(P[0]); j++) {
+                if (!(a->modes & P[j].need) || !P[j].on) continue;
+                uint16_t idx = ecm_axis_index(a, P[j].base);
+                uint32_t wv = (uint32_t)P[j].v, rv = 0;
+                int sz = P[j].size;
+                int w1 = ecx_SDOwrite(&ctx, a->slave, idx, P[j].sub, FALSE, P[j].size, &wv, EC_TIMEOUTRXM);
+                int w2 = ecx_SDOread(&ctx, a->slave, idx, P[j].sub, FALSE, &sz, &rv, EC_TIMEOUTRXM);
+                { ec_errort er; while (ecx_poperror(&ctx, &er)) { } }
+                uint32_t mask = P[j].size == 1 ? 0xFFu : 0xFFFFFFFFu;
+                if (w1 <= 0 || w2 <= 0 || (rv & mask) != (wv & mask)) {
+                    fprintf(stderr, "ecm_run: axis %s: %s 0x%04X:%02X = %" PRId64 " by SDO failed (rc %d/%d, read back %u). Refusing\n",
+                            a->name, P[j].what, idx, P[j].sub, P[j].v, w1, w2, (unsigned)(rv & mask));
+                    ecx_close(&ctx); return 1;
+                }
+                fprintf(stderr, "ecm_run: axis %s: %s 0x%04X:%02X = %" PRId64 " (SDO)\n", a->name, P[j].what, idx, P[j].sub, P[j].v);
             }
+        }
+        if (g_hook == hook_cia402) {
             fprintf(stderr, "ecm_run: CiA402 step limit per cycle (S4): position %" PRId64 "%s, velocity %" PRId64 "%s\n",
                     g_cia_max_pos, g_cia_max_pos ? "" : " (off)", g_cia_max_vel, g_cia_max_vel ? "" : " (off)");
 #if ECM_CIA402_BROKEN
@@ -3392,6 +3463,8 @@ int main(int argc, char **argv)
                     k, g_cia.ax[k].cfg.name, ecm_cia402_ds_str((ecm_ds_t)s.ds), s.sw, s.cw, s.mode_disp, s.apos, s.avel,
                     ecm_cia402_err_str(s.err), s.ecode, s.used, s.late, s.underrun, s.dropped,
                     g_capp.track_max[k], g_capp.track_n[k]);
+            fprintf(stderr, "  [CIA402] PH axis %d mode=%s homed=%u pp_acked=%u pp_queued=%u pp_lost=%" PRIu64 "\n", k,
+                    ecm_cia402_mode_str(s.mode_disp), s.homed, s.pp_acked, s.pp_n, g_cia.ax[k].pp_lost);
             fprintf(stderr, "  [CIA402] S4 axis %d step_refused=%u last_step=%" PRId64 "\n", k, s.step_refused, g_cia.ax[k].step_seen);
         }
         fprintf(stderr, "  [CIA402] commands applied=%" PRIu64 " deferred=%" PRIu64 " bad=%" PRIu64

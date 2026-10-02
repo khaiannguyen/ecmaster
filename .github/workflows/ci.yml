@@ -82,7 +82,7 @@ jobs:
         run: make -C libecmaster/pdo test test_asan
       - name: libecmaster/xchg app <-> RT exchange (Phase 10.4 X-01o..X-04o, Q-05 TSan + negative controls)
         run: make -C libecmaster/xchg test test_asan tsan
-      - name: libecm_cia402 axis configuration + drive state machine (Phase 10.3, 10.5)
+      - name: libecm_cia402 axis configuration, drive state machine, S1..S7, PP/PV/HM + negative controls (Phase 10.3..10.7)
         run: make -C libecm_cia402 test test_asan negctl
       - name: No CiA402 object index in libecmaster (Phase 10.3 K-05, + negative control)
         run: python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
@@ -159,6 +159,8 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_cia402 tools/gd10/run_cia402_10_5.sh
       - name: Safety latches S1, S2, S4..S7 through SOEM, with negative controls (Phase 10.6)
         run: sudo -E env LOG=/tmp/log_gd10_safety tools/gd10/run_safety_10_6.sh
+      - name: PP, PV, homing through SOEM (Phase 10.7 P2-01..P2-04)
+        run: sudo -E env LOG=/tmp/log_gd10_profile tools/gd10/run_profile_10_7.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4

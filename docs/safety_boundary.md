@@ -23,9 +23,13 @@ Tài liệu này nói rõ master **chịu trách nhiệm gì** và **không ch�
 
 Giới hạn S4 mặc định trong `ecm_run`: vị trí 100 000 inc/chu kỳ, vận tốc tắt (`--axis-max-step POS[:VEL]`, `0` = tắt). Với encoder 23 bit (IS620N, 8 388 608 inc/vòng) và chu kỳ 1 ms, 100 000 inc/chu kỳ ≈ 715 rpm — trên mức 300 rpm của 10.9, nên trên servo thật đặt nhỏ hơn theo tốc độ thử.
 
+### Mode profile (10.7)
+
+PP / PV / HM nhận lệnh chỉ khi trục đang chạy đúng mode. Khi trục ngừng chạy, hàng đợi PP bị xóa, vận tốc PV về 0, homing đang chạy bị hủy — ENABLE sau đó không tiếp tục chuyển động cũ (cùng tinh thần S1). S4 không áp cho mode profile: giới hạn là 0x6081/0x6083/0x6084/0x6099 trong drive.
+
 ## 3. Đối chứng âm
 
-- `ECM_CIA402_BROKEN` (bit n = Sn) tắt chốt Sn — **chỉ build test**. `make -C libecm_cia402 negctl` build 7 bản, mỗi bản tắt một chốt: test S-0n tương ứng **phải fail** (CI kiểm). Build sản phẩm không đặt macro này (`ecm_run` in `NEGATIVE CONTROL BUILD` nếu có).
+- `ECM_CIA402_BROKEN` (bit n = Sn) tắt chốt Sn — **chỉ build test**. `make -C libecm_cia402 negctl` build 9 bản, mỗi bản tắt một chốt: test S-0n tương ứng **phải fail** (CI kiểm). Bit 8 (PP không bắt tay) và bit 9 (homing nhận statusword cũ) là của 10.7. Build sản phẩm không đặt macro này (`ecm_run` in `NEGATIVE CONTROL BUILD` nếu có).
 - `apps/ecm_run/ecm_run_neg6`: `ecm_run` với S6 tắt, dùng trong `tools/gd10/run_safety_10_6.sh`.
 
 ## 4. Những gì master KHÔNG phát hiện
