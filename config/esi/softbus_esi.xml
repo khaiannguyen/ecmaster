@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   softbus_esi.xml - EtherCAT Slave Information for the soft_bus simulator
-  (ecmaster project, GD8 step 8.2).
+  (ecmaster project, Phase 8 step 8.2).
 
   Describes exactly what soft_bus puts in its SII image (tools/soft_bus/
   esc_sii.h + esc_build_sii() in esc_core.c), default pdo_size 4:
@@ -18,7 +18,7 @@
   ConfigData = SII words 0..6 (the configuring tool computes the word-7 CRC).
   Word 0 low byte 0x80 = PDI SPI, as for the LAN9252 in Platform 1. The other
   config words are 0 because soft_bus has no PDI; BEFORE this file is used to
-  write a real LAN9252 EEPROM (GD 2.5), words 0-6 must be re-derived from the
+  write a real LAN9252 EEPROM (Phase 2.5), words 0-6 must be re-derived from the
   LAN9252 datasheet (ESC config 0x0141, PDI config 0x0150-0x0153, SYNC/latch
   config 0x0151) - see ke_hoach_ethercat_v2.md section 1.2.
 -->

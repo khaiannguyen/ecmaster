@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   p1_draft_esi.xml - DRAFT EtherCAT Slave Information for Platform 1
-  (STM32H723 + LAN9252 SPI, SOES, one CiA402 axis), GD9 step 9.4.
+  (STM32H723 + LAN9252 SPI, SOES, one CiA402 axis), Phase 9 step 9.4.
 
   Purpose: let TwinCAT build the MIXED ENI (eni_mixed.xml: Box 1 = this
   slave, Box 2 = the commercial servo) before the P1 firmware exists. The
-  PDO layout is the one agreed in roadmap_platform1_slave.md (Giai doan 5):
+  PDO layout is the one agreed in roadmap_platform1_slave.md (Phase 5):
     RxPDO 0x1600 (13 byte): 0x6040 Controlword U16, 0x6060 Modes of
       operation S8, 0x607A Target position S32, 0x60FF Target velocity S32,
       0x6071 Target torque S16

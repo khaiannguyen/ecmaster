@@ -1405,6 +1405,7 @@ static void *telemetry_thread_fn(void *arg)
             hist_print(&g_telemetry.prep_send_hist,   "prep_send");
             hist_print(&g_telemetry.occupancy_hist,   "occupancy");
             hist_print(&g_telemetry.turnaround_hist,  "turnaround");
+            fflush(stdout);   /* stdout is block-buffered when redirected: whole lines, not cut by stderr */
         }
 
         usleep(TELEMETRY_POLL_US);   /* non-RT thread */
@@ -1448,6 +1449,7 @@ static void *telemetry_thread_fn(void *arg)
     hist_print(&g_telemetry.prep_send_hist,   "prep_send");
     hist_print(&g_telemetry.occupancy_hist,   "occupancy");
     hist_print(&g_telemetry.turnaround_hist,  "turnaround");
+    fflush(stdout);   /* before the main thread's stderr report (soak 10.1: a line was cut by [DIAG]) */
 
     return NULL;
 }

@@ -56,7 +56,8 @@ fi
     echo
     echo "- host: $(uname -n) $(uname -r)"
     echo "- commit: $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-    echo "- duration: ${DUR} s; soft_bus ${SB_PRIO:+FIFO $SB_PRIO core $SB_CPU}${SB_PRIO:-SCHED_OTHER (not a valid soak rig)}"
+    if [ -n "$SB_PRIO" ]; then RIG="FIFO $SB_PRIO core $SB_CPU"; else RIG="SCHED_OTHER (not a valid soak rig)"; fi
+    echo "- duration: ${DUR} s; soft_bus $RIG"
 } > "$REP"
 
 sb=("$SOFT_BUS")
