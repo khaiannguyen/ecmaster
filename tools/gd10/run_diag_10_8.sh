@@ -94,15 +94,22 @@ command -v tshark >/dev/null || { echo "tshark not installed"; exit 2; }
 CWT="python3 $ROOT/tools/gd10/cw_trace.py"
 # capture TAG: a run (args as run) with tshark on the master side
 cap () {
+    # tshark run as root cannot write into a user's home (dumpcap: Permission
+    # denied, seen on the Jetson): capture into /tmp like the golden check, then
+    # move the file into the log directory
     local tag=$1; shift
-    rm -f "$LOG/$tag.pcap"
-    tshark -q -i "$IF_M" -F pcap -w "$LOG/$tag.pcap" -f "ether proto 0x88a4" >/dev/null 2>&1 &
+    local tmp
+    tmp=$(mktemp /tmp/gd10_x05_XXXXXX.pcap)
+    rm -f "$tmp" "$LOG/$tag.pcap"
+    tshark -q -i "$IF_M" -F pcap -w "$tmp" -f "ether proto 0x88a4" > "$LOG/tshark_$tag.log" 2>&1 &
     local tp=$!
-    for _ in $(seq 50); do [ -s "$LOG/$tag.pcap" ] && break; sleep 0.1; done
+    for _ in $(seq 50); do [ -s "$tmp" ] && break; sleep 0.1; done
+    [ -s "$tmp" ] || { echo "  tshark did not start capturing:"; sed 's/^/    /' "$LOG/tshark_$tag.log"; }
     sleep 1
     run "$tag" "$@"
     sleep 0.3
     kill -INT $tp; wait $tp 2>/dev/null
+    mv -f "$tmp" "$LOG/$tag.pcap" 2>/dev/null && chmod 644 "$LOG/$tag.pcap"
 }
 
 for c in $CASES; do

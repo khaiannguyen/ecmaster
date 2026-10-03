@@ -64,6 +64,16 @@ done
 if [ -n "$IS620N_ESI" ]; then
     python3 "$ROOT/tools/esi/esi2profile.py" "$IS620N_ESI" -o "$LOG/is620n.prof" 2> "$LOG/esi2profile.err" || { cat "$LOG/esi2profile.err"; exit 2; }
     IS=$LOG/is620n.prof
+    # The vendor ESI lists 0x6502 without a usable default (0 = no mode): the
+    # master rightly refuses every mode with it (seen on the Jetson, 3/10).
+    # Same TEST ASSUMPTION as for the reduced profile; the drive's own value
+    # is read at Phase 10.0 R-04.
+    if grep -q '^sub 0x6502 0 ' "$IS"; then
+        sed -i 's/^\(sub 0x6502 0 bits 32 [a-z_]*\) 00000000$/\1 a5010000/' "$IS"
+    else
+        { echo "obj 0x6502 var 1"; echo "sub 0x6502 0 bits 32 ro a5010000"; } >> "$IS"
+    fi
+    echo "IS620N ESI profile: 0x6502 = $(grep '^sub 0x6502 0 ' "$IS" | awk '{print $NF}') (0x1A5 is a test assumption)"
 else
     IS=$LOG/is620n_min_6502.prof
     { cat "$PROF/is620n_min.prof"; echo "# Phase 10.3 test assumption (not from the ESI): supported drive modes"
