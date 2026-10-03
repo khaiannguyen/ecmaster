@@ -148,23 +148,34 @@ h05)
     chk "H-05 echo 0 mismatch" "[ \$(app echo_mismatch) = 0 ] && [ \$(app echo_checked) -gt 100 ]"
     ;;
 q02)
-    echo "=== Q-02 occupancy cost of an empty hook (${Q02_SEC} s each, 4+4 bus)"
+    echo "=== Q-02 cost of an empty hook (${Q02_SEC} s each, 4+4 bus)"
+    # The cost is measured where it happens: the hook's own time histogram.
+    # Occupancy p99.99 (~220 us on the Jetson) cannot resolve 5 us: adjacent
+    # log-linear buckets are ~12 % apart (223872 -> 251188 ns, 3/10). It is
+    # still compared A/B/A for information.
     run q02a 8 "$Q02_SEC" "" "--motion-slaves 4"
     A=$(occ9999)
     run q02b 8 "$Q02_SEC" "" "--motion-slaves 4 --hook empty"
-    B=$(occ9999)
-    tchk "Q-02 occupancy p99.99 without $A ns, with empty hook $B ns: +$(( ${B:-0} - ${A:-0} )) ns < 5000" \
-        "[ -n \"$A\" ] && [ -n \"$B\" ] && [ \$(( $B - $A )) -lt 5000 ]"
+    B=$(occ9999); H=$(hookp p99.99); HM=$(hookp max)
+    run q02c 8 "$Q02_SEC" "" "--motion-slaves 4"
+    C=$(occ9999)
+    tchk "Q-02 empty hook p99.99 $H ns (max $HM) < 5000" "[ -n \"$H\" ] && [ $H -lt 5000 ]"
+    LO=$(( A < C ? A : C )); HI=$(( A > C ? A : C ))
+    info "Q-02 occupancy p99.99 without $A / $C ns, with empty hook $B ns (in [$LO, $HI] + 1 bucket: $( [ ${B:-0} -le $(( HI + HI / 8 )) ] && echo yes || echo no ))"
     ;;
 q03)
     echo "=== Q-03 four output slots for ${Q03_SEC} s"
+    # lead 20 ticks: the test producer is a SCHED_OTHER thread; with lead 4
+    # it was > 4 ms late 7 times in 30 min on the Jetson (3/10) -> 12
+    # underruns, held correctly (Q-04). An application must pick its lead
+    # from its own worst-case latency; Q-03 checks the RT side.
     run q03 1 "$Q03_SEC" "--profile 1=$AX4 --cia402 1:4" \
-        "--pdo-scan --hook xchg --xchg-out 1:0x607A:0,1:0x687A:0,1:0x707A:0,1:0x787A:0 --xchg-in 1:0x6064:0,1:0x6864:0,1:0x7064:0,1:0x7864:0 --xchg-sine 10000:1"
+        "--xchg-lead 20 --pdo-scan --hook xchg --xchg-out 1:0x607A:0,1:0x687A:0,1:0x707A:0,1:0x787A:0 --xchg-in 1:0x6064:0,1:0x6864:0,1:0x7064:0,1:0x7864:0 --xchg-sine 10000:1"
     chk "Q-03 rc 0, echo 0 mismatch ($(app echo_checked) checked)" "[ $RC = 0 ] && [ \$(app echo_mismatch) = 0 ] && [ \$(app echo_checked) -gt 100 ]"
     tchk "Q-03 no reader give-up (torn $(app torn))" "[ \$(app torn) = 0 ]"
     tchk "Q-03 hook p99.99 $(hookp p99.99) ns <= 20000" "[ \$(hookp p99.99) -le 20000 ]"
     tchk "Q-03 0 overrun ($(overrun))" "[ \"\$(overrun)\" = 0 ]"
-    tchk "Q-03 underrun 0 on every slot" "(for k in 0 1 2 3; do [ \"\$(slot \$k underrun)\" = 0 ] || exit 1; done)"
+    tchk "Q-03 underrun 0 on every slot (lead 20, producer gaps $(app gaps))" "(for k in 0 1 2 3; do [ \"\$(slot \$k underrun)\" = 0 ] || exit 1; done)"
     ;;
 *) echo "unknown case $c"; FAIL=$((FAIL+1)) ;;
 esac

@@ -72,9 +72,29 @@ void ecm_xst_write(ecm_xst_t *s, uint64_t tick, const uint64_t *w, int n)
     atomic_store_explicit(&s->seq, q + 2, memory_order_release);
 }
 
+/* Reader back-off between tries (Q-03 on the Jetson, 3/10: 58 give-ups in
+ * 1.8 M reads with 64 back-to-back tries). The writer runs on the isolated
+ * RT core and is never preempted inside its write, so waiting a little
+ * between tries always gets a whole record: ~64 x 128 pauses = some tens
+ * of us at most, on the non-RT reader only. */
+static inline void xst_pause(int t)
+{
+    int k = t < 7 ? (1 << t) : 128;
+    for (int i = 0; i < k; i++) {
+#if defined(__aarch64__)
+        __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__x86_64__) || defined(__i386__)
+        __builtin_ia32_pause();
+#else
+        atomic_signal_fence(memory_order_seq_cst);
+#endif
+    }
+}
+
 int ecm_xst_read(ecm_xst_t *s, uint64_t *tick, uint64_t *w, int n, int tries)
 {
     for (int t = 0; t < tries; t++) {
+        if (t) xst_pause(t);
         uint32_t s1 = atomic_load_explicit(&s->seq, memory_order_acquire);
 #ifndef ECM_XST_BROKEN
         if (s1 & 1) continue;

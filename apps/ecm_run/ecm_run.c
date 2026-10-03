@@ -2175,6 +2175,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ecm_run: --xchg-sine AMPLITUDE:HZ\n"); return 1;
             }
             g_xchg_sine = 1;
+        } else if (strcmp(argv[i], "--cia402-lead") == 0 && i + 1 < argc) {   /* 3/10: soak 10.10 */
+            g_cia_lead = atoi(argv[++i]);
+            if (g_cia_lead < 2 || g_cia_lead > 400) { fprintf(stderr, "ecm_run: --cia402-lead 2..400 ticks\n"); return 1; }
         } else if (strcmp(argv[i], "--xchg-lead") == 0 && i + 1 < argc) {
             g_xchg_lead = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--xchg-echo-off") == 0 && i + 1 < argc) {
@@ -2311,7 +2314,7 @@ int main(int argc, char **argv)
             "       [--xchg-sine AMP:HZ] [--xchg-lead TICKS] [--xchg-starve SECOND:MS]   (Phase 10.4, test hooks)\n"
             "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--axis-max-step POS[:VEL] (Phase 10.6, default 100000:0, 0 = off)]\n"
             "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP)\n"
-            "       [--emcy-map FILE ...]   (Phase 10.8: vendor EMCY texts, config/emcy/*.emcy) [--cia402-script \"T CMD ...; ...\"]]   (Phase 10.5)\n"
+            "       [--emcy-map FILE ...]   (Phase 10.8: vendor EMCY texts, config/emcy/*.emcy) [--cia402-script \"T CMD ...; ...\"] [--cia402-lead TICKS (default 4)]]   (Phase 10.5)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
         return 1;
     }
