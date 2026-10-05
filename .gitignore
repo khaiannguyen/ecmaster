@@ -73,3 +73,6 @@ libecm_cia402/test_cia402_axis_neg*
 apps/ecm_run/ecm_run_neg6
 libecm_cia402/test_cia402_diag
 libecm_cia402/test_cia402_diag_asan
+# Phase 10: logs of tools/gd10/*.sh (run from the repo root), and L5 runs started from the root
+log_gd10_*/
+log_l5_*/
