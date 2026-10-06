@@ -203,7 +203,7 @@ jobs:
       - name: Build
         run: |
           make -C tools/soft_bus
-          for d in apps/ecm_run apps/ecm_diag apps/l4_test; do make -C "$d" SOEM_DIR="$SOEM_DIR"; done
+          for d in apps/ecm_run apps/ecm_diag apps/ecm_peek apps/l4_test; do make -C "$d" SOEM_DIR="$SOEM_DIR"; done
       - name: veth pair
         run: |
           sudo ip link add veth_m type veth peer name veth_s

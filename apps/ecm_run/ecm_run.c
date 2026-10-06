@@ -2430,6 +2430,8 @@ int main(int argc, char **argv)
         ecx_close(&ctx); return 1;
 #endif
     }
+    const double t_cfg0 = mono_now_s();              /* Phase 10.0: state transition times */
+    double t_preop = -1.0;
     int wc = ecx_config_init(&ctx);
     if (wc <= 0) {
         fprintf(stderr, "No slaves found.\n");
@@ -2473,6 +2475,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "ecm_run: --eni: bus not in PRE-OP before InitCmds\n");
             ecx_close(&ctx); return 1;
         }
+        t_preop = mono_now_s();
         if (ecm_eni_soem_run_transition(&ctx, &g_eni, ECM_ENI_T_IP, 0) != 0) {
             fprintf(stderr, "ecm_run: --eni: IP InitCmd failed, refusing\n");
             ecx_close(&ctx); return 1;
@@ -2844,6 +2847,7 @@ int main(int argc, char **argv)
     if (!request_all_state(EC_STATE_PRE_OP, state_timeout_us(ECM_ENI_ST_PREOP))) {
         fprintf(stderr, "Failed to reach PREOP\n"); report_state_failure(EC_STATE_PRE_OP, "PREOP"); ecx_close(&ctx); return 1;
     }
+    if (t_preop < 0) t_preop = mono_now_s();
 
     /* ---- Phase 5: enable SOEM's cyclic mailbox handler now that
      * every slave is >= PRE_OP, and BEFORE requesting SAFEOP -- this
@@ -3048,6 +3052,7 @@ int main(int argc, char **argv)
                 "refusing SAFE-OP\n");
         ecx_close(&ctx); return 1;
     }
+    const double t_so0 = mono_now_s();
     if (!request_all_state(EC_STATE_SAFE_OP, state_timeout_us(ECM_ENI_ST_SAFEOP))) {
         fprintf(stderr, "Failed to reach SAFEOP\n"); report_state_failure(EC_STATE_SAFE_OP, "SAFEOP"); ecx_close(&ctx); return 1;
     }
@@ -3056,9 +3061,15 @@ int main(int argc, char **argv)
      * ESC's "must have received valid outputs" precondition (see L2-04). */
     pd_exchange_all(EC_TIMEOUTRET);
 
+    const double t_so1 = mono_now_s();
     if (!request_op_keepalive(state_timeout_us(ECM_ENI_ST_OP))) {
         fprintf(stderr, "Failed to reach OPERATIONAL\n"); report_state_failure(EC_STATE_OPERATIONAL, "OPERATIONAL"); ecx_close(&ctx); return 1;
     }
+    /* Phase 10.0 R-05: how long the slaves take, measured around the
+     * requests (PREOP includes the bus scan; SAFEOP only the request/wait,
+     * after the PDO, DC and PS InitCmd configuration). */
+    fprintf(stderr, "ecm_run: state transitions: INIT->PREOP %.0f ms (scan + request), PREOP->SAFEOP %.0f ms, "
+            "SAFEOP->OP %.0f ms\n", (t_preop - t_cfg0) * 1e3, (t_so1 - t_so0) * 1e3, (mono_now_s() - t_so1) * 1e3);
 
     /* ---- Phase 4: bring up the two rings and the four non-RT threads
      * BEFORE this thread switches itself to SCHED_FIFO below. Order

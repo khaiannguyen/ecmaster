@@ -43,6 +43,7 @@ libecmaster/diag/test_diag_offline
 libecmaster/diag/test_diag_offline_asan
 apps/ecm_diag/ecm_diag
 apps/ecm_diag/log_l5_diag_*/
+apps/ecm_peek/ecm_peek
 libecmaster/policy/test_policy_offline
 libecmaster/policy/test_policy_offline_asan
 apps/ecm_run/log_l5_policy_*/

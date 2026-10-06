@@ -11,8 +11,8 @@
 # + patches/soem-txtime.patch (see .github/workflows/ci.yml).
 
 SOEM_DIR ?= $(HOME)/projects/SOEM
-APPS     := apps/ecm_run apps/ecm_diag apps/l4_test apps/l6_test
-CAPS_BIN := tools/soft_bus/soft_bus apps/ecm_run/ecm_run apps/ecm_diag/ecm_diag \
+APPS     := apps/ecm_run apps/ecm_diag apps/ecm_peek apps/l4_test apps/l6_test
+CAPS_BIN := tools/soft_bus/soft_bus apps/ecm_run/ecm_run apps/ecm_diag/ecm_diag apps/ecm_peek/ecm_peek \
             apps/l4_test/l4_test apps/l6_test/l6_test
 
 .PHONY: all soft_bus apps caps caps-show test-offline clean
