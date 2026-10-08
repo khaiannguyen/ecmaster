@@ -934,13 +934,18 @@ static void print_all_snapshots(void)
 #define WD_DIVIDER_VALUE        2498u  /* -> 100us base tick */
 #define WD_TIME_MOTION_TICKS      30u  /* -> 3ms  (3x GROUP_MOTION's 1ms cycle) */
 #define WD_TIME_IO_TICKS         240u  /* -> 24ms (3x GROUP_IO's 8ms cycle) */
+/* Phase 10.0 R-09: a longer cycle than the defaults (2 ms motion) would sit
+ * too close to a fixed 3 ms watchdog; the time becomes max(default, 3 cycles).
+ * The defaults (1 ms / 8 ms and anything shorter) keep exactly 30 / 240. */
+static uint16_t g_wd_motion_ticks = WD_TIME_MOTION_TICKS;
+static uint16_t g_wd_io_ticks     = WD_TIME_IO_TICKS;
 
 /* Returns the number of failed writes (0..2). Blocking. */
 static int write_sm_watchdog(int slave)
 {
     uint16_t divider = htoes((uint16_t)WD_DIVIDER_VALUE);
     uint16_t wd_time = htoes((uint16_t)((ctx.slavelist[slave].group == GROUP_IO)
-                                        ? WD_TIME_IO_TICKS : WD_TIME_MOTION_TICKS));
+                                        ? g_wd_io_ticks : g_wd_motion_ticks));
     uint16_t configadr = ctx.slavelist[slave].configadr;
     int fail = 0;
     if (ecx_FPWR(&ctx.port, configadr, REG_SM_WD_DIVIDER, sizeof(divider), &divider, EC_TIMEOUTRET) <= 0) fail++;
@@ -2373,6 +2378,11 @@ int main(int argc, char **argv)
 
     g_ifname = ifname;   /* Phase 4: telemetry thread's passive RX socket needs this */
     g_motion_cycle_us = motion_cycle_us;   /* Phase 7.3: receive budget */
+    {   /* Phase 10.0 R-09: SM watchdog >= 3 cycles, capped at the 16-bit register */
+        long m = 3 * motion_cycle_us / 100, io = 3 * io_cycle_us / 100;
+        if (m > (long)g_wd_motion_ticks) g_wd_motion_ticks = (uint16_t)(m > 65535 ? 65535 : m);
+        if (io > (long)g_wd_io_ticks) g_wd_io_ticks = (uint16_t)(io > 65535 ? 65535 : io);
+    }
 
     /* Open the passive RX socket HERE, before anything else -- see
      * g_passive_rx_fd's declaration comment for why this must happen
@@ -2929,7 +2939,7 @@ int main(int argc, char **argv)
         "ecm_run: SM watchdog configured explicitly (divider=%u -> 100us tick; "
         "motion=%ums io=%ums)%s\n",
         (unsigned)WD_DIVIDER_VALUE,
-        (unsigned)(WD_TIME_MOTION_TICKS / 10), (unsigned)(WD_TIME_IO_TICKS / 10),
+        (unsigned)(g_wd_motion_ticks / 10), (unsigned)(g_wd_io_ticks / 10),
         wd_fail ? " -- WARNING: one or more FPWR failed, see wd_fail count in source" : "");
     if (wd_fail) {
         fprintf(stderr, "ecm_run: SM watchdog FPWR failures: %d\n", wd_fail);

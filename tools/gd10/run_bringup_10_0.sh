@@ -23,6 +23,9 @@
 #        OP, InitCmds, ENI == bus (= R-06), DC LOCKED, WKC, real state
 #        transition times, statusword/0x603F/0x6064 at the end; tshark
 #        capture (CAP=1) for the record
+#   r09  (not in the default STEPS) cycle limits: the same R-05 run at each
+#        cycle of R09_CYCLES (default "2000 500" us) for R09_SEC s, with an
+#        ENI copy for that cycle (tools/eni/eni_cycle.py: sync0_ns + 0x09A0)
 #   r06  ecm_run --axis 1:0,2:0 --axis-modes csp WITHOUT --hook: the master's
 #        axis checks against the real drive (0x6502 read, bits bound), still
 #        not driven
@@ -30,7 +33,9 @@
 # Output: LOG/report.md (+ peek.txt, sii/, esi_check_N.txt, er_r05.log, ...).
 # Exit 0 when no FAIL. DIFF = a difference to record, not an error.
 #
+# NIC error counters (ethtool -S) are taken before/after every ecm_run.
 # Env: IFACE (enP1p1s0) N (2) ENI IS620N_ESI STEPS LINK_SEC R05_SEC CAP YES
+#      R09_CYCLES R09_SEC
 #      SIM SIM_REV IF_S SB_PRIO SB_CPU ECM_RUN ECM_PEEK SOFT_BUS LOG
 # ==========================================================================
 set -u
@@ -45,6 +50,7 @@ IS620N_ESI=${IS620N_ESI:-}
 STEPS=${STEPS:-"r01 r02 r05 r06"}
 if [ "$SIM" = 1 ]; then LINK_SEC=${LINK_SEC:-5}; else LINK_SEC=${LINK_SEC:-600}; fi
 R05_SEC=${R05_SEC:-60}
+R09_CYCLES=${R09_CYCLES:-"2000 500"}; R09_SEC=${R09_SEC:-60}
 CAP=${CAP:-1}
 YES=${YES:-0}
 SIM_REV=${SIM_REV:-}
@@ -244,14 +250,35 @@ r05 () {
         sleep 1.5
     fi
     say "- \`ecm_run ${ER_COMMON[*]} --pdo-dump --pdo-get $GETS --duration-sec $R05_SEC\`"
+    ethtool -S "$IFACE" > "$LOG/ethtool_S_r05_before.txt" 2>/dev/null
     "$ECM_RUN" "${ER_COMMON[@]}" --pdo-dump --pdo-get "$GETS" --duration-sec "$R05_SEC" \
         --diag-file "$LOG/diag_r05.txt" > "$LOG/er_r05.log" 2>&1
     say "- rc $?"
+    ethtool -S "$IFACE" > "$LOG/ethtool_S_r05_after.txt" 2>/dev/null
     if [ -n "$tp" ]; then
         sleep 0.5; kill -INT $tp 2>/dev/null; wait $tp 2>/dev/null
         mv "$cap" "$LOG/r05.pcapng" 2>/dev/null && say "- capture: r05.pcapng ($(du -h "$LOG/r05.pcapng" | cut -f1))"
     fi
     sim_stop
+}
+
+r09 () {
+    local cyc eni
+    for cyc in $R09_CYCLES; do
+        say ""; say "## R-09 cycle ${cyc} us, ${R09_SEC} s (no hook)"
+        eni=$LOG/$(basename "$ENI" .enicfg)_${cyc}us.enicfg
+        python3 "$ROOT/tools/eni/eni_cycle.py" "$ENI" "$cyc" -o "$eni" | sed 's/^/- /' | tee -a "$REP"
+        [ -s "$eni" ] || { v "R-09/${cyc}us" FAIL "eni_cycle.py could not derive the ENI"; continue; }
+        sim_start "r09_$cyc"
+        local er=("${ER_COMMON[@]}")
+        er[5]=$eni                                   # --eni value (index: --iface IF --n N --eni ENI)
+        ethtool -S "$IFACE" > "$LOG/ethtool_S_r09_${cyc}_before.txt" 2>/dev/null
+        "$ECM_RUN" "${er[@]}" --motion-cycle-us "$cyc" --pdo-get "$GETS" --duration-sec "$R09_SEC" \
+            --diag-file "$LOG/diag_r09_$cyc.txt" > "$LOG/er_r09_$cyc.log" 2>&1
+        say "- rc $?"
+        ethtool -S "$IFACE" > "$LOG/ethtool_S_r09_${cyc}_after.txt" 2>/dev/null
+        sim_stop
+    done
 }
 
 r06 () {
@@ -271,14 +298,17 @@ for st in $STEPS; do
         r02) r02 ;;
         r05) r05 ;;
         r06) r06 ;;
+        r09) r09 ;;
         *) echo "unknown step $st"; exit 2 ;;
     esac
 done
 
 # R-05 / R-06 grading (one place: bringup_report.py)
-if [ -f "$LOG/er_r05.log" ] || [ -f "$LOG/er_r06.log" ]; then
+R9=()
+for f in "$LOG"/er_r09_*.log; do [ -f "$f" ] && { c=${f##*_}; R9+=(--er9 "${c%.log}:$f"); }; done
+if [ -f "$LOG/er_r05.log" ] || [ -f "$LOG/er_r06.log" ] || [ ${#R9[@]} -gt 0 ]; then
     python3 "$HERE/bringup_report.py" --n "$N" --eni "$ENI" --er5 "$LOG/er_r05.log" --er6 "$LOG/er_r06.log" \
-        > "$LOG/report_run.md" 2>&1
+        "${R9[@]}" > "$LOG/report_run.md" 2>&1
     sed '/^## Summary/,$d' "$LOG/report_run.md" | tee -a "$REP"
     NFAIL=$((NFAIL + $(grep -c '^VERDICT [^ ]* FAIL' "$LOG/report_run.md")))
 fi

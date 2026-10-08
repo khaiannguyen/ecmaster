@@ -141,6 +141,14 @@ def sshow(sdo, s, idx, sub=0, fmt=None):
     return fmt(v[1]) if fmt else f"0x{v[1]:0{2 * v[2]}X} ({v[1]})"
 
 
+def ascii4(v):
+    """A short visible string that ecm_peek printed as a number (<= 8 byte, little-endian)."""
+    b = v.to_bytes(8, "little").rstrip(b"\0")
+    if b and all(32 <= c < 127 for c in b):
+        return f'"{b.decode()}" (0x{v:X})'
+    return f"0x{v:X}"
+
+
 def signed(v, bits):
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
 
@@ -171,6 +179,7 @@ def main():
     ap.add_argument("--esi")
     ap.add_argument("--er5")
     ap.add_argument("--er6")
+    ap.add_argument("--er9", action="append", help="CYCLE_US:er_r09_CYCLE.log (repeatable)")
     a = ap.parse_args()
 
     eni = load_eni(a.eni)
@@ -230,8 +239,8 @@ def peek_part(a, eni, esi_vendor, esi_devs):
         rows = [
             ("0x1000 device type", sshow(sdo, s, 0x1000)),
             ("0x1008 name", sshow(sdo, s, 0x1008)),
-            ("0x1009 hw version", sshow(sdo, s, 0x1009)),
-            ("0x100A sw version", sshow(sdo, s, 0x100A)),
+            ("0x1009 hw version", sshow(sdo, s, 0x1009, 0, ascii4)),
+            ("0x100A sw version", sshow(sdo, s, 0x100A, 0, ascii4)),
             ("0x1C12 Rx assign", " ".join(sshow(sdo, s, 0x1C12, k, lambda v: f"0x{v:04X}") for k in range(1, (sval(sdo, s, 0x1C12) or 0) + 1)) or sshow(sdo, s, 0x1C12)),
             ("0x1C13 Tx assign", " ".join(sshow(sdo, s, 0x1C13, k, lambda v: f"0x{v:04X}") for k in range(1, (sval(sdo, s, 0x1C13) or 0) + 1)) or sshow(sdo, s, 0x1C13)),
             ("0x6502 supported modes", sshow(sdo, s, 0x6502, 0, lambda v: f"0x{v:08X} = {modes_str(v)}")),
@@ -312,54 +321,92 @@ def peek_part(a, eni, esi_vendor, esi_devs):
 
 
 
+def nic_delta(before, after):
+    """Error counters of `ethtool -S` that grew between two snapshots."""
+    def load(p):
+        d = {}
+        for ln in open(p, errors="replace"):
+            if ":" in ln:
+                k, v = ln.split(":", 1)
+                try:
+                    d[k.strip()] = int(v.strip())
+                except ValueError:
+                    pass
+        return d
+    b, a_ = load(before), load(after)
+    return {k: a_[k] - b[k] for k in sorted(a_) if k in b and a_[k] != b[k]
+            and re.search(r"err|crc|missed|align|symbol|fifo|over|drop", k)}
+
+
+def grade_run(rid, path, title, cycle_note=None, nic=None):
+    """R-05 / R-09: one ecm_run in OP without hook. Returns the log text."""
+    t = open(path, errors="replace").read()
+    print(f"\n## {rid} {title}\n")
+    if cycle_note:
+        print(f"- {cycle_note}")
+    bad = []
+    checks = [
+        ("OP reached", "all slaves in OPERATIONAL" in t),
+        ("ENI identity check", "identity check OK" in t),
+        ("PDO table ENI == bus", "PDO table: ENI == bus" in t),
+        ("DC LOCKED, 0 unlock", re.search(r"\[DC\] state=LOCKED locks=\d+ unlocks=0", t) is not None),
+    ]
+    m = re.search(r"(\d+) CoE InitCmd\(s\)", t)
+    n_init = int(m.group(1)) if m else -1
+    n_ok = len(re.findall(r"CoE download 0x[0-9A-F]{4}:[0-9A-F]{2} ok", t))
+    checks.append((f"CoE InitCmds ok {n_ok}/{n_init}", n_init > 0 and n_ok == n_init))
+    m = re.search(r"\[GROUP_MOTION\] cycles=(\d+) wkc_mismatch=(\d+) .*overrun=(\d+)", t)
+    if m:
+        checks.append((f"cycles {m.group(1)}, WKC mismatch {m.group(2)}, overrun {m.group(3)}",
+                       m.group(2) == "0" and m.group(3) == "0"))
+    else:
+        checks.append(("final stats printed", False))
+    for name, ok in checks:
+        print(f"- [{'x' if ok else ' '}] {name}")
+        if not ok:
+            bad.append(name)
+    m = re.search(r"state transitions: (.*)", t)
+    print(f"- state transitions (ESI allows 3000/9000/9000 ms): {m.group(1) if m else '(not printed)'}")
+    for pat, label in ((r"SM watchdog configured explicitly .*?motion=(\d+)ms", "SM watchdog motion {} ms"),
+                       (r"\[DC\] \|e\| \(after 5 s\) (.*)", "DC |e| {}")):
+        m = re.search(pat, t)
+        if m:
+            print("- " + label.format(m.group(1)))
+    for mm in re.finditer(r"dc slave (\d+) hasdc=(\d) pdelay=(\d+) ns", t):
+        print(f"- DC slave {mm.group(1)}: port delay {mm.group(3)} ns")
+    m = re.search(r"\[WKC GROUP_MOTION\] (.*)", t)
+    if m:
+        print(f"- WKC {m.group(1)}")
+    enabled = False
+    for mm in re.finditer(r"\[PDO\] get (\S+) = 0x([0-9A-F]+)", t):
+        name, v = mm.group(1), int(mm.group(2), 16)
+        extra = ""
+        if ":0x6041:" in name:
+            extra = f" {sw_state(v)} [{sw_bits(v)}]"
+            enabled |= sw_state(v) == "Operation enabled"
+        elif ":0x6064:" in name:
+            extra = f" ({signed(v, 32)})"
+        print(f"- {name} = 0x{v:X}{extra}")
+    for mm in re.finditer(r".*(\[EMCY\]|\[AXIS\]|\[RECOVERY\]|AL status|ALstatus).*", t):
+        print(f"- `{mm.group(0).strip()[:200]}`")
+    if nic and all(os.path.exists(x) for x in nic):
+        d = nic_delta(*nic)
+        print(f"- NIC error counters during the run: {', '.join(f'{k} +{v}' for k, v in d.items()) or 'none'}")
+        if d:
+            print("  (counted on the i226 itself; a frame lost to CRC would also show as a WKC error above)")
+    if enabled:
+        bad.append("A DRIVE REPORTS OPERATION ENABLED although the master never enabled it")
+    verdict(rid, "FAIL" if bad else "PASS",
+            ("not met: " + "; ".join(bad)) if bad else "OP, ENI == bus, InitCmds ok, DC LOCKED, 0 WKC error, 0 overrun")
+    return t
+
+
 def run_part(a):
     # ---------------------------------------------------------- R-05 / R-06
     if a.er5 and os.path.exists(a.er5):
-        t = open(a.er5, errors="replace").read()
-        print("\n## R-05 ecm_run --eni --pdo-scan, no hook (axes not driven)\n")
-        r5 = []
-        checks = [
-            ("OP reached", "all slaves in OPERATIONAL" in t),
-            ("ENI identity check", "identity check OK" in t),
-            ("PDO table ENI == bus", "PDO table: ENI == bus" in t),
-            ("DC LOCKED, 0 unlock", re.search(r"\[DC\] state=LOCKED locks=\d+ unlocks=0", t) is not None),
-        ]
-        m = re.search(r"(\d+) CoE InitCmd\(s\)", t)
-        n_init = int(m.group(1)) if m else -1
-        n_ok = len(re.findall(r"CoE download 0x[0-9A-F]{4}:[0-9A-F]{2} ok", t))
-        checks.append((f"CoE InitCmds ok {n_ok}/{n_init}", n_init > 0 and n_ok == n_init))
-        m = re.search(r"\[GROUP_MOTION\] cycles=(\d+) wkc_mismatch=(\d+) .*overrun=(\d+)", t)
-        if m:
-            checks.append((f"cycles {m.group(1)}, WKC mismatch {m.group(2)}, overrun {m.group(3)}",
-                           m.group(2) == "0" and m.group(3) == "0"))
-        else:
-            checks.append(("final stats printed", False))
-        for name, ok in checks:
-            print(f"- [{'x' if ok else ' '}] {name}")
-            if not ok:
-                r5.append(name)
-        m = re.search(r"state transitions: (.*)", t)
-        print(f"- state transitions (real, ESI 3000/9000/9000 ms): {m.group(1) if m else '(not printed)'}")
-        m = re.search(r"\[DC\] \|e\| \(after 5 s\) (.*)", t)
-        if m:
-            print(f"- DC |e| {m.group(1)}")
-        for mm in re.finditer(r"dc slave (\d+) hasdc=(\d) pdelay=(\d+) ns", t):
-            print(f"- DC slave {mm.group(1)}: port delay {mm.group(3)} ns")
-        enabled = False
-        for mm in re.finditer(r"\[PDO\] get (\S+) = 0x([0-9A-F]+)", t):
-            name, v = mm.group(1), int(mm.group(2), 16)
-            extra = ""
-            if ":0x6041:" in name:
-                extra = f" {sw_state(v)} [{sw_bits(v)}]"
-                enabled |= sw_state(v) == "Operation enabled"
-            elif ":0x6064:" in name:
-                extra = f" ({signed(v, 32)})"
-            print(f"- {name} = 0x{v:X}{extra}")
-        for mm in re.finditer(r".*(EMCY|AL status|ALstatus).*", t):
-            print(f"- `{mm.group(0).strip()[:200]}`")
-        if enabled:
-            r5.append("A DRIVE REPORTS OPERATION ENABLED although the master never enabled it")
-        verdict("R-05", "FAIL" if r5 else "PASS", "; ".join(r5) if r5 else "OP, ENI == bus, InitCmds ok, DC LOCKED, 0 WKC error")
+        d = os.path.dirname(a.er5)
+        t = grade_run("R-05", a.er5, "ecm_run --eni --pdo-scan, no hook (axes not driven)",
+                      nic=(os.path.join(d, "ethtool_S_r05_before.txt"), os.path.join(d, "ethtool_S_r05_after.txt")))
         if "PDO table: ENI == bus" in t:
             verdict("R-06", "PASS", "the drive's PDO assignment matches the ENI (--pdo-scan: ENI == bus)")
         elif "PDO table of the ENI differs from the bus" in t:
@@ -368,6 +415,13 @@ def run_part(a):
                     + (m.group(1).replace("\n", " | ")[:300] if m else ""))
         else:
             verdict("R-06", "SKIP", "no PDO comparison: ecm_run stopped before it (see R-05)")
+    for spec in a.er9 or []:
+        cyc, path = spec.split(":", 1)
+        if os.path.exists(path):
+            d = os.path.dirname(path)
+            grade_run(f"R-09/{cyc}us", path, f"cycle {cyc} us (derived ENI, tools/eni/eni_cycle.py)",
+                      nic=(os.path.join(d, f"ethtool_S_r09_{cyc}_before.txt"),
+                           os.path.join(d, f"ethtool_S_r09_{cyc}_after.txt")))
     if a.er6 and os.path.exists(a.er6):
         t = open(a.er6, errors="replace").read()
         print("\n## R-06b axes configured, not driven (--axis without --hook)\n")

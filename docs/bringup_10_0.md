@@ -68,8 +68,39 @@ Kết quả: `log_gd10_bringup_*/report.md` (+ `peek.txt`, `sii/`, `esi_check_*.
 - Statusword khi chỉ có nguồn điều khiển: có thể là Switch on disabled không có bit voltage, hoặc Fault (thấp áp động lực) — ghi lại, đó là số liệu cho servo ảo (10.2).
 - `[AXIS]`/EMCY trong log: ghi mã; R-07 sẽ thu có chủ đích.
 
-## 6. Sau R-06 (cùng buổi nếu còn giờ)
+## 6. Buổi 2: R-01 đầy đủ, R-07, R-09 (sau buổi 8/10)
 
-- R-08 rút gọn: `STEPS=r05 R05_SEC=3600` = 1 h ở OP không enable (bản đầy đủ thêm 10 phút `--link etf`).
-- R-07 (rút cáp giữa 2 servo, tắt động lực khi OP, bấm dừng khẩn) và R-09 (chu kỳ 2 ms / 500 µs): làm tay theo kế hoạch, cần ENI tương ứng cho R-09.
-- Ghi `claude/giai_doan_10_nhat_ky_10_0.md`: revision, SII khác biệt, mapping thật, 0x6502, 0x1C32/0x1C33, thời gian chuyển trạng thái, statusword ở từng trạng thái nguồn, mã EMCY/AL.
+Kết quả buổi 1: `claude/giai_doan_10_nhat_ky_10_0.md`. Mỗi lần bật Jetson: `sudo ip link set enP1p1s0 up` (NetworkManager không quản cổng này) và `sudo ethtool -K enP1p1s0 gro off gso off tso off`.
+
+### 6.1 R-01 đầy đủ (10 phút, sau khi đổi cáp có bọc chống nhiễu)
+```bash
+sudo -E YES=1 STEPS=r01 tools/gd10/run_bringup_10_0.sh
+```
+PASS khi 100/Full, 0 lần mất link, `rx_crc_errors` không tăng. Mọi lượt `ecm_run` của runner giờ cũng chụp `ethtool -S` trước/sau và in "NIC error counters" trong report.
+
+### 6.2 R-09 chu kỳ 2 ms và 500 µs (~2,5 phút)
+```bash
+sudo -E IS620N_ESI=... YES=1 STEPS=r09 tools/gd10/run_bringup_10_0.sh
+```
+Mỗi chu kỳ: `tools/eni/eni_cycle.py` tạo bản sao ENI (sync0_ns + InitCmd 0x09A0; bản đo, không phải ENI TwinCAT), `ecm_run --motion-cycle-us` 60 s (`R09_SEC`), chấm như R-05. SM watchdog tự giãn ≥ 3 chu kỳ (2 ms → 6 ms; 1 ms và 500 µs giữ 3 ms). Chu kỳ khác: `R09_CYCLES="4000 250"`. 0x1C32:05 của IS620N = 125 µs.
+
+### 6.3 R-07 sự kiện khi đang OP (~3 phút, cần thao tác tay)
+Diễn tập trước trên servo ảo: `sudo -E SIM=1 tools/gd10/run_events_10_0.sh`.
+```bash
+sudo -E tools/gd10/run_events_10_0.sh                 # estop, mainpower, cable
+sudo -E EVENTS="cable" tools/gd10/run_events_10_0.sh  # một sự kiện
+```
+Script đưa bus lên OP (không enable), rồi với từng sự kiện in việc cần làm; bạn **bấm Enter đúng lúc làm** (thời điểm ghi bằng CLOCK_MONOTONIC, cùng đồng hồ với log ecm_run), giữ `HOLD` 10 s, làm thao tác khôi phục, bấm Enter, đợi `SETTLE` 20 s.
+
+| Sự kiện | Làm | Khôi phục | Muốn ghi lại |
+|---|---|---|---|
+| estop | bấm dừng khẩn (DI) | nhả | có EMCY không, mã gì; statusword |
+| mainpower | gạt MCB động lực L1/L2 xuống (nguồn điều khiển giữ) | gạt lên, đợi đèn CHARGE | EMCY thấp áp (dự kiến 0x3220 hoặc mã hãng), fault có chốt không |
+| cable | rút cáp driver 1 OUT → driver 2 IN | cắm lại | bus PARTIAL/LOST, diag "chain broken after slave 1 … cable slave 1 - slave 2" (L5-11 thật), recovery về OP, thời gian |
+
+PASS: `ecm_run` sống qua mọi sự kiện và bus kết thúc ở RUN. Từng sự kiện: OBSERVED (liệt kê dòng `[BUS]`/`[EMCY]`/`[RECOVERY]` theo thời gian tương đối) hoặc NONE. Master **không reset** lỗi của drive: lỗi do sự kiện gây ra vẫn chốt (S7) — xoá trên panel/ tắt-bật nguồn sau khi chạy xong. Log: `log_gd10_events_*/report.md`, `er_r07.log`, `r07.pcapng`, `diag_<sự kiện>_{do,after}.txt`.
+
+Mã EMCY thu được → điền `config/emcy/is620n.emcy` (tra manual IS620N) và servo ảo 10.2.
+
+### 6.4 R-08 đầy đủ
+1 h (đã làm rút gọn 8/10) + 10 phút `--link etf`: làm sau R-09.
