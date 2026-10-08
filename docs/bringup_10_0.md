@@ -70,7 +70,7 @@ Kết quả: `log_gd10_bringup_*/report.md` (+ `peek.txt`, `sii/`, `esi_check_*.
 
 ## 6. Buổi 2: R-01 đầy đủ, R-07, R-09 (sau buổi 8/10)
 
-Kết quả buổi 1: `claude/giai_doan_10_nhat_ky_10_0.md`. Mỗi lần bật Jetson: `sudo ip link set enP1p1s0 up` (NetworkManager không quản cổng này) và `sudo ethtool -K enP1p1s0 gro off gso off tso off`.
+Kết quả buổi 1: `claude/giai_doan_10_nhat_ky_10_0.md`. Mỗi lần bật Jetson: `sudo tools/jetson/setup_link.sh` (link up — NetworkManager không quản cổng này; GRO/GSO/TSO off; `rx-usecs 0`; EEE off).
 
 ### 6.1 R-01 đầy đủ (10 phút, sau khi đổi cáp có bọc chống nhiễu)
 ```bash
@@ -83,6 +83,8 @@ PASS khi 100/Full, 0 lần mất link, `rx_crc_errors` không tăng. Mọi lư�
 sudo -E IS620N_ESI=... YES=1 STEPS=r09 tools/gd10/run_bringup_10_0.sh
 ```
 Mỗi chu kỳ: `tools/eni/eni_cycle.py` tạo bản sao ENI (sync0_ns + InitCmd 0x09A0; bản đo, không phải ENI TwinCAT), `ecm_run --motion-cycle-us` 60 s (`R09_SEC`), chấm như R-05. SM watchdog tự giãn ≥ 3 chu kỳ (2 ms → 6 ms; 1 ms và 500 µs giữ 3 ms). Chu kỳ khác: `R09_CYCLES="4000 250"`. 0x1C32:05 của IS620N = 125 µs.
+
+Kết quả 9/10: 2 ms PASS; 500 µs FAIL 76 NOFRAME / 120 000 (reply về muộn 355–430 µs, ~0,1 %) — nguyên nhân: CPU0 (nơi nhận ngắt i226, không chuyển được) ngủ sâu ở **c7** (kernel khai báo thoát mất 5000 µs). Giữ `/dev/cpu_dma_latency` = 0 → turnaround max 149 µs, 0 NOFRAME. Từ bản vá 0017 `ecm_run` tự giữ (cần root; không được thì in WARNING). Đối chứng âm: `ER_EXTRA=--no-dma-latency STEPS=r09 R09_CYCLES=500` phải FAIL lại.
 
 ### 6.3 R-07 sự kiện khi đang OP (~3 phút, cần thao tác tay)
 Diễn tập trước trên servo ảo: `sudo -E SIM=1 tools/gd10/run_events_10_0.sh`.

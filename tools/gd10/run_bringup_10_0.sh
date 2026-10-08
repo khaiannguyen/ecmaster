@@ -35,7 +35,7 @@
 #
 # NIC error counters (ethtool -S) are taken before/after every ecm_run.
 # Env: IFACE (enP1p1s0) N (2) ENI IS620N_ESI STEPS LINK_SEC R05_SEC CAP YES
-#      R09_CYCLES R09_SEC
+#      R09_CYCLES R09_SEC ER_EXTRA (checked by the same refusal list)
 #      SIM SIM_REV IF_S SB_PRIO SB_CPU ECM_RUN ECM_PEEK SOFT_BUS LOG
 # ==========================================================================
 set -u
@@ -235,6 +235,9 @@ GETS=""
 for s in $(seq 1 "$N"); do GETS="$GETS${GETS:+,}$s:0x6041:0,$s:0x603F:0,$s:0x6064:0"; done
 ER_COMMON=(--iface "$IFACE" --n "$N" --eni "$ENI" --pdo-scan --emcy-map "$EMCY_MAP")
 [ "$SIM" = 1 ] && ER_COMMON+=(--no-tx-ts)
+# ER_EXTRA: more ecm_run options, e.g. the R-09 negative control --no-dma-latency
+# shellcheck disable=SC2206
+[ -n "${ER_EXTRA:-}" ] && ER_COMMON+=($ER_EXTRA)
 for a in "${ER_COMMON[@]}"; do      # belt and braces: nothing that could drive an axis
     case $a in --hook|--cia402-script|--pdo-set|--xchg-out|--xchg-sine) echo "refusing: $a"; exit 2 ;; esac
 done

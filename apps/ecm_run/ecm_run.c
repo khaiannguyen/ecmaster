@@ -134,6 +134,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <time.h>
 #include <inttypes.h>
@@ -448,6 +449,8 @@ static uint64_t         g_recoveries_b, g_recoveries_full;   /* monitor only */
 #define QUAR_TICKS 50
 #define QUAR_MAX   8
 static int      g_quarantine = 1;               /* --no-quarantine (negative control) */
+static int      g_dma_latency = 1;              /* --no-dma-latency (negative control, Phase 10.0) */
+static int      g_dma_latency_fd = -1;          /* held open for the life of the process */
 static uint64_t g_quar_until[EC_MAXBUF];        /* RT only; 0 = not parked */
 static int      g_quar_n;
 static uint64_t g_quar_total, g_quar_overflow;
@@ -2127,6 +2130,8 @@ int main(int argc, char **argv)
             g_rx_legacy = 1;
         } else if (strcmp(argv[i], "--n-lost") == 0 && i + 1 < argc) {
             n_lost = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--no-dma-latency") == 0) {       /* Phase 10.0 R-09 */
+            g_dma_latency = 0;
         } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Phase 7.4 */
             g_quarantine = 0;
         } else if (strcmp(argv[i], "--no-reply-check") == 0) {
@@ -2310,7 +2315,7 @@ int main(int argc, char **argv)
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
-            "       [--no-quarantine] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
+            "       [--no-quarantine] [--no-dma-latency] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
@@ -2397,6 +2402,26 @@ int main(int argc, char **argv)
         perror("mlockall");
         /* not fatal -- warn and continue, since this is a hardening step,
         * not a correctness requirement */
+    }
+
+    /* Phase 10.0 R-09 (real i226 + IS620N): the Orin's deep idle state c7
+     * declares a 5000 us exit latency. The RX interrupt of the i226 lands on
+     * CPU0 (managed IRQ, not movable), and a sleeping CPU0 put ~0.1 % of the
+     * replies 355..430 us late: 76 NOFRAME / 120 000 cycles at 500 us. With
+     * /dev/cpu_dma_latency = 0 held open: turnaround max 149 us, 0 NOFRAME.
+     * The request lasts while the fd is open, i.e. the life of ecm_run. */
+    if (g_dma_latency) {
+        g_dma_latency_fd = open("/dev/cpu_dma_latency", O_WRONLY);
+        int32_t zero = 0;
+        if (g_dma_latency_fd < 0 || write(g_dma_latency_fd, &zero, sizeof(zero)) != (ssize_t)sizeof(zero)) {
+            fprintf(stderr, "ecm_run: WARNING /dev/cpu_dma_latency could not be set to 0 (%s): deep CPU idle "
+                    "states stay allowed, replies can come back hundreds of us late (run as root)\n", strerror(errno));
+            if (g_dma_latency_fd >= 0) { close(g_dma_latency_fd); g_dma_latency_fd = -1; }
+        } else {
+            fprintf(stderr, "ecm_run: /dev/cpu_dma_latency = 0 held (no deep CPU idle while running)\n");
+        }
+    } else {
+        fprintf(stderr, "ecm_run: --no-dma-latency: deep CPU idle states allowed (negative control)\n");
     }
 
     if (!ecx_init(&ctx, ifname)) {

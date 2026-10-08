@@ -377,6 +377,14 @@ def grade_run(rid, path, title, cycle_note=None, nic=None):
     m = re.search(r"\[WKC GROUP_MOTION\] (.*)", t)
     if m:
         print(f"- WKC {m.group(1)}")
+    tl = re.findall(r"^turnaround +(n=.*)$", t, re.M)
+    if tl:
+        print(f"- turnaround (software timestamps, send -> reply) {re.sub(' +', ' ', tl[-1])}")
+    m = re.search(r"\[LATE\] index quarantine \S+: parked=(\d+)", t)
+    if m:
+        print(f"- replies that came back after the receive deadline (parked): {m.group(1)}")
+    m = re.search(r"ecm_run: (WARNING /dev/cpu_dma_latency.*?\)|/dev/cpu_dma_latency = 0 held|--no-dma-latency)", t)
+    print(f"- CPU idle: {m.group(1) if m else '(no cpu_dma_latency line: ecm_run before patch 0017)'}")
     enabled = False
     for mm in re.finditer(r"\[PDO\] get (\S+) = 0x([0-9A-F]+)", t):
         name, v = mm.group(1), int(mm.group(2), 16)

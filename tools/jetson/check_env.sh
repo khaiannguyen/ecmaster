@@ -73,6 +73,16 @@ gov=$(cat /sys/devices/system/cpu/cpu$RT_CPU/cpufreq/scaling_governor 2>/dev/nul
 [ -n "$gov" ] && { if [ "$gov" = performance ]; then pass "cpu$RT_CPU governor performance"
                    else warn "cpu$RT_CPU governor '$gov': sudo jetson_clocks (or nvpmodel -m 0 + jetson_clocks)"; fi; }
 
+# Phase 10.0 R-09: deep idle (Orin c7, 5000 us exit latency) put i226 replies
+# ~400 us late; ecm_run holds /dev/cpu_dma_latency = 0 while it runs.
+deep=""
+for st in /sys/devices/system/cpu/cpu0/cpuidle/state*; do
+    [ -r "$st/latency" ] || continue
+    lat=$(cat "$st/latency"); [ "$lat" -gt 100 ] 2>/dev/null && [ "$(cat "$st/disable")" = 0 ] && deep="$deep $(cat "$st/name")(${lat}us)"
+done
+if [ -n "$deep" ]; then info "deep CPU idle states enabled:$deep -- ecm_run holds /dev/cpu_dma_latency=0 (needs root; WARNING in its log otherwise)"
+else pass "no deep CPU idle state enabled"; fi
+
 echo "=== leftovers (must be gone before a soak / golden / R-series run)"
 for pn in soft_bus ecm_run tshark txtime_probe cyclictest l4_test l6_test; do
     p=$(pgrep -x "$pn" | tr '\n' ' ')
@@ -125,7 +135,13 @@ if [ $NO_IFACE = 0 ]; then
             gro=$(ethtool -k "$IFACE" 2>/dev/null | awk -F': ' '/^generic-receive-offload:/{print $2}')
             case "$gro" in off*) pass "GRO off" ;; "") ;; *) warn "GRO $gro: sudo ethtool -K $IFACE gro off gso off tso off" ;; esac
             rxu=$(ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
-            case "$rxu" in 0) pass "rx-usecs 0" ;; "") ;; *) warn "rx-usecs $rxu: sudo ethtool -C $IFACE rx-usecs 0 tx-usecs 0" ;; esac
+            # Phase 10.0: without root the query can fail silently -> it passed unseen at 3 us
+            [ -z "$rxu" ] && rxu=$(sudo -n ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
+            case "$rxu" in
+                0) pass "rx-usecs 0" ;;
+                "") warn "interrupt coalescing not readable (run check_env with sudo): want rx-usecs 0" ;;
+                *) warn "rx-usecs $rxu: sudo ethtool -C $IFACE rx-usecs 0   (igc queue-pair mode: rx-usecs covers tx too)" ;;
+            esac
         else
             warn "ethtool not installed"
         fi
