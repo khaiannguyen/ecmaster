@@ -1476,6 +1476,16 @@ static int cia_parse(const char *src, cia_step_t *st, int max)
         cia_step_t s = { 0 };
         int k = sscanf(p, " %lf %11s %15s %lf %lf", &s.t, s.op, ax, &s.a, &s.b);
         if (k < 3) return -1;
+        {   /* 10.9: an unknown op was silently ignored -- a typo must not pass on real drives */
+            static const char *const OPS[] = { "enable", "disable", "quickstop", "reset", "mode", "sine", "cos",
+                                               "vel", "pos", "stop", "pp", "pv", "home" };
+            size_t o = 0;
+            while (o < sizeof(OPS) / sizeof(OPS[0]) && strcmp(OPS[o], s.op)) o++;
+            if (o == sizeof(OPS) / sizeof(OPS[0])) {
+                fprintf(stderr, "[CIA402-APP] unknown script op '%s'\n", s.op);
+                return -1;
+            }
+        }
         s.axis = !strcmp(ax, "all") ? -1 : (int)strtol(ax, NULL, 0);
         if (!strcmp(s.op, "mode")) {               /* mode AXIS csp|csv: 3rd token is the mode */
             char md[8] = "";
@@ -1493,7 +1503,7 @@ static void *cia402_app(void)
     cia_step_t steps[64];
     int ns = g_cia_script ? cia_parse(g_cia_script, steps, 64) : 0, si = 0;
     if (ns < 0) { fprintf(stderr, "[CIA402-APP] cannot parse --cia402-script\n"); ns = 0; }
-    enum { P_NONE, P_SINE, P_VEL, P_POS } kind[ECM_AXIS_MAX] = { 0 };
+    enum { P_NONE, P_SINE, P_VEL, P_POS, P_COS } kind[ECM_AXIS_MAX] = { 0 };
     double amp[ECM_AXIS_MAX] = { 0 }, hz[ECM_AXIS_MAX] = { 0 }, vel[ECM_AXIS_MAX] = { 0 };
     int64_t base[ECM_AXIS_MAX] = { 0 };
     uint64_t t_start[ECM_AXIS_MAX] = { 0 }, next[ECM_AXIS_MAX] = { 0 }, last_rec[ECM_AXIS_MAX] = { 0 };
@@ -1523,6 +1533,9 @@ static void *cia402_app(void)
                 else if (!strcmp(s->op, "reset")) op = ECM_CIA_OP_FAULT_RESET;
                 else if (!strcmp(s->op, "mode")) op = ECM_CIA_OP_SET_MODE;
                 else if (!strcmp(s->op, "sine")) { kind[a] = P_SINE; amp[a] = s->a; hz[a] = s->b; base[a] = cs.apos; t_start[a] = k; next[a] = 0; }
+                /* 10.9 (real drives): base + A (1 - cos)/2 -- starts and, after whole periods, ends
+                 * at velocity 0 (a sine starts at full speed: a step the real drive has to follow) */
+                else if (!strcmp(s->op, "cos"))  { kind[a] = P_COS; amp[a] = s->a; hz[a] = s->b; base[a] = cs.apos; t_start[a] = k; next[a] = 0; }
                 else if (!strcmp(s->op, "vel"))  { kind[a] = P_VEL; vel[a] = s->a; next[a] = 0; }
                 else if (!strcmp(s->op, "pos"))  { kind[a] = P_POS; vel[a] = s->a; next[a] = 0; }   /* 10.6: absolute CSP target */
                 else if (!strcmp(s->op, "stop")) kind[a] = P_NONE;
@@ -1538,23 +1551,24 @@ static void *cia402_app(void)
             if (kind[a] != P_NONE) {
                 if (next[a] < k + 2) next[a] = k + 2;
                 for (; next[a] <= k + (uint64_t)g_cia_lead; next[a]++) {
+                    double ph = 2.0 * M_PI * hz[a] * (double)(next[a] - t_start[a]) * (double)g_cia.cycle_ns * 1e-9;
                     int64_t v = kind[a] == P_VEL || kind[a] == P_POS ? (int64_t)llround(vel[a])
-                              : base[a] + (int64_t)llround(amp[a] * sin(2.0 * M_PI * hz[a] *
-                                    (double)(next[a] - t_start[a]) * (double)g_cia.cycle_ns * 1e-9));
+                              : kind[a] == P_COS ? base[a] + (int64_t)llround(amp[a] * 0.5 * (1.0 - cos(ph)))
+                              : base[a] + (int64_t)llround(amp[a] * sin(ph));
                     if (ecm_cia402_setpoint(&g_cia, a, next[a], v)) { g_capp.full++; break; }
                     g_capp.pushed++;
                     sp[a][next[a] & 1023] = v;
-                    sp_ok[a][next[a] & 1023] = kind[a] == P_SINE;
+                    sp_ok[a][next[a] & 1023] = kind[a] == P_SINE || kind[a] == P_COS;
                 }
             }
             /* state: transitions, errors, tracking of CSP: actual(k) vs setpoint(k-1) */
             ecm_cia402_state_t s;
             if (ecm_cia402_read(&g_cia, a, &s)) continue;
             if (s.ds != prev[a].ds || s.err != prev[a].err || s.mode_disp != prev[a].mode_disp) {
-                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d %s -> %s (sw 0x%04X cw 0x%04X mode %d)%s%s%s\n",
+                fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d %s -> %s (sw 0x%04X cw 0x%04X mode %d)%s%s%s pos=%d\n",
                         now, s.tick, a, ecm_cia402_ds_str((ecm_ds_t)prev[a].ds), ecm_cia402_ds_str((ecm_ds_t)s.ds),
                         s.sw, s.cw, s.mode_disp, s.err ? " ERROR " : "", s.err ? ecm_cia402_err_str(s.err) : "",
-                        s.err == ECM_AXERR_TIMEOUT ? ecm_cia402_ds_str((ecm_ds_t)s.err_ds) : "");
+                        s.err == ECM_AXERR_TIMEOUT ? ecm_cia402_ds_str((ecm_ds_t)s.err_ds) : "", s.apos);
                 g_capp.events++;
             }
             /* 10.7: profile-mode events */
@@ -1566,7 +1580,7 @@ static void *cia402_app(void)
                 fprintf(stderr, "[CIA402] t=%.3f tick=%" PRIu64 " axis %d homing %s pos=%d\n", now, s.tick, a,
                         s.hm_phase == ECM_HM_RUNNING ? "started" : s.hm_phase == ECM_HM_DONE ? "attained" :
                         s.hm_phase == ECM_HM_FAILED ? "FAILED" : "idle", s.apos);
-            if (s.tick == last_rec[a] + 1 && kind[a] == P_SINE && s.ds == ECM_DS_OE && s.mode_disp == ECM_OPMODE_CSP &&
+            if (s.tick == last_rec[a] + 1 && (kind[a] == P_SINE || kind[a] == P_COS) && s.ds == ECM_DS_OE && s.mode_disp == ECM_OPMODE_CSP &&
                 sp_ok[a][(s.tick - 1) & 1023] && s.tick > t_start[a] + 8) {
                 int64_t e = (int64_t)s.apos - sp[a][(s.tick - 1) & 1023];
                 if (e < 0) e = -e;
