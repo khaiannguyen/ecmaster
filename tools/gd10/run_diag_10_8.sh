@@ -17,9 +17,11 @@
 #   e03  slave refuses its configuration (safeop, AL 0x001D) while enabled:
 #        no retry (FAILED(config)), axis error "slave refused its
 #        configuration", a later ENABLE refused, never enabled again
-#   x05  cw_trace.py on our own capture: path SOD -06-> RTSO -07-> SO -0F->
+#   x05  (criteria of 0024: enable path graded, disable reported)
+#        cw_trace.py on our own capture: path SOD -06-> RTSO -07-> SO -0F->
 #        OE -07-> SO -06-> RTSO -00-> SOD; X-05 against itself PASS;
-#        negative control: against a run that stops by quick stop -> FAIL
+#        reference stopping by quick stop -> PASS, disable DIFF reported;
+#        negative control: reference that never enables -> FAIL (RTSO -07-> SO)
 # Env: SOFT_BUS ECM_RUN IF_M IF_S SB_PRIO SB_CPU
 # ==========================================================================
 set -u
@@ -150,10 +152,20 @@ x05)
         "grep -q 'path: .*SOD -06-> RTSO -07-> SO -0F-> OE -07-> SO -06-> RTSO -00-> SOD$' $LOG/x05a.trace"
     $CWT "$LOG/x05a.pcap" --ref "$LOG/x05a.pcap" > "$LOG/x05_self.txt" 2>&1; RS=$?
     chk "X-05 against itself: PASS" "[ $RS = 0 ] && grep -q '^X-05 PASS' $LOG/x05_self.txt"
+    # criteria of 0024 (first real capture, 9/10): the ENABLE path is graded,
+    # the disable path only reported. A reference stopping by quick stop: PASS,
+    # disable DIFF reported.
     cap x05q 1 4 "--profile 1=$P1 --cia402 1" "--pdo-scan --axis 1 --axis-no-6502" "1 enable 0; 2.5 quickstop 0; 3 disable 0"
-    $CWT "$LOG/x05a.pcap" --ref "$LOG/x05q.pcap" > "$LOG/x05_neg.txt" 2>&1; RN=$?
-    chk "X-05 negative control: reference stops by quick stop -> FAIL naming OE -07-> SO (rc $RN)" \
-        "[ $RN = 1 ] && grep -q 'master transition OE -07-> SO not in the reference' $LOG/x05_neg.txt"
+    $CWT "$LOG/x05a.pcap" --ref "$LOG/x05q.pcap" > "$LOG/x05_qs.txt" 2>&1; RQ=$?
+    chk "X-05 reference stopping by quick stop: PASS, disable path DIFF reported (rc $RQ)" \
+        "[ $RQ = 0 ] && grep -q 'disable path DIFF' $LOG/x05_qs.txt"
+    # negative control: a reference that never enables -> the master's enable
+    # transitions are not in it -> FAIL naming RTSO -07-> SO
+    CA=$(sed -n 's/.*controlword at \(0x[0-9A-F]*\), statusword at \(0x[0-9A-F]*\).*/\1 \2/p' "$LOG/x05a.trace" | head -1)
+    cap x05n 1 3 "--profile 1=$P1 --cia402 1" "--pdo-scan --axis 1 --axis-no-6502" "2 disable 0"
+    $CWT "$LOG/x05a.pcap" --ref "$LOG/x05n.pcap" --ref-cw "${CA% *}" --ref-sw "${CA#* }" > "$LOG/x05_neg.txt" 2>&1; RN=$?
+    chk "X-05 negative control: reference never enables -> FAIL naming RTSO -07-> SO (rc $RN)" \
+        "[ $RN = 1 ] && grep -q 'enable transition RTSO -07-> SO of the master is not in the reference' $LOG/x05_neg.txt"
     ;;
 *) echo "unknown case $c"; FAIL=$((FAIL+1)) ;;
 esac
