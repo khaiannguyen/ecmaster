@@ -72,6 +72,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int g_pass, g_fail;
 static void check(const char *name, long got, long want)
