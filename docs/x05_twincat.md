@@ -33,3 +33,20 @@ Cần: laptop TwinCAT 3 (NIC có driver RT của Beckhoff), 2 IS620N (sau 10.0),
 6. Kỳ vọng `X-05 PASS`: mọi chuyển trạng thái của master (SOD -06-> RTSO -07-> SO -0F-> OE -07-> SO -06-> RTSO -00-> SOD) có trong chuỗi TwinCAT, cùng thứ tự. TwinCAT có thể có thêm bước (ví dụ 0x80 reset đầu phiên, Quick stop) — được phép. Khác biệt (ví dụ TwinCAT đi OE → SOD bằng 0x00 thay vì 0x07/0x06) ghi vào `claude/giai_doan_10_nhat_ky_10_8.md` và cân nhắc trước 10.9.
 
 Ghi lại cùng buổi: thời gian chuyển trạng thái thật của IS620N (từ capture TwinCAT: số frame giữa cạnh controlword và statusword đổi) → đầu vào hiệu chỉnh servo ảo (A-05) và `--axis-step-timeout-ms`.
+
+## 3. Kết quả 9/10 và tiêu chí X-05 (bản vá 0023, 0024)
+Làm thật: TwinCAT 3.1.4024, PDO 0x1701/0x1B01 (cùng `eni_2servo`), NC-Task 1 SAF 1 ms, Startup thêm 0x6072/0x6065/0x607F; Wireshark trên NIC TwinCAT (TwinCAT: *Adapter → Promiscuous Mode*; Wireshark: **tắt** promiscuous của Wireshark, nếu không báo "failed to set hardware filter"). Master: `CASES=w01` + `tshark` trên Jetson.
+
+Địa chỉ trong capture TwinCAT (LRW 0x01000000, vào/ra chồng nhau): cw 0x1000000, 0x603F 0x1000000 (vào), sw 0x1000002. Master: cw 0x10000, sw 0x1001A.
+```bash
+python3 tools/gd10/cw_trace.py master_x05.pcapng --ref twincat_x05.pcapng --ref-cw 0x1000000 --ref-sw 0x1000002 --ref-ec 0x1000000
+```
+| | TwinCAT NC | Master |
+|---|---|---|
+| Đầu phiên | 1 xung reset cw 0x86 (không có lỗi) | không (S7) |
+| Enable | RTSO -07-> SO -0F-> OE (drive 4–6 ms) | SOD -06-> RTSO -07-> SO -0F-> OE (1,5–2,5 ms) |
+| Disable | OE -06-> RTSO (Shutdown thẳng) | OE -07-> SO -06-> RTSO -00-> SOD (S6; 0x07 cho drive tự hãm, IS620N không có 0x605B) |
+| sw khi OE (CSP) | 0x1637 | 0x1637 |
+| Lỗi | 2 lần **0x0E08** ở 78 s / 79 s khi chưa enable: laptop ngừng gửi frame **116 ms / 382 ms**; drive tự xoá (không cw bit 7) | không |
+
+Tiêu chí (từ 0024): PASS khi mọi bước **enable** của master có trong TwinCAT và thứ tự trạng thái tới OE là dãy con; master không Fault, không gửi bit 7. Đường disable, xung reset và lỗi của TwinCAT: in ra (INFO / DIFF), không chấm.

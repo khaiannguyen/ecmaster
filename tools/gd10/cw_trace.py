@@ -26,10 +26,11 @@ printed with Wireshark's frame number (every packet counts, 1-based) and
 the raw statusword; --ec LADDR adds the 0x603F error code of the step;
 the path is "SOD -06-> RTSO -07-> SO -0F-> OE -07-> SO ...".
 
-X-05 (plan GD10 §10): every transition our master made (from state,
-controlword, to state) must also appear in TwinCAT's trace, and the states
-our master walked must appear in the same order in TwinCAT's (a
-subsequence). Exit 0 when it holds, 1 when not, 2 on errors.
+X-05 (plan GD10 §10; criteria of 9/10, see x05()): our master's ENABLE
+transitions must appear in TwinCAT's trace and its states up to OE in the
+same order; no fault and no fault reset on our side. The disable paths,
+TwinCAT's reset pulses and TwinCAT's faults (with 0x603F, --ref-ec) are
+reported, not graded. Exit 0 when it holds, 1 when not, 2 on errors.
 """
 import argparse
 import struct
@@ -290,17 +291,83 @@ def main():
     except (ValueError, OSError) as e:
         print("cw_trace: %s" % e, file=sys.stderr)
         return 2
+    return x05(st, rst)
+
+
+ENABLE_TO = ("SO", "OE")          # RTSO -07-> SO, SO -0F-> OE (and SOD/RTSO -> SO shortcuts)
+FAULTY = ("FRA", "FAULT")
+
+
+def x05(st, rst):
+    """X-05 (plan GD10 section 10, criteria of 9/10 after the first real capture):
+    PASS when
+      - every ENABLE transition of our master (into SO or OE) also appears in
+        TwinCAT's trace, and our master's states up to its first OE are a
+        subsequence of TwinCAT's;
+      - our master's trace has no Fault / Fault reaction active and our master
+        never sets controlword bit 7 (S7: no automatic fault reset).
+    Reported, not graded (both CiA402-legal):
+      - the disable path of each (TwinCAT NC: OE -06-> RTSO; ours: OE -07-> SO
+        -06-> RTSO -00-> SOD, S6);
+      - fault-reset pulses (cw bit 7) TwinCAT sends;
+      - faults in TwinCAT's trace, with 0x603F when --ref-ec is given, and
+        whether the drive cleared them itself (cw bit 7 never set)."""
     mt, rt = transitions(st), set(transitions(rst))
-    missing = [t for t in mt if t not in rt]
-    order_ok = is_subsequence(states_order(st), states_order(rst))
+    en = []
+    for t in mt:                    # the master's way up, until its first Operation enabled
+        if t[2] in ENABLE_TO and t[0] not in FAULTY:
+            en.append(t)
+        if t[2] == "OE":
+            break
+    missing = [t for t in en if t not in rt]
+    def upto_oe(o):
+        return o[:o.index("OE") + 1] if "OE" in o else o
+    mo = upto_oe(states_order(st))
+    order_ok = is_subsequence(mo, states_order(rst))
+    bad = []
     for t in missing:
-        print("  X-05: master transition %s -%02X-> %s not in the reference" % t)
+        bad.append("enable transition %s -%02X-> %s of the master is not in the reference" % t)
     if not order_ok:
-        print("  X-05: master state order %s is not a subsequence of the reference's %s"
-              % (" ".join(states_order(st)), " ".join(states_order(rst))))
-    ok = not missing and order_ok
-    print("X-05 %s: %d master transitions, %d distinct in the reference%s"
-          % ("PASS" if ok else "FAIL", len(mt), len(rt), "" if ok else ""))
+        bad.append("master states up to OE (%s) are not a subsequence of the reference's (%s)"
+                   % (" ".join(mo), " ".join(states_order(rst))))
+    if "OE" not in states_order(st):
+        bad.append("the master never reached Operation enabled")
+    if any(s in FAULTY for s in states_order(st)):
+        bad.append("the master's trace has a fault")
+    if any(c & 0x80 for _, _, c, _, _ in st):
+        bad.append("the master sent a fault reset (cw bit 7)")
+
+    # the controlword that caused each change is the one on the wire just before it
+    def disable_path2(steps):
+        o, oe = [], None
+        for i, (_, s_, c, _, _) in enumerate(steps):
+            if s_ == "OE":
+                oe, o = i, ["OE"]
+            elif oe is not None and s_ != steps[i - 1][1]:
+                o.append("-%02X-> %s" % (steps[i - 1][2], s_))
+        return " ".join(o) if oe is not None else "(no OE)"
+
+    print("  enable  master: %s" % " ".join(mo))
+    print("  disable master:    %s" % disable_path2(st))
+    print("  disable reference: %s" % disable_path2(rst))
+    resets = [f for f, _, c, _, _ in rst if c & 0x80]
+    if resets:
+        print("  INFO reference sends fault reset (cw bit 7) at frame(s) %s" % " ".join(map(str, resets)))
+    for i, (f, s_, c, w, e) in enumerate(rst):
+        if s_ in FAULTY and (i == 0 or rst[i - 1][1] not in FAULTY):
+            j = i
+            while j + 1 < len(rst) and rst[j + 1][1] in FAULTY + ("NRTSO",):
+                j += 1
+            cleared_by = "a reset (cw bit 7)" if any(rst[k][2] & 0x80 for k in range(i, min(j + 2, len(rst)))) \
+                else "the drive itself (no cw bit 7)"
+            print("  INFO reference fault at frame %d (sw 0x%04X%s), cleared by %s"
+                  % (f, w, "" if e is None else ", 0x603F 0x%04X" % e, cleared_by))
+    for b in bad:
+        print("  X-05: " + b)
+    ok = not bad
+    print("X-05 %s: %d master enable transition(s) checked; disable path %s"
+          % ("PASS" if ok else "FAIL", len(en),
+             "same" if disable_path2(st) == disable_path2(rst) else "DIFF (both CiA402-legal; reported, not graded)"))
     return 0 if ok else 1
 
 
