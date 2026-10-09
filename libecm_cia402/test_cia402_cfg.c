@@ -74,9 +74,16 @@ static void build(void)
         ecm_pdo_add(&T, 3, ECM_PDO_IN, (uint16_t)(0x1A00 + a), (uint16_t)(0x606C + o), 0, 32);
         ecm_pdo_add(&T, 3, ECM_PDO_IN, (uint16_t)(0x1A00 + a), (uint16_t)(0x603F + o), 0, 16);
     }
+    /* slave 5 = IS620N 0x1702/0x1B02 (slave 4 stays without PDOs) (TwinCAT ENI of 9/10, X-05b): 0x60FF but no 0x606C */
+    const uint16_t rx2[7][2] = { { 0x6040, 16 }, { 0x607A, 32 }, { 0x60FF, 32 }, { 0x6071, 16 }, { 0x6060, 8 },
+                                 { 0x60B8, 16 }, { 0x607F, 32 } };
+    for (int k = 0; k < 7; k++) ecm_pdo_add(&T, 5, ECM_PDO_OUT, 0x1702, rx2[k][0], 0, rx2[k][1]);
+    const uint16_t tx2[9][2] = { { 0x603F, 16 }, { 0x6041, 16 }, { 0x6064, 32 }, { 0x6077, 16 }, { 0x6061, 8 },
+                                 { 0x60B9, 16 }, { 0x60BA, 32 }, { 0x60BC, 32 }, { 0x60FD, 32 } };
+    for (int k = 0; k < 9; k++) ecm_pdo_add(&T, 5, ECM_PDO_IN, 0x1B02, tx2[k][0], 0, tx2[k][1]);
     /* all in one group; outputs/inputs one after another, like SOEM maps them */
     uint32_t ob = 0, ib = 0;
-    for (int s = 1; s <= 3; s++) {
+    for (int s = 1; s <= 5; s++) {
         L[s].group = 1; L[s].out_bit = ob; L[s].in_bit = ib;
         ob += T.bits[ECM_PDO_OUT][s]; ib += T.bits[ECM_PDO_IN][s];
     }
@@ -116,6 +123,15 @@ int main(void)
     check("IS620N 0x1701 CSV refused", ecm_axis_bind(&a, &T, L, &b, err, sizeof(err)), -1);
     check_str("  names axis, mode, object, direction", err, "axis 2:0 (slave 2): CSV needs 0x60FF:00 (output) in the process data");
     check_str("  lists what the slave maps", err, "slave 2 does not map 0x60FF:00; it maps:");
+
+    a = ax1(5, 0, ECM_MODE_CSP | ECM_MODE_CSV | ECM_MODE_PP | ECM_MODE_PV | ECM_MODE_HM);
+    check("IS620N 0x1702/0x1B02 five modes bind without 0x606C (0022)", ecm_axis_bind(&a, &T, L, &b, err, sizeof(err)), 0);
+    check("  0x606C not bound (velocity from 0x6064)", b.avel.bits, 0);
+    check("  0x60FF bound, 32 bit", b.tvel.bits, 32);
+    check("  0x6064 bound", b.apos.bits, 32);
+    check("  0x6060 in 0x1702 -> mode by PDO", b.mode_by_sdo, 0);
+    a = ax1(5, 0, ECM_MODE_CSV);
+    check("IS620N 0x1702/0x1B02 CSV only binds (0x6064 taken for the velocity)", ecm_axis_bind(&a, &T, L, &b, err, sizeof(err)) == 0 && b.apos.bits == 32, 1);
 
     a = ax1(2, 0, ECM_MODE_CSP | ECM_MODE_PP);
     check("IS620N 0x1701 CSP+PP (2 modes) refused: no 0x6060", ecm_axis_bind(&a, &T, L, &b, err, sizeof(err)), -1);

@@ -194,7 +194,11 @@ int ecm_axis_bind(const ecm_axis_cfg_t *a, const ecm_pdo_table_t *t, const ecm_p
     if (m & (ECM_MODE_CSV | ECM_MODE_PV)) {
         const char *w = (m & ECM_MODE_CSV) ? "CSV" : "PV";
         if (need(a, t, loc, 0x60FF, ECM_PDO_OUT, w, &b->tvel, 0, err, errlen)) return -1;
-        if (need(a, t, loc, 0x606C, ECM_PDO_IN, w, &b->avel, 0, err, errlen)) return -1;
+        /* 0022: 0x606C only shows the state (IS620N 0x1B02 does not map it); without
+         * it the velocity is d(0x6064)/dt, so 0x6064 is then needed instead */
+        need(a, t, loc, 0x606C, ECM_PDO_IN, w, &b->avel, 1, err, errlen);
+        if (!b->avel.bits && need(a, t, loc, 0x6064, ECM_PDO_IN, "CSV/PV without 0x606C", &b->apos, 0, err, errlen))
+            return -1;
     }
     if (m & ECM_MODE_CST) {
         if (need(a, t, loc, 0x6071, ECM_PDO_OUT, "CST", &b->ttq, 0, err, errlen)) return -1;

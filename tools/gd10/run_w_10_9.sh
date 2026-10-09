@@ -40,10 +40,18 @@
 #         slaves leave OP, both end in Switch on disabled
 #   w08   both axes CSP (1 - cos) 1/2 rev 0.2 Hz for DUR8 s (default 3600):
 #         0 WKC error, 0 overrun, DC LOCKED, no axis error, S6 at the end
-#   (CSV / PV need 0x60FF in the PDOs: ENI 0x1702/0x1B02 from TwinCAT, X-05b.)
+#   w09csv axis 1 CSV, velocity (1 - cos) up to VMAX/2 (30 rpm) at 0.5 Hz, 2
+#         periods: mode 9 at enable, moved 1 rev (+- RES/10), no error
+#   w10pv axis 1 PV: VMAX/2 for 2 s, ramps RES inc/s^2 (0x6083/0x6084), then 0:
+#         mode 3 at enable, moved ~1 rev (+- RES/5), no error
+#   w09csv / w10pv need 0x60FF in the PDOs: ENI=config/eni/eni_2servo_mm.enicfg
+#   (0x1702/0x1B02, TwinCAT 9/10, X-05b). That RxPDO also carries 0x607F: the
+#   master would send 0 every cycle over the InitCmd limit, so the runner adds
+#   --pdo-set S:0x607F:0=VMAX for every slave whose ENI maps it (patch 0022).
 #
 # Env: IFACE N ENI CASES RES (inc/rev, 8388608 measured 9/10) MAX_RPM TQ NOFRAME_MAX
 #      FERR (inc) JUMP (inc) HM_METHOD DUR8 YES SIM SB_PRIO SB_CPU IS620N_ESI LOG
+#      PDOSET_OFF=1 (negative control: 0x607F in the RxPDO left to 0 -> w00 FAILs)
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -79,6 +87,9 @@ PASS=0; FAIL=0
 # derived numbers: S4 step per 1 ms cycle = MAX_RPM in inc/ms (+10 %), max velocity in inc/s
 STEP=$(( RES * MAX_RPM / 60 / 1000 * 11 / 10 ))
 VMAX=$(( RES * MAX_RPM / 60 ))
+# CSV (0022): S4 refuses a velocity step above 1 % of VMAX per cycle (the (1 - cos)
+# velocity profile changes by <= VC pi hz / 1000 = 0.08 % per cycle)
+VSTEP=$(( VMAX / 100 )); VC=$(( VMAX / 2 ))
 A1=$RES; A2=$((RES / 2)); Q=$((RES / 4))
 
 say () { echo "$*" | tee -a "$REP"; }
@@ -120,6 +131,17 @@ LIM=$LOG/$(basename "$ENI" .enicfg)_limits.enicfg
 python3 "$ROOT/tools/eni/eni_limits.py" "$ENI" -o "$LIM" --torque-permille "$TQ" --ferr "$FERR" --max-vel "$VMAX" \
     | sed 's/^/- /' | tee -a "$REP"
 [ -s "$LIM" ] || { echo "eni_limits.py failed"; exit 2; }
+# 0022: 0x607F in an RxPDO (IS620N 0x1702) -> the master writes VMAX there every cycle,
+# else the 0 of the output image would replace the InitCmd limit once in OP
+PDOSET=
+for s7f in $(awk '$1 == "pdo" && $3 == "dir" && $4 == "out" && $8 == "0x607F" {print $2}' "$ENI" | sort -u); do
+    PDOSET="${PDOSET:+$PDOSET,}$s7f:0x607F:0=$VMAX"
+done
+if [ -n "$PDOSET" ] && [ "${PDOSET_OFF:-0}" = 1 ]; then   # negative control: w00 must FAIL (0x607F = 0)
+    say "- NEGATIVE CONTROL PDOSET_OFF=1: 0x607F is in the RxPDO but NOT written by the master"; PDOSET=
+fi
+[ -n "$PDOSET" ] && say "- 0x607F is in the RxPDO: --pdo-set $PDOSET (every cycle)"
+HAS_60FF=0; awk '$1 == "pdo" && $4 == "out" && $8 == "0x60FF"' "$ENI" | grep -q . && HAS_60FF=1
 
 # ---- SIM: two virtual IS620N with the limit objects ----
 SBP=
@@ -156,7 +178,8 @@ trap 'sim_stop' EXIT
 
 BASE=(--iface "$IFACE" --n "$N" --eni "$LIM" --pdo-scan --emcy-map "$ROOT/config/emcy/is620n.emcy")
 [ "$SIM" = 1 ] && BASE+=(--no-tx-ts)
-MOT=(--hook cia402 --cia402-lead 20 --axis-max-step "$STEP")
+[ -n "$PDOSET" ] && BASE+=(--pdo-set "$PDOSET")
+MOT=(--hook cia402 --cia402-lead 20 --axis-max-step "$STEP:$VSTEP")
 
 # run TAG DURATION "extra args" SCRIPT   (foreground)
 run () {
@@ -353,6 +376,27 @@ w07)
     sim_stop
     E=$LOG/er_w07.log
     common w07 0 1
+    ;;
+w09csv|w10pv)
+    if [ "$HAS_60FF" != 1 ]; then
+        bad "$c needs 0x60FF in the PDOs: ENI=$ROOT/config/eni/eni_2servo_mm.enicfg (now: $ENI)"
+        continue
+    fi
+    if [ $c = w09csv ]; then
+        say "## w09csv axis 1 CSV, velocity (1 - cos) up to $VC inc/s (~$((MAX_RPM / 2)) rpm), 0.5 Hz, 2 periods"
+        run w09csv 9 "--axis 1:0 --axis-modes csv" "1 enable 0; 2 vcos 0 $VC 0.5; 6 stop 0; 7 disable 0"
+        md=9; want=$RES; tol=$((RES / 10))
+    else
+        say "## w10pv axis 1 PV $VC inc/s for 2 s, ramps $RES inc/s^2"
+        run w10pv 9 "--axis 1:0 --axis-modes pv --axis-pp $VC:$RES:$RES" "1 enable 0; 2 pv 0 $VC; 4 pv 0 0; 6 disable 0"
+        md=3; want=$RES; tol=$((RES / 5))
+    fi
+    common $c 0
+    chk "$c Operation enabled once, in mode $md (0x6061 via the PDO)" \
+        "[ \$(n_oe 0) = 1 ] && grep -q 'axis 0 Switched on -> Operation enabled (.* mode $md)' $E"
+    p0=$(pos_oe 0); p1=$(pos_leave 0); mv=$(absdiff "$p1" "$p0")
+    chk "$c moved $mv inc (enable $p0 -> disable $p1; want $want +- $tol)" \
+        "[ -n \"$p0\" ] && [ -n \"$p1\" ] && [ \$(absdiff $mv $want) -le $tol ]"
     ;;
 w08)
     say "## w08 both axes CSP (1 - cos) 1/2 rev 0.2 Hz, $DUR8 s"

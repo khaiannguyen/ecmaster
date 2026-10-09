@@ -137,6 +137,8 @@ typedef struct {
     uint8_t  target, err, err_ds, reset_pulse, armed, mode_ok;
     int8_t   mode_req, mode_disp;
     int32_t  apos, avel;
+    int32_t  apos_prev;            /* 0022: velocity from position when 0x606C is not mapped */
+    uint8_t  apos_prev_ok;
     uint16_t ecode;
     int64_t  last_sp, last_delta;   /* last_delta: S3 negative control only */
     int64_t  last_sent;            /* S4: what went out last (pos or vel)  */

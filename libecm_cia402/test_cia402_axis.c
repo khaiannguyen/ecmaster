@@ -755,9 +755,54 @@ static void t08(void)
     check("11 statuswords decoded per the CiA 402 masks", 11 - bad, 11);
 }
 
+/* 0022: IS620N with 0x1702/0x1B02 (the TwinCAT ENI of 9/10): CSV without 0x606C,
+ * velocity actual = d(0x6064)/dt. The profile is is620n_min.prof with the
+ * assignment and SM sizes of that ENI (19 / 25 byte). */
+static void t09(void)
+{
+    printf("[T-09 IS620N 0x1702/0x1B02: CSV, velocity from position]\n");
+    char tmp[] = "/tmp/test_cia402_is620n_mm_XXXXXX";
+    int fd = mkstemp(tmp);
+    FILE *in = fopen(PROF "is620n_min.prof", "r"), *out = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!in || !out) { fprintf(stderr, "t09: profile copy\n"); exit(2); }
+    char ln[512];
+    while (fgets(ln, sizeof(ln), in)) {
+        if (!strncmp(ln, "sm 2 ", 5)) fputs("sm 2 start 0x1800 len 19 ctrl 0x64 en 1\n", out);
+        else if (!strncmp(ln, "sm 3 ", 5)) fputs("sm 3 start 0x1C00 len 25 ctrl 0x20 en 1\n", out);
+        else if (!strncmp(ln, "sub 0x1C12 1 ", 13)) fputs("sub 0x1C12 1 bits 16 rw_preop 0217\n", out);
+        else if (!strncmp(ln, "sub 0x1C13 1 ", 13)) fputs("sub 0x1C13 1 bits 16 rw_preop 021b\n", out);
+        else fputs(ln, out);
+    }
+    fclose(in); fclose(out);
+    rig(tmp, 1);
+    unlink(tmp);
+    add_axis(0, ECM_MODE_CSP | ECM_MODE_CSV);
+    check("bound without 0x606C", C.ax[0].b.avel.bits, 0);
+    tick(5);
+    cmd(0, ECM_CIA_OP_ENABLE, 0);
+    tick(10);
+    check("enabled (CSP)", st(0).ds, ECM_DS_OE);
+    check("  standing: velocity from position 0", st(0).avel, 0);
+    cmd(0, ECM_CIA_OP_SET_MODE, ECM_OPMODE_CSV);
+    tick(4);
+    int32_t pa = st(0).apos;
+    for (int i = 0; i < 100; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 5000); tick(1); }
+    check("CSV: mode display 9 (0x6061 in 0x1B02)", st(0).mode_disp, ECM_OPMODE_CSV);
+    check_true("CSV 5000 inc/s: ~ +500 inc in 100 ms (+- 10)", labs((long)(st(0).apos - pa) - 500) <= 10);
+    check("  velocity actual from position: 5000 inc/s", st(0).avel, 5000);
+    /* a lost frame: no difference across it (it would count 2 cycles as 1) */
+    K++; frame(); ecm_cia402_rt(&C, IO, K, K * 1000000, 0, 0);
+    ecm_cia402_setpoint(&C, 0, K + 1, 5000); tick(1);
+    check("  first frame after a lost one: 0, not a doubled step", st(0).avel, 0);
+    for (int i = 0; i < 3; i++) { ecm_cia402_setpoint(&C, 0, K + 2, 5000); tick(1); }
+    check("  then 5000 again", st(0).avel, 5000);
+    tick(5);
+    check("CSV underrun: velocity 0", st(0).avel, 0);
+}
+
 static const struct { const char *name; void (*fn)(void); } TESTS[] = {
     { "t01", t01 }, { "t02", t02 }, { "t03", t03 }, { "t04", t04 }, { "t05", t05 }, { "t06", t06 },
-    { "t07", t07 }, { "t08", t08 },
+    { "t07", t07 }, { "t08", t08 }, { "t09", t09 },
     { "p201", p201 }, { "p202", p202 }, { "p203", p203 }, { "p204", p204 },
     { "e201", e201 }, { "e202", e202 },
     { "s01", s01 }, { "s02", s02 }, { "s03", s03 }, { "s04", s04 }, { "s05", s05 }, { "s06", s06 }, { "s07", s07 },

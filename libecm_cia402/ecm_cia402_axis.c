@@ -221,6 +221,13 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
         a->sw = (uint16_t)ecm_pdo_get(&b->sw, io);
         if (b->apos.bits) a->apos = (int32_t)sext(ecm_pdo_get(&b->apos, io), b->apos.bits);
         if (b->avel.bits) a->avel = (int32_t)sext(ecm_pdo_get(&b->avel, io), b->avel.bits);
+        else if (b->apos.bits) {               /* 0022: no 0x606C (IS620N 0x1B02): d(pos)/dt, inc/s */
+            a->avel = a->apos_prev_ok
+                    ? (int32_t)((int64_t)(int32_t)((uint32_t)a->apos - (uint32_t)a->apos_prev) * 1000000000ll / (int64_t)c->cycle_ns)
+                    : 0;
+            a->apos_prev = a->apos;
+            a->apos_prev_ok = 1;
+        }
         if (b->err.bits)  a->ecode = (uint16_t)ecm_pdo_get(&b->err, io);
         if (b->mode_disp.bits) a->mode_disp = (int8_t)sext(ecm_pdo_get(&b->mode_disp, io), b->mode_disp.bits);
         else a->mode_disp = a->mode_req;       /* set by SDO / InitCmd before OP (10.3) */
@@ -228,6 +235,7 @@ static void axis_rt(ecm_cia402_t *c, ecm_cia402_axis_t *a, int idx, uint8_t *io,
         if (ds != a->ds) a->transitions++;
         a->ds = ds;
     }
+    if (!in_valid) a->apos_prev_ok = 0;        /* 0022: a lost frame breaks the difference */
     a->mode_ok = a->mode_req != 0 && a->mode_disp == a->mode_req;
 
     /* 2. latches: bus lost, drive fault */

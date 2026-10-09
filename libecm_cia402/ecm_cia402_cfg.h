@@ -18,7 +18,8 @@
  *   always      0x6040 controlword (out), 0x6041 statusword (in)
  *   CSP, PP     0x607A target position (out), 0x6064 position actual (in)
  *   HM          0x6064 position actual (in)
- *   CSV, PV     0x60FF target velocity (out), 0x606C velocity actual (in)
+ *   CSV, PV     0x60FF target velocity (out); 0x606C velocity actual (in), or
+ *               0x6064 when 0x606C is not mapped (velocity = d(pos)/dt, 0022)
  *   CST         0x6071 target torque (out), 0x6077 torque actual (in)
  *   > 1 mode    0x6060 / 0x6061 in the PDOs: the mode changes at run time.
  *               With one mode they may be absent: the mode is then set by

@@ -1483,7 +1483,7 @@ static int cia_parse(const char *src, cia_step_t *st, int max)
         if (k < 3) return -1;
         {   /* 10.9: an unknown op was silently ignored -- a typo must not pass on real drives */
             static const char *const OPS[] = { "enable", "disable", "quickstop", "reset", "mode", "sine", "cos",
-                                               "vel", "pos", "stop", "pp", "pv", "home" };
+                                               "vcos", "vel", "pos", "stop", "pp", "pv", "home" };
             size_t o = 0;
             while (o < sizeof(OPS) / sizeof(OPS[0]) && strcmp(OPS[o], s.op)) o++;
             if (o == sizeof(OPS) / sizeof(OPS[0])) {
@@ -1508,7 +1508,7 @@ static void *cia402_app(void)
     cia_step_t steps[64];
     int ns = g_cia_script ? cia_parse(g_cia_script, steps, 64) : 0, si = 0;
     if (ns < 0) { fprintf(stderr, "[CIA402-APP] cannot parse --cia402-script\n"); ns = 0; }
-    enum { P_NONE, P_SINE, P_VEL, P_POS, P_COS } kind[ECM_AXIS_MAX] = { 0 };
+    enum { P_NONE, P_SINE, P_VEL, P_POS, P_COS, P_VCOS } kind[ECM_AXIS_MAX] = { 0 };
     double amp[ECM_AXIS_MAX] = { 0 }, hz[ECM_AXIS_MAX] = { 0 }, vel[ECM_AXIS_MAX] = { 0 };
     int64_t base[ECM_AXIS_MAX] = { 0 };
     uint64_t t_start[ECM_AXIS_MAX] = { 0 }, next[ECM_AXIS_MAX] = { 0 }, last_rec[ECM_AXIS_MAX] = { 0 };
@@ -1541,6 +1541,9 @@ static void *cia402_app(void)
                 /* 10.9 (real drives): base + A (1 - cos)/2 -- starts and, after whole periods, ends
                  * at velocity 0 (a sine starts at full speed: a step the real drive has to follow) */
                 else if (!strcmp(s->op, "cos"))  { kind[a] = P_COS; amp[a] = s->a; hz[a] = s->b; base[a] = cs.apos; t_start[a] = k; next[a] = 0; }
+                /* 0022 (CSV): velocity A (1 - cos)/2 -- from 0 up to A and back to 0 every period;
+                 * after N whole periods the axis moved N A / (2 hz) and stands still */
+                else if (!strcmp(s->op, "vcos")) { kind[a] = P_VCOS; amp[a] = s->a; hz[a] = s->b; base[a] = 0; t_start[a] = k; next[a] = 0; }
                 else if (!strcmp(s->op, "vel"))  { kind[a] = P_VEL; vel[a] = s->a; next[a] = 0; }
                 else if (!strcmp(s->op, "pos"))  { kind[a] = P_POS; vel[a] = s->a; next[a] = 0; }   /* 10.6: absolute CSP target */
                 else if (!strcmp(s->op, "stop")) kind[a] = P_NONE;
@@ -1558,7 +1561,7 @@ static void *cia402_app(void)
                 for (; next[a] <= k + (uint64_t)g_cia_lead; next[a]++) {
                     double ph = 2.0 * M_PI * hz[a] * (double)(next[a] - t_start[a]) * (double)g_cia.cycle_ns * 1e-9;
                     int64_t v = kind[a] == P_VEL || kind[a] == P_POS ? (int64_t)llround(vel[a])
-                              : kind[a] == P_COS ? base[a] + (int64_t)llround(amp[a] * 0.5 * (1.0 - cos(ph)))
+                              : kind[a] == P_COS || kind[a] == P_VCOS ? base[a] + (int64_t)llround(amp[a] * 0.5 * (1.0 - cos(ph)))
                               : base[a] + (int64_t)llround(amp[a] * sin(ph));
                     if (ecm_cia402_setpoint(&g_cia, a, next[a], v)) { g_capp.full++; break; }
                     g_capp.pushed++;
@@ -2814,10 +2817,11 @@ int main(int argc, char **argv)
             char ms[64];
             ecm_axis_modes_str(a->modes, ms, sizeof(ms));
             fprintf(stderr, "ecm_run: axis %s: slave %u axis %u, modes %s, 0x6502 %s0x%08X; "
-                    "cw group %u bit %u, sw group %u bit %u%s%s, mode by %s\n",
+                    "cw group %u bit %u, sw group %u bit %u%s%s%s, mode by %s\n",
                     a->name, a->slave, a->n, ms, w > 0 ? "" : "unread ", (unsigned)sup,
                     b->cw.group, b->cw.bit, b->sw.group, b->sw.bit,
                     b->tpos.bits ? ", target pos" : "", b->tvel.bits ? ", target vel" : "",
+                    b->tvel.bits && !b->avel.bits ? " (velocity actual from 0x6064, no 0x606C)" : "",
                     b->mode_by_sdo ? "SDO/InitCmd (0x6060 not in the PDOs)" : "PDO");
         }
         /* Phase 10.5: one mode and no 0x6060 in the PDOs -> set it by SDO now
