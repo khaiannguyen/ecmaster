@@ -21,7 +21,9 @@ order; the statusword is the input word whose decoded drive states contain
 Switch on disabled -> Ready -> Switched on -> Operation enabled. The first
 match wins; ambiguity is reported. With several axes give the addresses.
 
-Trace: every change of (drive state, controlword & 0x008F) is a step;
+Trace: every change of (drive state, controlword & 0x008F) is a step,
+printed with Wireshark's frame number (every packet counts, 1-based) and
+the raw statusword; --ec LADDR adds the 0x603F error code of the step;
 the path is "SOD -06-> RTSO -07-> SO -0F-> OE -07-> SO ...".
 
 X-05 (plan GD10 §10): every transition our master made (from state,
@@ -55,6 +57,7 @@ def decode(sw):
 
 # ---------------------------------------------------------------- capture --
 def frames(path):
+    """(number, Ethernet frame); number = Wireshark's frame number (1-based, every packet)."""
     data = open(path, "rb").read()
     if len(data) < 24:
         raise ValueError("%s: too short for a capture" % path)
@@ -63,14 +66,15 @@ def frames(path):
         end = "<" if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1") else ">"
         if struct.unpack(end + "I", data[20:24])[0] != 1:
             raise ValueError("%s: not an Ethernet capture" % path)
-        off = 24
+        off, num = 24, 0
         while off + 16 <= len(data):
             _, _, incl, _ = struct.unpack(end + "IIII", data[off:off + 16])
-            yield data[off + 16:off + 16 + incl]
+            num += 1
+            yield num, data[off + 16:off + 16 + incl]
             off += 16 + incl
         return
     if magic == b"\x0a\x0d\x0d\x0a":                     # pcapng
-        off, end, linktypes = 0, "<", []
+        off, end, linktypes, num = 0, "<", [], 0
         while off + 12 <= len(data):
             btype = struct.unpack(end + "I", data[off:off + 4])[0]
             if btype == 0x0A0D0D0A:
@@ -84,13 +88,15 @@ def frames(path):
             if btype == 1:                               # interface description
                 linktypes.append(struct.unpack(end + "H", body[0:2])[0])
             elif btype == 6:                             # enhanced packet
+                num += 1
                 iface, _, _, cap, _ = struct.unpack(end + "IIIII", body[:20])
                 if iface < len(linktypes) and linktypes[iface] == 1:
-                    yield body[20:20 + cap]
+                    yield num, body[20:20 + cap]
             elif btype == 3:                             # simple packet
+                num += 1
                 if linktypes and linktypes[0] == 1:
                     plen = struct.unpack(end + "I", body[:4])[0]
-                    yield body[4:4 + plen]
+                    yield num, body[4:4 + plen]
             off += blen
         return
     raise ValueError("%s: neither pcap nor pcapng" % path)
@@ -126,9 +132,9 @@ def datagrams(frame):
 
 
 def words(path):
-    """Per process-data frame, in order: (sent: {laddr: u16}, reply: {laddr: u16})."""
+    """Per process-data frame, in order: (is_reply, {laddr: u16}, capture frame number)."""
     seq = []
-    for fr in frames(path):
+    for num, fr in frames(path):
         r = datagrams(fr)
         if not r:
             continue
@@ -145,19 +151,19 @@ def words(path):
                 continue
             for i in range(0, len(d) - 1):
                 m[a + i] = d[i] | d[i + 1] << 8
-        seq.append((is_reply, m))
+        seq.append((is_reply, m, num))
     return seq
 
 
 def find_cw(seq):
     cands = []
     addrs = set()
-    for rep, m in seq:
+    for rep, m, _ in seq:
         if not rep:
             addrs.update(m.keys())
     for a in sorted(addrs):
         want, k = [0x06, 0x07, 0x0F], 0
-        for rep, m in seq:
+        for rep, m, _ in seq:
             if rep or a not in m:
                 continue
             if (m[a] & CW_MASK) == want[k]:
@@ -171,12 +177,12 @@ def find_cw(seq):
 def find_sw(seq):
     cands = []
     addrs = set()
-    for rep, m in seq:
+    for rep, m, _ in seq:
         if rep:
             addrs.update(m.keys())
     for a in sorted(addrs):
         want, k = ["SOD", "RTSO", "SO", "OE"], 0
-        for rep, m in seq:
+        for rep, m, _ in seq:
             if not rep or a not in m:
                 continue
             if decode(m[a]) == want[k]:
@@ -187,7 +193,7 @@ def find_sw(seq):
     return cands
 
 
-def trace(path, cw_addr=None, sw_addr=None, quiet=False):
+def trace(path, cw_addr=None, sw_addr=None, quiet=False, ec_addr=None):
     seq = words(path)
     if not seq:
         raise ValueError("%s: no process data frames (LRW/LWR/LRD)" % path)
@@ -205,24 +211,27 @@ def trace(path, cw_addr=None, sw_addr=None, quiet=False):
         if len(c) > 1 and not quiet:
             print("  note: statusword candidates %s, taking 0x%X (give --sw)" % (" ".join("0x%X" % x for x in c), c[0]))
         sw_addr = c[0]
-    cw, st = None, None
-    steps = []            # (frame#, state, cw)
-    for i, (rep, m) in enumerate(seq):
+    cw, st, sw, ec = None, None, None, None
+    steps = []            # (capture frame number, state, cw, statusword, error code or None)
+    for rep, m, num in seq:
         if not rep and cw_addr in m:
             cw = m[cw_addr] & CW_MASK
         if rep and sw_addr in m:
-            st = decode(m[sw_addr])
+            sw = m[sw_addr]
+            st = decode(sw)
+            if ec_addr is not None and ec_addr in m:
+                ec = m[ec_addr]
         if cw is None or st is None:
             continue
-        if not steps or steps[-1][1:] != (st, cw):
-            steps.append((i, st, cw))
+        if not steps or (steps[-1][1], steps[-1][2]) != (st, cw):
+            steps.append((num, st, cw, sw, ec))
     return cw_addr, sw_addr, steps
 
 
 def transitions(steps):
     """(from state, controlword that was on the wire, to state) per state change."""
     out, prev = [], None
-    for _, st, cw in steps:
+    for _, st, cw, _, _ in steps:
         if prev is not None and st != prev[0]:
             out.append((prev[0], prev[1], st))
         prev = (st, cw)
@@ -231,7 +240,7 @@ def transitions(steps):
 
 def path_str(steps):
     s, last = [], None
-    for _, st, cw in steps:
+    for _, st, cw, _, _ in steps:
         if st != last:
             s.append(st if not s else "-%02X-> %s" % (cw_prev, st))
             last = st
@@ -241,7 +250,7 @@ def path_str(steps):
 
 def states_order(steps):
     o = []
-    for _, st, _ in steps:
+    for _, st, _, _, _ in steps:
         if not o or o[-1] != st:
             o.append(st)
     return o
@@ -264,16 +273,18 @@ def main():
     ap.add_argument("--ref", help="TwinCAT capture to compare with (X-05)")
     ap.add_argument("--ref-cw")
     ap.add_argument("--ref-sw")
+    ap.add_argument("--ec", help="logical address of 0x603F error code (printed per step)")
+    ap.add_argument("--ref-ec")
     a = ap.parse_args()
     try:
-        ca, sa, st = trace(a.capture, parse_addr(a.cw), parse_addr(a.sw))
+        ca, sa, st = trace(a.capture, parse_addr(a.cw), parse_addr(a.sw), ec_addr=parse_addr(a.ec))
         print("%s: controlword at 0x%X, statusword at 0x%X, %d steps" % (a.capture, ca, sa, len(st)))
         print("  path: " + path_str(st))
         if not a.ref:
-            for f, s, c in st:
-                print("  frame %6d  %-5s cw 0x%04X" % (f, s, c))
+            for f, s, c, w, e in st:
+                print("  frame %7d  %-5s cw 0x%04X sw 0x%04X%s" % (f, s, c, w, "" if e is None else "  0x603F 0x%04X" % e))
             return 0
-        rca, rsa, rst = trace(a.ref, parse_addr(a.ref_cw), parse_addr(a.ref_sw))
+        rca, rsa, rst = trace(a.ref, parse_addr(a.ref_cw), parse_addr(a.ref_sw), ec_addr=parse_addr(a.ref_ec))
         print("%s: controlword at 0x%X, statusword at 0x%X, %d steps" % (a.ref, rca, rsa, len(rst)))
         print("  path: " + path_str(rst))
     except (ValueError, OSError) as e:
