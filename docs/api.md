@@ -1,0 +1,135 @@
+# API chẩn đoán từ xa (`ecm_run --api`)
+
+Giai đoạn 11. Kế hoạch: `claude/giai_doan_11_ke_hoach.md`. Tài liệu này là **hợp đồng** của API: schema, đơn vị, quy tắc version. `ecm_diag`, web UI và node ROS2 sau này đều là client của nó.
+
+Trạng thái: **11.1 `stats.json`** (bản vá 0031). `ctl.sock` (`info`, `sdo_read`, `sdo_write`, `diag_dump`) là bước 11.2 và sẽ được bổ sung vào file này.
+
+## 1. Bật / tắt
+
+| Tuỳ chọn | Mặc định | Ý nghĩa |
+|---|---|---|
+| `--api` | tắt | Tạo thread `api` và file `stats.json`. Không có cờ này thì không có thread, không có handoff nào được ghi, không có file (D-06, A-01) |
+| `--api-dir DIR` | `/run/ecmaster` | Thư mục của `stats.json`. Phải là **tmpfs** (`/run`, `/dev/shm`): trên ext4 mỗi `rename` là một lần ghi journal (đo trong sandbox: 333 µs so với 14 µs) |
+| `--api-cpus LIST` | `1-2` | CPU của thread `api` (`1-2`, `1,2`, `2`). **CPU 3 bị từ chối** vì là core RT. CPU 0 vẫn chạy nhưng in cảnh báo, vì ngắt RX của i226 cố định ở đó (§0.5 của kế hoạch) |
+
+- Không tạo được `--api-dir`, không ghi được, hoặc `--api-cpus` sai thì `ecm_run` dừng **trước khi chạm bus** (A-07).
+- `/run` chỉ root ghi được. Khi chạy `ecm_run` bằng capabilities (không sudo), cần dùng `--api-dir` trỏ vào thư mục ghi được (ví dụ `/dev/shm/ecmaster`). Ở GĐ12, unit systemd sẽ tạo `/run/ecmaster` bằng `RuntimeDirectory=`.
+- `--api-dir` hoặc `--api-cpus` mà không kèm `--api` thì bị từ chối, để tránh tưởng API đang bật.
+
+## 2. Dữ liệu đi từ đâu
+
+```
+RT thread (core 3) ──H3──┐      2 slot, ghi đè-không-chờ (libecmaster/api)
+telemetry          ──H1──┤
+monitor            ──H2──┼──> thread api (core 1-2, 10 Hz) ──> stats.json (tmp + rename)
+lớp CiA402 (seqlock) ────┘   (thread api đọc thẳng, seqlock cho phép nhiều reader)
+```
+
+| Handoff | Producer | Nội dung | Nhịp |
+|---|---|---|---|
+| H1 | telemetry | 4 histogram: `wake_jitter`, `prep_send`, `occupancy`, `turnaround`; ring drop | 10 Hz |
+| H2 | monitor | bộ đếm lỗi ESC (0x0300–0x0313), AL, DL status, EMCY (4 bản tin mới nhất), recovery, `findings` | 10 Hz |
+| H3 | RT | bộ đếm nhóm (cycles, WKC theo lớp, overrun), DC, `txtime_*`, `tai_steps`, số lần gọi hook | 10 Hz |
+| H3 | RT | histogram DC \|e\| (8 KB) và histogram hook | mỗi cái 1 Hz, lệch pha |
+
+**Ngoại lệ của §0.2 mục 1 (chốt 9/10/2026).** H3 là nhánh duy nhất được thêm vào RT thread:
+- Chỉ chạy khi có `--api`.
+- Nằm sau `ring_push`, ngoài đoạn đo occupancy, và không bao giờ chờ: khi cả hai slot đều đầy thì bỏ bản cập nhật đó và tăng `drops`.
+- Pha publish: scalar ở giữa mỗi khe 100 ms; histogram DC ở 1/4 giây và histogram hook ở 3/4 giây, cả hai đều lệch khỏi tick của scalar.
+- Chi phí được đo ở D-01 (bước 11.5) trên Jetson.
+
+Khi chương trình dừng:
+1. RT thoát vòng lặp và giao giá trị cuối (thử lại tối đa ~2 s, ngoài đường cyclic).
+2. telemetry và monitor giao giá trị cuối trước khi thoát.
+3. `main` join hai thread đó, bật `g_api_stop`, rồi join thread `api`.
+4. Thread `api` ghi lần cuối với `"final": true`.
+
+Nhờ thứ tự này, file cuối khớp với bản tổng kết in ra ở cuối run (D-10, A-04).
+
+## 3. Cách đọc file
+
+- Mỗi lần đọc: mở, đọc hết, đóng. File được thay bằng `rename`, nên reader luôn thấy bản cũ nguyên vẹn hoặc bản mới nguyên vẹn, không bao giờ thấy nửa file (A-03; đối chứng âm ghi tại chỗ: 883 795 lượt đọc rách).
+- **Phát hiện stale:** `pub_seq` tăng 1 mỗi lần ghi. `mono_ns` là `CLOCK_MONOTONIC` của máy chạy `ecm_run` và chỉ so được trên cùng máy đó; client từ xa dùng `pub_seq` cùng đồng hồ của chính nó. Mỗi phần còn có tuổi riêng trong `sources.{rt,telemetry,monitor}.mono_ns`. Ví dụ: monitor bị chặn vài giây khi recovery thì `sources.monitor` cũ đi, trong khi `pub_seq` vẫn tăng.
+- `ecm_run` chết (`kill -9`) thì file cuối vẫn nguyên vẹn và có `"final": false` (A-08). Khi đó `pub_seq` đứng yên.
+- `"final": true` nghĩa là run đã kết thúc bình thường và số liệu là số cuối.
+
+## 4. Schema v1
+
+Khoá tiếng Anh. Mọi **mã/thanh ghi** (statusword, 0x603F, AL code, DL status, vendor/product, EMCY) là chuỗi hex `"0x1637"`; bộ đếm là số nguyên. Một khoá **vắng mặt** nghĩa là nguồn của nó chưa publish lần nào, hoặc không áp dụng; một khoá có giá trị **`null`** nghĩa là có chỗ cho nó nhưng không có dữ liệu.
+
+| Khoá | Kiểu | Ghi chú |
+|---|---|---|
+| `schema` | 1 | xem §6 |
+| `pub_seq`, `mono_ns`, `pid` | int | §3 |
+| `final` | bool | §2 |
+| `buckets` | object | định nghĩa bucket histogram (§5), có trong mọi file |
+| `bus.fsm` | `STARTING` `RUN` `DEGRADED` `LOST` `RECOVER` | `STARTING` khi RT chưa publish lần nào |
+| `bus.cycle_ns`, `bus.link` (`af_packet`/`etf`), `bus.n_slaves` | | |
+| `bus.ports[]` | **list** | v1.0 có 1 phần tử `primary`; GĐ13 thêm cổng phụ (§1.6 kế hoạch). Không có `bus.iface` |
+| `ports[].name`, `iface`, `link` (`up`/`down`/`unknown`) | | `link` lấy từ `operstate` |
+| `ports[].tx`, `noframe` | int | frame cyclic gửi qua cổng / không có reply. Khi chỉ có một cổng: tổng qua các nhóm. **Không có `rx`** |
+| `ports[].crc_err`, `rx_missed`, `carrier_changes` | int \| null | sysfs `statistics/rx_crc_errors`, `rx_missed_errors`, `carrier_changes`, đọc mỗi 1 s bởi thread `api`. `null` = driver không có |
+| `bus.path` | `single` | v1.1 thêm `ring_closed`, `ring_open` |
+| `groups[]` | list | `name` (`motion`/`io`), `slaves[]` (vị trí SOEM), `cycle_ns`, rồi khi RT đã publish: `cycles`, `ok`, `noframe`, `zero`, `partial`, `over`, `max_run_bad`, `overrun`. Luôn có `ok+noframe+zero+partial+over == cycles` |
+| `hist.{wake_jitter,prep_send,turnaround,occupancy,hook}` | object \| null | kiểu `log20_100ns_v1`, đơn vị ns, có thêm `count`, `sum`, `min`, `max` |
+| `hist.dc_err` | object \| null | DC \|e\|, kiểu `lin1us_v1`, chỉ tính mẫu sau 5 s đầu (như `[DC]` cuối run). `null` khi DC tắt |
+| `dc` | object \| null | `state` (`UNANCHORED`/`ACQUIRE`/`LOCKED`), `ref_pos`, `locks`, `unlocks`, `clamps`, `wraps`, `stale`, `err_ns` (sai pha gần nhất) |
+| `link` | object | `etf_missed`, `etf_invalid`; khi SOEM có bản vá txtime thì thêm `txtime_late`, `txtime_bypass`, `send_err`, `tai_steps` |
+| `slaves[]` | list | luôn có: `pos`, `vendor`, `product`, `revision`, `name` |
+| `slaves[]` (khi diag bật và slave đã trả lời) | | `station`, `al` (`INIT`/`PREOP`/`BOOT`/`SAFEOP`/`OP`), `al_err` (bit 0x10), `al_code`, `dl_status` |
+| `slaves[]` (khi diag bật) | | `answered`, `inv[4]`, `rx_err[4]`, `fwd_err[4]`, `lost_link[4]` (theo cổng 0–3, thanh ghi 0x0300–0x0313, cộng dồn từ đầu run), `pu_err`, `pdi_err` |
+| `slaves[]` (khi monitor đã publish) | | `policy` (`none`/`ack`/`op`/`reconfig`: quyết định gần nhất), `recover` (`ok`/`retrying`/`failed`/`failed_config`), `attempts`, `recoveries`, `initcmd_failed` (số lần InitCmd của ENI thất bại khi reconfigure), `emcy_count`, `emcy[]` (≤ 4, mới nhất trước: `mono_ns`, `tick`, `code`, `reg`, `data` 10 ký tự hex, `class`) |
+| `axes[]` | list | chỉ khi `--hook cia402`. Luôn có `name`, `slave`, `n`; khi đọc được seqlock thì thêm `state` (§7), `sw`, `cw`, `mode` (yêu cầu), `mode_display` (0x6061), `err` (§7), `error_code`, `error_src` (`603F`/`EMCY`/`none`), `error_text` (từ `--emcy-map`), `pos`, `vel`, `tick`, `used`, `late`, `underruns`, `dropped`, `step_refused`, `pp_acked`, `homed` |
+| `rt` | object | `dma_latency_held`, `hook` (tên \| null), `hook_calls`, `api_cpus` |
+| `findings[]` | list | `type`, `sev` (`info`/`warn`/`error`), `text`, `a`, `b`, `c`, `count`, `active`. `type` gồm các phát hiện của `ecm_diag_analyze` (§7) và `recover_failed`, `recover_failed_config` |
+| `sources` | object | `rt` / `telemetry` / `monitor`: `seq`, `mono_ns` (\| null); telemetry có thêm `ring_drops`, monitor có thêm `diag`, `diag_reads`, `diag_frames_lost`, `emcy_total`, `emcy_lost`; `handoff_drops` là tổng số cập nhật bị bỏ ở các handoff |
+
+`error_code` và `error_src` theo cùng quy tắc với dòng `[AXIS]` của 10.8 (`ecm_cia402_axis_code`). 0x603F ưu tiên trước. EMCY chỉ được dùng khi trục đang ở Fault và lỗi gán được cho đúng trục đó. IS620N không gửi EMCY, nên mã lỗi của nó đến từ 0x603F (ví dụ 0x0E08 = Er.E08).
+
+Đã bỏ khỏi v1 (so với bản nháp §2.3 cũ): `ports[].rx`, `axes[].tracking_max`. Lý do của `tracking_max`: số này chỉ có trong driver test `--cia402-script`; khi node ROS2 là nguồn setpoint thì master không tính được.
+
+## 5. Histogram
+
+Cả hai kiểu đều **cộng dồn từ đầu run**. Muốn phân vị theo cửa sổ thời gian, client lấy hiệu `counts` giữa hai lần đọc.
+
+`counts` **bỏ các số 0 ở cuối**: phần tử thiếu được hiểu là 0, và `sum(counts) == count`.
+
+| Kiểu | Định nghĩa |
+|---|---|
+| `log20_100ns_v1` (ns) | `buckets.log20_100ns_v1.upper[i]`, i = 0…119: cận trên của bucket i, 20 bucket mỗi thập phân, từ 100 ns tới 100 ms (`ecm_hist_t`). Bucket 0 = mọi giá trị ≤ upper[0] (kể cả < 100 ns); bucket i = (upper[i−1], upper[i]]; bucket 120 = lớn hơn 100 ms |
+| `lin1us_v1` (µs) | bin b = \|e\| trong [b, b+1) µs, b = 0…999; bin 1000 = ≥ 1000 µs (`n` = 1001) |
+
+Phân vị p: cộng dồn `counts` tới khi vượt `p × count`; giá trị là `upper[i]` (log), hoặc b (lin, đúng như dòng `[DC] |e| p99.99` cuối run).
+
+## 6. Version và tương thích
+
+- **Client phải bỏ qua khoá lạ và giá trị enum lạ** (ví dụ `bus.path = "ring_open"`, một `findings[].type` mới, một trạng thái bus mới).
+- Các thay đổi **không** tăng `schema`: thêm khoá, thêm giá trị enum, thêm phần tử vào `ports[]`.
+- Các thay đổi **phải** tăng `schema`: đổi tên hoặc xoá khoá, đổi nghĩa hay đơn vị, đổi kiểu (số ↔ chuỗi, object ↔ list), đổi định nghĩa bucket. Riêng bucket thì thêm kiểu mới với tên mới (`…_v2`) thay vì sửa kiểu cũ.
+- Tên khoá enum ổn định nằm trong code (`ecm_api_*_key`, `ecm_cia402_ds_key/err_key`). Test offline bắt lỗi khi enum gốc lớn thêm mà chưa có khoá tương ứng (`_Static_assert`, K11).
+
+## 7. Giá trị enum
+
+- `axes[].state`: `UNKNOWN`, `NOT_READY_TO_SWITCH_ON`, `SWITCH_ON_DISABLED`, `READY_TO_SWITCH_ON`, `SWITCHED_ON`, `OPERATION_ENABLED`, `QUICK_STOP_ACTIVE`, `FAULT_REACTION_ACTIVE`, `FAULT`.
+- `axes[].err` (lỗi trục của `libecm_cia402`, xem `docs/cia402.md`): `none`, `timeout`, `fault`, `bus_lost`, `mode`, `in_fault`, `dropped` (S1), `step` (S4), `shutdown` (S6), `handshake` (PP), `homing`, `config`, `slave_failed`.
+- `findings[].type`: `chain_broken`, `missing_link_up`, `no_address`, `cable_fwd`, `cable_ret`, `fwd_no_origin`, `pu_only`, `pdi`, `lost_link`, `state`, `saturated`, `diag_lost`, `emcy`, `emcy_lost`, `recover_failed`, `recover_failed_config`.
+
+## 8. Kiểm thử
+
+| Lệnh | Nội dung |
+|---|---|
+| `make -C libecmaster/api test test_asan` | handoff, khoá enum, JSON (escape, tràn bộ đệm, cắt số 0), sysfs giả, `--api-cpus`, publish không rách (160 kiểm) |
+| `make -C libecmaster/api negctl` | đối chứng âm: ghi tại chỗ (không `rename`) **phải** cho đọc rách |
+| `make -C libecmaster/api tsan` | handoff dưới TSan; đối chứng âm `ECM_API_HO_BROKEN` (state publish relaxed) **phải** bị TSan báo. Test tự báo FAIL nếu consumer không chạy song song đủ 1000 lần get (tránh PASS do may mắn) |
+| `make -C libecmaster/api schema` | tài liệu mẫu qua `tools/gd11/stats_check.py`; `selftest`: 16 tài liệu hỏng **phải** bị từ chối, khoá lạ **phải** được chấp nhận |
+| `sudo -E tools/gd11/run_api_11_1.sh` | A-01…A-10 trên soft_bus (2 IS620N ảo, `is620n.cal`, `eni_2servo_mm`) |
+
+`stats_check.py compare FILE LOG` so file cuối với bản tổng kết của `ecm_run` (D-10): nhóm, WKC theo lớp, DC, hook, 4 histogram telemetry, trục CiA402, diag, policy.
+
+## 9. Hạn chế đã biết (11.1)
+
+- Không có lệnh nào qua API (11.2 thêm `ctl.sock`, chỉ đọc và `sdo_write` có allowlist). Không đổi trạng thái bus, không điều khiển trục.
+- `stats.json` 10 Hz. Cần nhanh hơn (ROS2) thì thêm shm và thư viện đọc C, không đổi schema.
+- `crc_err` / `rx_missed` là bộ đếm của NIC, không phải của ESC. Lỗi phía slave nằm ở `slaves[].rx_err` / `inv`.
+- `sources.*.mono_ns` không so được giữa hai máy.
+- Chi phí trên RT thread chỉ đo trên Jetson (D-01, STRICT=1). Số trong sandbox chỉ chứng minh chức năng.

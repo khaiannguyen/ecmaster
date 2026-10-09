@@ -21,17 +21,18 @@ PDO_SRC = ../../libecmaster/pdo/ecm_pdo.c ../../libecmaster/pdo/ecm_pdo_soem.c  
 CIA402_SRC = ../../libecm_cia402/ecm_cia402_cfg.c                                    # Phase 10.3
 XCHG_SRC = ../../libecmaster/xchg/ecm_xchg.c                                         # Phase 10.4
 CIA402AX_SRC = ../../libecm_cia402/ecm_cia402_axis.c ../../libecm_cia402/ecm_cia402_diag.c   # Phase 10.5, 10.8
+API_SRC = ../../libecmaster/api/ecm_api.c                                              # Phase 11.1
 
 all: $(TARGET)
 
-$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(CIA402_SRC) $(XCHG_SRC) $(CIA402AX_SRC) $(SOEM_LIB)
+$(TARGET): ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(CIA402_SRC) $(XCHG_SRC) $(CIA402AX_SRC) $(API_SRC) $(SOEM_LIB)
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
 	@echo "Using SOEM lib: $(SOEM_LIB)"
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
 # Phase 10.6: negative control of S6 (shutdown sequence) through ecm_run:
 # same program with that latch off. Test builds only; never installed.
-ecm_run_neg6: ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(CIA402_SRC) $(XCHG_SRC) $(CIA402AX_SRC) $(SOEM_LIB)
+ecm_run_neg6: ecm_run.c $(TELEMETRY_SRC) $(MAILBOX_SRC) $(DC_SRC) $(DIAG_SRC) $(POLICY_SRC) $(ENI_SRC) $(PDO_SRC) $(CIA402_SRC) $(XCHG_SRC) $(CIA402AX_SRC) $(API_SRC) $(SOEM_LIB)
 	$(CC) $(CFLAGS) -DECM_CIA402_BROKEN='(1<<6)' -o $@ $(filter %.c,$^) $(SOEM_INC) $(TELEMETRY_INC) -I../../libecmaster/diag $(SOEM_LIB) -lpthread -lrt -lm
 
 setcap: $(TARGET)

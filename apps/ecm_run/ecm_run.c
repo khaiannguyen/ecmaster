@@ -183,6 +183,7 @@
 #endif
 #include "libecmaster/diag/ecm_diag_soem.h"
 #include "libecmaster/policy/ecm_policy.h"    /* Phase 7.3 */
+#include "libecmaster/api/ecm_api.h"          /* Phase 11.1 */
 #include <stdatomic.h>
 
 #define IOMAP_SIZE   (256 * 1024)   /* see IOMAP_SIZE note in the Phase 3 file header */
@@ -612,6 +613,132 @@ typedef struct {
 #define MAX_SNAPSHOTS 32768
 static snapshot_t g_snapshots[MAX_SNAPSHOTS];
 static int        g_snapshot_count = 0;
+
+/* ==========================================================================
+ * Phase 11.1: remote diagnostics API, stats.json (docs/api.md). Off unless
+ * --api: then no thread, no handoff write, no file.
+ * Producers hand their own data to the `api` thread through two-slot
+ * handoffs (libecmaster/api, never waiting):
+ *   H1 telemetry -> api  histograms of the RT samples, 10 Hz
+ *   H2 monitor   -> api  slave diagnostics, recovery, EMCY, findings, 10 Hz
+ *   H3 RT        -> api  group/DC/link counters 10 Hz, DC |e| and hook
+ *                        histograms 1 Hz each at other ticks. The one
+ *                        exception to plan §0.2 item 1 (agreed 9/10/2026):
+ *                        a branch after ring_push, outside the occupancy
+ *                        measurement; D-01 measures what it costs.
+ * CiA402 axes are read by the api thread itself (seqlock, many readers).
+ * ========================================================================== */
+_Static_assert(ECM_API_DC_BINS == DC_HIST_US, "stats.json dc_err bins = DC_HIST_US");
+_Static_assert(ECM_API_MAX_AXES >= ECM_AXIS_MAX, "every axis fits in stats.json");
+static uint64_t ts_to_ns(const struct timespec *t);
+#define API_PERIOD_NS 100000000L                  /* 10 Hz */
+static int              g_api_on;                 /* --api */
+static const char      *g_api_dir  = "/run/ecmaster";
+static const char      *g_api_cpus = "1-2";       /* never CPU0 (i226 IRQ), never 3 (RT) */
+static uint64_t         g_api_cpumask;
+static atomic_int       g_api_stop;
+static ecm_api_ho_t     g_ho_rt, g_ho_dc, g_ho_hook, g_ho_tel, g_ho_mon;
+static ecm_api_rt_t     g_ho_rt_s[2];
+static ecm_api_rt_dc_t  g_ho_dc_s[2];
+static ecm_api_rt_hook_t g_ho_hook_s[2];
+static ecm_api_tel_t    g_ho_tel_s[2];
+static ecm_api_mon_t    g_ho_mon_s[2];
+static ecm_api_stats_t  g_api_st;                 /* main fills the fixed part, then api thread only */
+static uint64_t         g_api_rt_seq, g_api_dc_seq, g_api_hook_seq;   /* RT only */
+static long             g_api_tps = 1, g_api_p = 1, g_api_ph_rt, g_api_ph_dc, g_api_ph_hook;
+static struct {                                   /* api thread only, printed after its join */
+    uint64_t   writes, errors, json_full, bytes_max;
+    int        last_err;
+    ecm_hist_t pass_hist;                         /* one collect + JSON + write, ns */
+    double     cpu_s;
+} g_api_out;
+
+enum { API_RT = 1, API_DC = 2, API_HOOK = 4 };
+
+static void api_rt_group(ecm_api_rt_group_t *o, const group_stats_t *g)
+{
+    o->cycles = g->cycles;
+    o->overrun = g->overrun;
+    o->mismatch = g->wkc_mismatch;
+    for (int c = 0; c < 5 && c < ECM_WKC_NCLASS; c++) o->wkc[c] = g->wkcs.count[c];
+    o->max_run_bad = g->wkcs.max_run_bad;
+}
+
+/* RT thread (and main after the loop): which parts are due at this tick */
+static inline int api_rt_due(uint64_t tick)
+{
+    int m = 0;
+    if ((long)(tick % (uint64_t)g_api_p) == g_api_ph_rt) m |= API_RT;
+    if ((long)(tick % (uint64_t)g_api_tps) == g_api_ph_dc) m |= API_DC;
+    if ((long)(tick % (uint64_t)g_api_tps) == g_api_ph_hook) m |= API_HOOK;
+    return m;
+}
+
+/* H3. RT thread only: every source below is written by this thread alone.
+ * Returns the parts that were dropped (both slots still full). */
+static int api_rt_publish(uint64_t tick, int want)
+{
+    int dropped = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (want & API_RT) {
+        ecm_api_rt_t *r = ecm_api_ho_begin(&g_ho_rt);
+        if (!r) dropped |= API_RT;
+        else {
+            r->seq = ++g_api_rt_seq; r->mono_ns = ts_to_ns(&now); r->tick = tick;
+            r->bus_state = (int)g_bus.state;
+            r->ngroups = g_io_active ? 2 : 1;
+            api_rt_group(&r->g[0], &motion);
+            if (g_io_active) api_rt_group(&r->g[1], &io);
+            r->dc_on = g_dc_enabled;
+            r->dc_state = (int)g_dc.state;
+            r->dc_locks = g_dc.locks; r->dc_unlocks = g_dc.unlocks; r->dc_clamps = g_dc.clamps;
+            r->dc_wraps = g_dc.wraps; r->dc_stale = g_dc.stale; r->dc_err_ns = g_dc.err_ns;
+#ifdef ECMASTER_SOEM_TXTIME_PATCH
+            r->txtime_have = 1;
+            r->txtime_late = ctx.port.txtime_late; r->txtime_bypass = ctx.port.txtime_bypass;
+            r->send_err = ctx.port.txtime_send_err;
+#endif
+            r->tai_steps = g_tai_steps;
+            r->hook_calls = g_hook_calls;
+            r->ho_drops = g_ho_rt.drops + g_ho_dc.drops + g_ho_hook.drops;
+            ecm_api_ho_commit(&g_ho_rt);
+        }
+    }
+    if ((want & API_DC) && g_dc_enabled) {
+        ecm_api_rt_dc_t *d = ecm_api_ho_begin(&g_ho_dc);
+        if (!d) dropped |= API_DC;
+        else {
+            d->seq = ++g_api_dc_seq; d->mono_ns = ts_to_ns(&now);
+            d->h.have = 1; d->h.n = g_dcstat.n;
+            memcpy(d->h.b, g_dcstat.hist, sizeof(d->h.b));
+            ecm_api_ho_commit(&g_ho_dc);
+        }
+    }
+    if ((want & API_HOOK) && g_hook) {
+        ecm_api_rt_hook_t *h = ecm_api_ho_begin(&g_ho_hook);
+        if (!h) dropped |= API_HOOK;
+        else {
+            h->seq = ++g_api_hook_seq; h->mono_ns = ts_to_ns(&now);
+            ecm_api_hist_from(&h->h, &g_hook_hist);
+            ecm_api_ho_commit(&g_ho_hook);
+        }
+    }
+    return dropped;
+}
+
+/* Last values, once the producer has stopped: retry until the api thread has
+ * made room (it drains every 100 ms), at most ~2 s. Not on the cyclic path. */
+#define API_FINAL_TRIES 1000
+static void api_rt_publish_final(uint64_t tick)
+{
+    int want = API_RT | API_DC | API_HOOK;
+    for (int t = 0; t < API_FINAL_TRIES && want; t++) {
+        want = api_rt_publish(tick, want);
+        if (want) usleep(2000);
+    }
+    if (want) fprintf(stderr, "ecm_run: [API] final RT counters not handed over (parts 0x%x)\n", want);
+}
 
 /* ---- timespec helpers ---- */
 static void ts_add_ns(struct timespec *ts, int64_t ns)
@@ -1227,6 +1354,25 @@ static int open_passive_rx_socket(const char *ifname)
  * TX completion was simply still waiting in the error queue. */
 #define TELEMETRY_POLL_US 2000
 
+/* H1, telemetry thread only (it owns the four histograms) */
+static int api_tel_publish(void)
+{
+    ecm_api_tel_t *t = ecm_api_ho_begin(&g_ho_tel);
+    if (!t) return 0;
+    static uint64_t seq;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    t->seq = ++seq; t->mono_ns = ts_to_ns(&now);
+    ecm_api_hist_from(&t->wake_jitter, &g_telemetry.wake_jitter_hist);
+    ecm_api_hist_from(&t->prep_send,   &g_telemetry.prep_send_hist);
+    ecm_api_hist_from(&t->occupancy,   &g_telemetry.occupancy_hist);
+    ecm_api_hist_from(&t->turnaround,  &g_telemetry.turnaround_hist);
+    t->ring_drops = g_ring.drop_count;
+    t->ho_drops = g_ho_tel.drops;
+    ecm_api_ho_commit(&g_ho_tel);
+    return 1;
+}
+
 static void *telemetry_thread_fn(void *arg)
 {
     (void)arg;
@@ -1412,6 +1558,11 @@ static void *telemetry_thread_fn(void *arg)
             }
         }
 
+        if (g_api_on) {                                         /* Phase 11.1 H1, ~10 Hz */
+            static int api_div;
+            if (++api_div >= (int)(API_PERIOD_NS / 1000 / TELEMETRY_POLL_US)) { api_div = 0; api_tel_publish(); }
+        }
+
         if (++print_counter >= 1000000 / TELEMETRY_POLL_US) {   /* ~once/second */
             print_counter = 0;
             hist_print(&g_telemetry.wake_jitter_hist, "wake_jitter");
@@ -1463,6 +1614,10 @@ static void *telemetry_thread_fn(void *arg)
     hist_print(&g_telemetry.occupancy_hist,   "occupancy");
     hist_print(&g_telemetry.turnaround_hist,  "turnaround");
     fflush(stdout);   /* before the main thread's stderr report (soak 10.1: a line was cut by [DIAG]) */
+    if (g_api_on) {                                   /* Phase 11.1: the final histograms */
+        int t = 0;
+        while (!api_tel_publish() && ++t < API_FINAL_TRIES) usleep(2000);
+    }
 
     return NULL;
 }
@@ -1794,16 +1949,20 @@ static void cia402_axis_watch(void)
     }
 }
 
+static ecm_diag_finding_t g_find[128];   /* monitor only: last analysis (Phase 11.1: also for stats.json) */
+static int                g_nfind;
+
 static void diag_process_pending(void)
 {
     static ecm_diag_raw_t raw;
-    static ecm_diag_finding_t f[128];
+    ecm_diag_finding_t *f = g_find;
     static char text[65536];
     static const char *const names[2] = { "motion", "io" };
     int got = 0;
     while (ecm_diag_handoff_get(&g_diag_ho, &raw)) { ecm_diag_ingest(&g_diag, &raw); got = 1; }
     if (!got) return;
     int nf = ecm_diag_analyze(&g_diag, f, 128);
+    g_nfind = nf;
     size_t len = ecm_diag_format(&g_diag, f, nf, names, "ecm_run", al_code_str, text, sizeof(text));
     if (g_hook == hook_cia402 && g_cia.naxes && len + 64 < sizeof(text)) {      /* Phase 10.8 */
         len += (size_t)snprintf(text + len, sizeof(text) - len, "\nCiA402 axes:\n");
@@ -1886,6 +2045,7 @@ static void dc_restore_slave(int s)
  * wrote by hand at startup that a power cycle erases. Registered only for
  * the duration of one reconfiguration. */
 static int g_reconf_eni_fail;       /* Phase 10.0: PS InitCmds failed in the last reconfiguration */
+static uint64_t g_initcmd_failed[ECM_SREC_MAX_SLAVES + 1];   /* Phase 11.1: monitor only, per slave */
 static int g_recover_cyclic_mbx;    /* --recover-cyclic-mbx: pre-0018 behaviour (negative control) */
 
 static int reconfig_po2so_hook(ecx_contextt *c, uint16 slave)
@@ -1946,6 +2106,7 @@ static void recover_config_failed(int s)
         g_srec.s[s - 1].failed = 1;
         g_srec.s[s - 1].failed_config = 1;
         g_srec.s[s - 1].failed_code = 0;
+        g_initcmd_failed[s]++;
     }
     fprintf(stderr, "ecm_run: [RECOVERY] slave %d: ENI CoE InitCmd(s) failed during reconfiguration -> "
             "kept in PRE-OP, FAILED(config), no OP (its PDO layout is not the ENI's), needs an operator\n", s);
@@ -2152,6 +2313,238 @@ static void print_events(void)
     }
 }
 
+/* ---- Phase 11.1: H2, monitor thread only (g_diag, g_srec, g_find) ---- */
+static int api_mon_publish(void)
+{
+    ecm_api_mon_t *m = ecm_api_ho_begin(&g_ho_mon);
+    if (!m) return 0;
+    static uint64_t seq;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    m->seq = ++seq; m->mono_ns = ts_to_ns(&now);
+    m->diag_on = g_diag_enabled;
+    m->diag_reads = g_diag.reads; m->diag_frames_lost = g_diag.frames_lost;
+    m->emcy_total = g_diag.emcy_total; m->emcy_lost = g_diag.emcy_lost;
+    m->n = ctx.slavecount < ECM_API_MAX_SLAVES ? ctx.slavecount : ECM_API_MAX_SLAVES;
+    for (int i = 0; i < m->n; i++) {
+        ecm_api_mon_slave_t *o = &m->s[i];
+        const ecm_diag_slave_t *d = &g_diag.s[i];
+        memset(o, 0, sizeof(*o));
+        if (i < g_diag.n) {
+            o->station = d->station_addr; o->al_status = d->al_status; o->al_code = d->al_code;
+            o->dl_status = d->dl_status; o->answered = d->answered; o->ever_answered = d->ever_answered;
+            for (int p = 0; p < 4; p++) {
+                o->inv[p] = d->tot.inv[p]; o->rx[p] = d->tot.rx[p];
+                o->fwd[p] = d->tot.fwd[p]; o->lost[p] = d->tot.lost[p];
+            }
+            o->pu = d->tot.pu; o->pdi = d->tot.pdi;
+            o->emcy_count = d->emcy_count;
+            for (int k = 0; k < ECM_API_EMCY_KEEP; k++) {
+                const ecm_emcy_t *e = ecm_diag_emcy(&g_diag, i + 1, k);
+                if (!e) break;
+                o->emcy[k] = (ecm_api_emcy_t){ .mono_ns = e->t_ns, .tick = e->tick, .code = e->code, .reg = e->reg };
+                memcpy(o->emcy[k].data, e->data, 5);
+                o->nemcy = k + 1;
+            }
+        }
+        if (i < g_srec.n) {
+            const ecm_srec_t *r = &g_srec.s[i];
+            o->sact = (int)r->last; o->unhealthy = r->unhealthy; o->failed = r->failed;
+            o->failed_config = r->failed_config; o->failed_code = r->failed_code;
+            o->attempts = r->attempts; o->recoveries = r->recoveries;
+        }
+        o->initcmd_failed = g_initcmd_failed[i + 1];
+    }
+    m->nf = 0;
+    for (int k = 0; k < g_nfind && m->nf < ECM_API_MAX_FINDINGS; k++) {
+        ecm_api_finding_t *f = &m->f[m->nf++];
+        const ecm_diag_finding_t *g = &g_find[k];
+        snprintf(f->type, sizeof(f->type), "%s", ecm_api_finding_key((int)g->type));
+        snprintf(f->sev, sizeof(f->sev), "%s", ecm_api_sev_key((int)g->sev));
+        f->a = g->a; f->b = g->b; f->c = g->c; f->count = g->count; f->active = g->active;
+        ecm_diag_finding_str(g, al_code_str, f->text, sizeof(f->text));
+    }
+    for (int i = 0; i < m->n && m->nf < ECM_API_MAX_FINDINGS; i++) {   /* recovery gave up (plan §0.5) */
+        const ecm_api_mon_slave_t *o = &m->s[i];
+        if (!o->failed) continue;
+        ecm_api_finding_t *f = &m->f[m->nf++];
+        memset(f, 0, sizeof(*f));
+        snprintf(f->type, sizeof(f->type), "%s", o->failed_config ? "recover_failed_config" : "recover_failed");
+        snprintf(f->sev, sizeof(f->sev), "error");
+        f->a = i + 1; f->c = o->failed_code; f->active = 1; f->count = o->attempts;
+        if (o->failed_config)
+            snprintf(f->text, sizeof(f->text), "slave %d: FAILED(config)%s: kept out of OP, needs an operator",
+                     i + 1, o->initcmd_failed ? " (ENI InitCmd failed during reconfiguration)" : "");
+        else
+            snprintf(f->text, sizeof(f->text), "slave %d: recovery gave up after %u attempts: FAILED, needs an operator",
+                     i + 1, o->attempts);
+    }
+    m->ho_drops = g_ho_mon.drops;
+    ecm_api_ho_commit(&g_ho_mon);
+    return 1;
+}
+
+/* ---- Phase 11.1: the api thread ---------------------------------------- */
+static void api_static_init(long motion_cycle_us, long io_cycle_us)
+{
+    ecm_api_stats_t *st = &g_api_st;
+    memset(st, 0, sizeof(*st));
+    st->pid = (int)getpid();
+    st->cycle_ns = motion_cycle_us * 1000L;
+    snprintf(st->link, sizeof(st->link), "%s", g_link_etf ? "etf" : "af_packet");
+    st->n_slaves = ctx.slavecount < ECM_API_MAX_SLAVES ? ctx.slavecount : ECM_API_MAX_SLAVES;
+    st->nports = 1;
+    snprintf(st->ports[0].name, sizeof(st->ports[0].name), "primary");
+    snprintf(st->ports[0].iface, sizeof(st->ports[0].iface), "%s", g_ifname);
+    ecm_api_nic_read("/sys", g_ifname, &st->ports[0]);
+    snprintf(st->path, sizeof(st->path), "single");
+    st->ngroups = g_io_active ? 2 : 1;
+    for (int g = 0; g < st->ngroups; g++) {
+        ecm_api_group_cfg_t *c = &st->gcfg[g];
+        snprintf(c->name, sizeof(c->name), "%s", g ? "io" : "motion");
+        c->cycle_ns = (g ? io_cycle_us : motion_cycle_us) * 1000L;
+        for (int s = 1; s <= ctx.slavecount && c->nslaves < ECM_API_MAX_SLAVES; s++)
+            if (ctx.slavelist[s].group == (g ? GROUP_IO : GROUP_MOTION)) c->slaves[c->nslaves++] = (uint16_t)s;
+    }
+    for (int i = 0; i < st->n_slaves; i++) {
+        const ec_slavet *sl = &ctx.slavelist[i + 1];
+        st->scfg[i].pos = i + 1;
+        st->scfg[i].vendor = sl->eep_man; st->scfg[i].product = sl->eep_id; st->scfg[i].revision = sl->eep_rev;
+        snprintf(st->scfg[i].name, sizeof(st->scfg[i].name), "%s", sl->name);
+    }
+    st->dc_ref_pos = g_dc_enabled ? g_dc_ref : 0;
+    st->dma_latency_held = g_dma_latency_fd >= 0;
+    snprintf(st->hook, sizeof(st->hook), "%s", g_hook ? g_hook_name : "");
+    snprintf(st->api_cpus, sizeof(st->api_cpus), "%s", g_api_cpus);
+    snprintf(st->fsm, sizeof(st->fsm), "STARTING");
+    /* RT publish phases: scalars in the middle of each 100 ms slot, the two
+     * histograms 1/4 and 3/4 into the second, shifted off the scalar ticks */
+    long tps = motion_cycle_us > 0 ? 1000000L / motion_cycle_us : 1;
+    g_api_tps = tps < 1 ? 1 : tps;
+    g_api_p = g_api_tps / 10 > 0 ? g_api_tps / 10 : 1;
+    g_api_ph_rt = g_api_p / 2;
+    g_api_ph_dc = (g_api_tps / 4 + g_api_p / 4) % g_api_tps;
+    g_api_ph_hook = (3 * g_api_tps / 4 + g_api_p / 4) % g_api_tps;
+    ecm_api_ho_init(&g_ho_rt, &g_ho_rt_s[0], &g_ho_rt_s[1], sizeof(ecm_api_rt_t));
+    ecm_api_ho_init(&g_ho_dc, &g_ho_dc_s[0], &g_ho_dc_s[1], sizeof(ecm_api_rt_dc_t));
+    ecm_api_ho_init(&g_ho_hook, &g_ho_hook_s[0], &g_ho_hook_s[1], sizeof(ecm_api_rt_hook_t));
+    ecm_api_ho_init(&g_ho_tel, &g_ho_tel_s[0], &g_ho_tel_s[1], sizeof(ecm_api_tel_t));
+    ecm_api_ho_init(&g_ho_mon, &g_ho_mon_s[0], &g_ho_mon_s[1], sizeof(ecm_api_mon_t));
+    atomic_init(&g_api_stop, 0);
+    hist_init(&g_api_out.pass_hist);
+}
+
+static void api_axes(ecm_api_stats_t *st)
+{
+    st->naxes = 0;
+    if (g_hook != hook_cia402) return;
+    static ecm_cia402_state_t s[ECM_AXIS_MAX];
+    static int ok[ECM_AXIS_MAX];
+    int n = g_cia.naxes < ECM_API_MAX_AXES ? g_cia.naxes : ECM_API_MAX_AXES;
+    for (int k = 0; k < n; k++) ok[k] = ecm_cia402_read(&g_cia, k, &s[k]) == 0;
+    for (int k = 0; k < n; k++) {
+        ecm_api_axis_t *a = &st->ax[k];
+        const ecm_axis_cfg_t *c = &g_cia.ax[k].cfg;
+        memset(a, 0, sizeof(*a));
+        snprintf(a->name, sizeof(a->name), "%s", c->name);
+        a->slave = c->slave; a->n = c->n;
+        a->valid = ok[k];
+        if (!ok[k]) continue;
+        const ecm_cia402_state_t *x = &s[k];
+        int on = 0, faulted = 0;
+        for (int j = 0; j < n; j++) {
+            if (g_cia.ax[j].cfg.slave != c->slave) continue;
+            on++;
+            if (ok[j] && (s[j].ds == ECM_DS_FAULT || s[j].ds == ECM_DS_FRA)) faulted++;
+        }
+        ecm_cia402_emcy_in_t em = { 0 };
+        if (st->have_mon && c->slave >= 1 && c->slave <= st->mon.n && st->mon.s[c->slave - 1].nemcy) {
+            const ecm_api_emcy_t *e = &st->mon.s[c->slave - 1].emcy[0];
+            em.have = 1; em.code = e->code; em.reg = e->reg; em.tick = e->tick;
+        }
+        uint16_t code = 0;
+        ecm_code_src_t src = ecm_cia402_axis_code(x, on, faulted, &em, &code);
+        uint32_t vendor = c->slave >= 1 && c->slave <= st->n_slaves ? st->scfg[c->slave - 1].vendor : 0;
+        const char *txt = src != ECM_CODE_NONE ? ecm_cia402_emcy_text(code, vendor) : NULL;
+        snprintf(a->state, sizeof(a->state), "%s", ecm_cia402_ds_key((ecm_ds_t)x->ds));
+        snprintf(a->err, sizeof(a->err), "%s", ecm_cia402_err_key(x->err));
+        snprintf(a->error_src, sizeof(a->error_src), "%s",
+                 src == ECM_CODE_603F ? "603F" : src == ECM_CODE_EMCY ? "EMCY" : "none");
+        snprintf(a->error_text, sizeof(a->error_text), "%s", txt ? txt : "");
+        a->error_code = code;
+        a->sw = x->sw; a->cw = x->cw; a->mode = x->mode_req; a->mode_display = x->mode_disp;
+        a->pos = x->apos; a->vel = x->avel; a->tick = x->tick;
+        a->used = x->used; a->late = x->late; a->underruns = x->underrun; a->dropped = x->dropped;
+        a->step_refused = x->step_refused; a->pp_acked = x->pp_acked; a->homed = x->homed;
+    }
+    st->naxes = n;
+}
+
+static void api_collect(ecm_api_stats_t *st, int nic)
+{
+    while (ecm_api_ho_get(&g_ho_rt, &st->rt))     st->have_rt = 1;
+    while (ecm_api_ho_get(&g_ho_dc, &st->dc))     st->have_dc = 1;
+    while (ecm_api_ho_get(&g_ho_hook, &st->hook_h)) st->have_hook = 1;
+    while (ecm_api_ho_get(&g_ho_tel, &st->tel))   st->have_tel = 1;
+    while (ecm_api_ho_get(&g_ho_mon, &st->mon))   st->have_mon = 1;
+    snprintf(st->fsm, sizeof(st->fsm), "%s", st->have_rt
+             ? ecm_api_bus_key(atomic_load_explicit(&g_bus_state_pub, memory_order_relaxed)) : "STARTING");
+    st->etf_missed = atomic_load(&g_etf_missed);
+    st->etf_invalid = atomic_load(&g_etf_invalid);
+    api_axes(st);
+    if (nic) ecm_api_nic_read("/sys", g_ifname, &st->ports[0]);
+}
+
+static void *api_thread_fn(void *arg)
+{
+    (void)arg;
+    set_non_rt_thread();
+    pthread_setname_np(pthread_self(), "ecm_api");
+    {
+        cpu_set_t cs;
+        CPU_ZERO(&cs);
+        for (int c = 0; c < 64; c++) if (g_api_cpumask & (1ull << c)) CPU_SET(c, &cs);
+        int r = pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+        if (r) fprintf(stderr, "ecm_run: [API] cannot pin the api thread to CPUs %s: %s\n", g_api_cpus, strerror(r));
+    }
+    static char buf[1 << 18];
+    ecm_api_stats_t *st = &g_api_st;
+    struct timespec next;
+    clock_gettime(CLOCK_MONOTONIC, &next);
+    for (unsigned it = 0;; it++) {
+        int stop = atomic_load_explicit(&g_api_stop, memory_order_acquire);
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        api_collect(st, stop || it % 10 == 0);
+        st->final = stop;
+        st->pub_seq++;
+        st->mono_ns = ts_to_ns(&t0);
+        size_t len = ecm_api_stats_json(st, buf, sizeof(buf));
+        if (!len) g_api_out.json_full++;
+        else {
+            int r = ecm_api_publish(g_api_dir, "stats.json", buf, len);
+            if (r) {
+                if (!g_api_out.errors++)
+                    fprintf(stderr, "ecm_run: [API] cannot write %s/stats.json: %s\n", g_api_dir, strerror(-r));
+                g_api_out.last_err = -r;
+            } else {
+                g_api_out.writes++;
+                if (len > g_api_out.bytes_max) g_api_out.bytes_max = len;
+            }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        hist_add(&g_api_out.pass_hist, ts_diff_ns(&t1, &t0));
+        if (stop) break;
+        ts_add_ns(&next, API_PERIOD_NS);
+        if (ts_diff_ns(&t1, &next) > 0) next = t1;    /* fell behind: no burst to catch up */
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+    }
+    struct timespec cpu;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu);
+    g_api_out.cpu_s = (double)cpu.tv_sec + cpu.tv_nsec * 1e-9;
+    return NULL;
+}
+
 /* Phase 7.2/7.3. 10 ms cadence: bus events and RECOVER requests need a
  * fast reaction; the diagnostic snapshot (and the per-slave planner that
  * works on it) still runs every 100 ms. Blocking is fine: SCHED_OTHER. */
@@ -2178,10 +2571,15 @@ static void *monitor_thread_fn(void *arg)
             diag_process_pending();
             if (g_recover_enabled && g_diag.reads != before) recovery_step();
         }
+        if (g_api_on && it % 10 == 0) api_mon_publish();   /* Phase 11.1 H2, 10 Hz */
     }
     print_events();
     if (g_diag_enabled) diag_process_pending();   /* last read before exit */
     cia402_axis_watch();
+    if (g_api_on) {                                /* Phase 11.1: the final view */
+        int t = 0;
+        while (!api_mon_publish() && ++t < API_FINAL_TRIES) usleep(2000);
+    }
     return NULL;
 }
 
@@ -2231,6 +2629,12 @@ int main(int argc, char **argv)
             n_lost = atol(argv[++i]);
         } else if (strcmp(argv[i], "--recover-cyclic-mbx") == 0) {   /* Phase 10.0 R-07: negative control */
             g_recover_cyclic_mbx = 1;
+        } else if (strcmp(argv[i], "--api") == 0) {                  /* Phase 11.1 */
+            g_api_on = 1;
+        } else if (strcmp(argv[i], "--api-dir") == 0 && i + 1 < argc) {
+            g_api_dir = argv[++i];
+        } else if (strcmp(argv[i], "--api-cpus") == 0 && i + 1 < argc) {
+            g_api_cpus = argv[++i];
         } else if (strcmp(argv[i], "--no-dma-latency") == 0) {       /* Phase 10.0 R-09 */
             g_dma_latency = 0;
         } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Phase 7.4 */
@@ -2426,7 +2830,8 @@ int main(int argc, char **argv)
             "       [--hook cia402 (needs --axis) [--axis-step-timeout-ms N] [--axis-max-step POS[:VEL] (Phase 10.6, default 100000:0, 0 = off)]\n"
             "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP)\n"
             "       [--emcy-map FILE ...]   (Phase 10.8: vendor EMCY texts, config/emcy/*.emcy) [--cia402-script \"T CMD ...; ...\"] [--cia402-lead TICKS (default 4)]]   (Phase 10.5)\n"
-            "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n", argv[0]);
+            "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n"
+            "       [--api [--api-dir DIR (default /run/ecmaster)] [--api-cpus LIST (default 1-2, never 3)]]   (Phase 11.1, docs/api.md)\n", argv[0]);
         return 1;
     }
     if (io_cycle_us % motion_cycle_us != 0) {
@@ -2436,6 +2841,28 @@ int main(int argc, char **argv)
         return 1;
     }
     long ticks_per_io = io_cycle_us / motion_cycle_us;
+
+    /* Phase 11.1: API options (before the bus is touched) */
+    if (g_api_on) {
+        if (ecm_api_parse_cpus(g_api_cpus, &g_api_cpumask)) {
+            fprintf(stderr, "ecm_run: --api-cpus LIST, e.g. 1-2 or 1,2\n"); return 1;
+        }
+        if (g_api_cpumask & (1ull << 3)) {
+            fprintf(stderr, "ecm_run: --api-cpus %s: CPU 3 is the RT core, the api thread never runs there\n", g_api_cpus);
+            return 1;
+        }
+        int r = ecm_api_mkdir(g_api_dir, 0755);
+        if (r || access(g_api_dir, W_OK) != 0) {
+            fprintf(stderr, "ecm_run: --api: cannot use %s (%s); /run needs root, or give --api-dir\n",
+                    g_api_dir, strerror(r ? -r : errno));
+            return 1;
+        }
+        fprintf(stderr, "ecm_run: API: %s/stats.json every %ld ms, api thread on CPUs %s%s\n", g_api_dir,
+                API_PERIOD_NS / 1000000L, g_api_cpus,
+                (g_api_cpumask & 1ull) ? " -- WARNING: CPU0 takes the i226 interrupts (plan §0.5)" : "");
+    } else if (strcmp(g_api_dir, "/run/ecmaster") || strcmp(g_api_cpus, "1-2")) {
+        fprintf(stderr, "ecm_run: --api-dir / --api-cpus need --api\n"); return 1;
+    }
 
     /* Phase 10.4: hook selection (before the bus is touched) */
     if (g_hook_name) {
@@ -3273,7 +3700,7 @@ int main(int argc, char **argv)
      * modelled the watchdog (Phase 7.1). Deepest thread frame is
      * ~2.5 KB (gcc -fstack-usage) plus libc stdio: 256 KB is >10x margin,
      * and 4 x 256 KB locks in well under 1 ms. */
-    pthread_t telemetry_tid, app_tid, mailbox_tid, monitor_tid;
+    pthread_t telemetry_tid, app_tid, mailbox_tid, monitor_tid, api_tid;
     {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
@@ -3290,10 +3717,14 @@ int main(int argc, char **argv)
                         left, left == 1 ? "y" : "ies", emcy);
             if (g_eni_on) ecm_eni_soem_elist_foreign(1);
         }
+        /* Phase 11.1: handoffs and the fixed part of stats.json BEFORE any
+         * producer thread exists */
+        if (g_api_on) api_static_init(motion_cycle_us, io_cycle_us);
         pthread_create(&telemetry_tid, &attr, telemetry_thread_fn, NULL);
         pthread_create(&app_tid,       &attr, app_thread_fn,       NULL);
         pthread_create(&mailbox_tid,   &attr, mailbox_thread_fn,   NULL);
         pthread_create(&monitor_tid,   &attr, monitor_thread_fn,   NULL);
+        if (g_api_on) pthread_create(&api_tid, &attr, api_thread_fn, NULL);   /* Phase 11.1 */
         pthread_attr_destroy(&attr);
     }
 
@@ -3578,6 +4009,8 @@ int main(int argc, char **argv)
                 .dc_wraps = g_dc.wraps, .dc_unlocks = g_dc.unlocks,
             };
         }
+        /* Phase 11.1 H3 (--api only): outside occupancy, never waits */
+        if (g_api_on) { int due = api_rt_due(tick); if (due) api_rt_publish(tick, due); }
 
         /* Phase 6: |dc_adjust_ns| <= cycle/20, so the step stays
          * positive and ts_add_ns()'s carry-only normalisation is enough. */
@@ -3597,6 +4030,7 @@ int main(int argc, char **argv)
      * SAFEOP+ERR 0x001B just before INIT was requested. A real slave keeps
      * that error until it is acknowledged. Frames from here on are not in
      * the tx_order ring: telemetry exclusion window. */
+    if (g_api_on) api_rt_publish_final(tick);   /* Phase 11.1: RT counters are final now */
     excl_begin();
     if (!request_all_state(EC_STATE_SAFE_OP, EC_TIMEOUTSTATE))
         fprintf(stderr, "ecm_run: shutdown: not every slave reached SAFE-OP\n");
@@ -3661,6 +4095,20 @@ int main(int argc, char **argv)
     pthread_join(app_tid,       NULL);
     pthread_join(mailbox_tid,   NULL);
     pthread_join(monitor_tid,   NULL);
+    if (g_api_on) {                     /* Phase 11.1: every producer has handed over its last values */
+        atomic_store_explicit(&g_api_stop, 1, memory_order_release);
+        pthread_join(api_tid, NULL);
+        fprintf(stderr, "  [API] stats.json writes=%" PRIu64 " errors=%" PRIu64 "%s%s json_overflow=%" PRIu64
+                " size_max=%" PRIu64 " B; pass p50=%" PRIu64 " p99=%" PRIu64 " max=%" PRId64 " ns; api thread CPU %.3f s\n",
+                g_api_out.writes, g_api_out.errors, g_api_out.errors ? " last=" : "",
+                g_api_out.errors ? strerror(g_api_out.last_err) : "", g_api_out.json_full, g_api_out.bytes_max,
+                hist_percentile(&g_api_out.pass_hist, 0.50), hist_percentile(&g_api_out.pass_hist, 0.99),
+                g_api_out.pass_hist.max_ns, g_api_out.cpu_s);
+        fprintf(stderr, "  [API] handoff puts/drops: rt=%" PRIu64 "/%" PRIu64 " dc=%" PRIu64 "/%" PRIu64
+                " hook=%" PRIu64 "/%" PRIu64 " telemetry=%" PRIu64 "/%" PRIu64 " monitor=%" PRIu64 "/%" PRIu64 "\n",
+                g_ho_rt.puts, g_ho_rt.drops, g_ho_dc.puts, g_ho_dc.drops, g_ho_hook.puts, g_ho_hook.drops,
+                g_ho_tel.puts, g_ho_tel.drops, g_ho_mon.puts, g_ho_mon.drops);
+    }
 
     /* ---- Phase 10.4: hook and exchange report (every thread joined) ---- */
     if (g_hook) {

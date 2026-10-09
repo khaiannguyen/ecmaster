@@ -82,6 +82,8 @@ jobs:
         run: make -C libecmaster/pdo test test_asan
       - name: libecmaster/xchg app <-> RT exchange (Phase 10.4 X-01o..X-04o, Q-05 TSan + negative controls)
         run: make -C libecmaster/xchg test test_asan tsan
+      - name: libecmaster/api stats.json (Phase 11.1 handoff, JSON, tmp + rename, sysfs; publish negative control; TSan + negative control; schema checker + its negative control)
+        run: make -C libecmaster/api test test_asan negctl tsan schema
       - name: libecm_cia402 axis configuration, drive state machine, S1..S7, PP/PV/HM, axis diagnosis + negative controls (Phase 10.3..10.8)
         run: make -C libecm_cia402 test test_asan negctl
       - name: No CiA402 object index in libecmaster (Phase 10.3 K-05, + negative control)
@@ -163,6 +165,8 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_profile tools/gd10/run_profile_10_7.sh
       - name: Axis diagnosis (EMCY, CONFIG) + X-05 trace tool (Phase 10.8)
         run: sudo -E env LOG=/tmp/log_gd10_diag tools/gd10/run_diag_10_8.sh
+      - name: stats.json of ecm_run --api (Phase 11.1 A-01..A-10, golden with --api)
+        run: sudo -E env LOG=/tmp/log_gd11_api API_DIR=/dev/shm/ecmaster_api tools/gd11/run_api_11_1.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -179,6 +183,7 @@ jobs:
             /tmp/log_gd10_servo
             /tmp/log_gd10_axes
             /tmp/log_gd10_hook
+            /tmp/log_gd11_api
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

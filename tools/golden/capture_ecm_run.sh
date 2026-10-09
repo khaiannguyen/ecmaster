@@ -16,6 +16,8 @@
 #                                GROUP_MOTION, GROUP_IO empty
 #                                (defaults: N=8 GROUP_ARGS="--motion-slaves 4")
 #      SB_ARGS="--coe-ca"         Phase 9.3 (C-02/C-05): extra soft_bus options
+#      ECM_EXTRA="--api ..."      Phase 11.1: extra ecm_run options (the API must
+#                                 not change a single datagram)
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -31,6 +33,9 @@ GROUP_ARR=($GROUP_ARGS)
 SB_ARGS=${SB_ARGS:-}
 # shellcheck disable=SC2206
 SB_ARR=($SB_ARGS)
+ECM_EXTRA=${ECM_EXTRA:-}
+# shellcheck disable=SC2206
+EX_ARR=($ECM_EXTRA)
 ENI_ARGS=()
 if [ -n "$ENI" ]; then
     [ -f "$ENI" ] || { echo "ENI file $ENI not found" >&2; exit 2; }
@@ -47,7 +52,7 @@ TSP=$!
 for _ in $(seq 50); do [ -s "$PCAP" ] && break; sleep 0.1; done
 sleep 1
 "$ECM_RUN" --iface "$IF_M" --n "$N" ${GROUP_ARR[@]+"${GROUP_ARR[@]}"} --duration-sec 2 --no-tx-ts \
-    --diag-file /tmp/ecm_diag_golden.txt "${ENI_ARGS[@]}" >/tmp/ecm_run_golden.log 2>&1
+    --diag-file /tmp/ecm_diag_golden.txt "${ENI_ARGS[@]}" ${EX_ARR[@]+"${EX_ARR[@]}"} >/tmp/ecm_run_golden.log 2>&1
 RC=$?
 sleep 0.5
 kill -INT $TSP; wait $TSP 2>/dev/null

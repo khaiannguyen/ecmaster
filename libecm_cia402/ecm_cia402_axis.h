@@ -100,6 +100,7 @@ enum {
     ECM_AXERR_CONFIG,         /* 10.8: the slave refused its configuration
                                * (CONFIG class AL code): no retry, operator   */
     ECM_AXERR_SLAVE_FAILED,   /* 10.8: slave recovery gave up                 */
+    ECM_AXERR_COUNT           /* 11.1: number of errors (keys for the API)    */
 };
 
 #define ECM_CIA402_PP_QUEUE   16     /* PP points waiting, per axis          */
@@ -191,6 +192,9 @@ typedef struct {
 ecm_ds_t    ecm_cia402_decode(uint16_t sw);
 const char *ecm_cia402_ds_str(ecm_ds_t ds);
 const char *ecm_cia402_err_str(int err);
+/* Phase 11.1: stable keys for the API (OPERATION_ENABLED, dropped, ...) */
+const char *ecm_cia402_ds_key(ecm_ds_t ds);
+const char *ecm_cia402_err_key(int err);
 
 /* Not RT. step_timeout_ms: per commanded transition (plan: 500 ms). */
 void ecm_cia402_init(ecm_cia402_t *c, uint64_t cycle_ns, uint32_t step_timeout_ms);

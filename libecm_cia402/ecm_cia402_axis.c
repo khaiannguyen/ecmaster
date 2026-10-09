@@ -12,6 +12,33 @@ static const char *const DS_STR[ECM_DS_COUNT] = {
 
 const char *ecm_cia402_ds_str(ecm_ds_t ds) { return (unsigned)ds < ECM_DS_COUNT ? DS_STR[ds] : "?"; }
 
+/* Phase 11.1: stable keys for the API (docs/api.md): never renamed, only added */
+static const char *const DS_KEY[ECM_DS_COUNT] = {
+    "UNKNOWN", "NOT_READY_TO_SWITCH_ON", "SWITCH_ON_DISABLED", "READY_TO_SWITCH_ON",
+    "SWITCHED_ON", "OPERATION_ENABLED", "QUICK_STOP_ACTIVE", "FAULT_REACTION_ACTIVE", "FAULT"
+};
+const char *ecm_cia402_ds_key(ecm_ds_t ds) { return (unsigned)ds < ECM_DS_COUNT ? DS_KEY[ds] : "UNKNOWN"; }
+
+const char *ecm_cia402_err_key(int err)
+{
+    switch (err) {
+    case ECM_AXERR_NONE:         return "none";
+    case ECM_AXERR_TIMEOUT:      return "timeout";
+    case ECM_AXERR_FAULT:        return "fault";
+    case ECM_AXERR_BUS_LOST:     return "bus_lost";
+    case ECM_AXERR_MODE:         return "mode";
+    case ECM_AXERR_IN_FAULT:     return "in_fault";
+    case ECM_AXERR_DROPPED:      return "dropped";
+    case ECM_AXERR_STEP:         return "step";
+    case ECM_AXERR_SHUTDOWN:     return "shutdown";
+    case ECM_AXERR_HANDSHAKE:    return "handshake";
+    case ECM_AXERR_HOMING:       return "homing";
+    case ECM_AXERR_CONFIG:       return "config";
+    case ECM_AXERR_SLAVE_FAILED: return "slave_failed";
+    default:                     return "unknown";
+    }
+}
+
 const char *ecm_cia402_err_str(int err)
 {
     switch (err) {

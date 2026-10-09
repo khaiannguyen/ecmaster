@@ -801,12 +801,33 @@ static void t09(void)
     check("CSV underrun: velocity 0", st(0).avel, 0);
 }
 
+/* Phase 11.1: API keys of state and axis error: every value has one, all distinct */
+static void k11(void)
+{
+    printf("K11 -- API keys (ecm_cia402_ds_key / ecm_cia402_err_key)\n");
+    int bad = 0;
+    for (int a = 0; a < ECM_DS_COUNT; a++) {
+        if (a && !strcmp(ecm_cia402_ds_key((ecm_ds_t)a), "UNKNOWN")) bad++;
+        for (int b = 0; b < a; b++) if (!strcmp(ecm_cia402_ds_key((ecm_ds_t)a), ecm_cia402_ds_key((ecm_ds_t)b))) bad++;
+    }
+    for (int a = 0; a < ECM_AXERR_COUNT; a++) {
+        if (!strcmp(ecm_cia402_err_key(a), "unknown")) bad++;
+        for (int b = 0; b < a; b++) if (!strcmp(ecm_cia402_err_key(a), ecm_cia402_err_key(b))) bad++;
+    }
+    check("state and error keys: missing or duplicated", bad, 0);
+    check_true("OPERATION_ENABLED / dropped", !strcmp(ecm_cia402_ds_key(ECM_DS_OE), "OPERATION_ENABLED") &&
+               !strcmp(ecm_cia402_err_key(ECM_AXERR_DROPPED), "dropped"));
+    check_true("out of range -> UNKNOWN / unknown", !strcmp(ecm_cia402_ds_key(ECM_DS_COUNT), "UNKNOWN") &&
+               !strcmp(ecm_cia402_err_key(ECM_AXERR_COUNT), "unknown"));
+}
+
 static const struct { const char *name; void (*fn)(void); } TESTS[] = {
     { "t01", t01 }, { "t02", t02 }, { "t03", t03 }, { "t04", t04 }, { "t05", t05 }, { "t06", t06 },
     { "t07", t07 }, { "t08", t08 }, { "t09", t09 },
     { "p201", p201 }, { "p202", p202 }, { "p203", p203 }, { "p204", p204 },
     { "e201", e201 }, { "e202", e202 },
     { "s01", s01 }, { "s02", s02 }, { "s03", s03 }, { "s04", s04 }, { "s05", s05 }, { "s06", s06 }, { "s07", s07 },
+    { "k11", k11 },
 };
 
 /* ./test_cia402_axis [name ...]   (no name: every test) */
