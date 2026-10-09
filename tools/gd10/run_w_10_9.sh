@@ -42,7 +42,7 @@
 #         0 WKC error, 0 overrun, DC LOCKED, no axis error, S6 at the end
 #   (CSV / PV need 0x60FF in the PDOs: ENI 0x1702/0x1B02 from TwinCAT, X-05b.)
 #
-# Env: IFACE N ENI CASES RES (inc/rev, 8388608 measured 9/10) MAX_RPM TQ
+# Env: IFACE N ENI CASES RES (inc/rev, 8388608 measured 9/10) MAX_RPM TQ NOFRAME_MAX
 #      FERR (inc) JUMP (inc) HM_METHOD DUR8 YES SIM SB_PRIO SB_CPU IS620N_ESI LOG
 # ==========================================================================
 set -u
@@ -61,6 +61,9 @@ FERR=${FERR:-$((RES / 8))}
 JUMP=${JUMP:-$((RES / 100))}
 HM_METHOD=${HM_METHOD:-35}
 DUR8=${DUR8:-3600}
+# one lost reply now and then (single frame, recovered the next cycle) is what an
+# Ethernet link does; W-08 on the real drives: 1 in 3 600 151 cycles
+NOFRAME_MAX=${NOFRAME_MAX:-2}
 YES=${YES:-0}
 SB_PRIO=${SB_PRIO-79}; SB_CPU=${SB_CPU:-2}
 IS620N_ESI=${IS620N_ESI:-}
@@ -160,11 +163,20 @@ run () {
     local tag=$1 dur=$2 extra=$3 script=$4
     sim_start "$tag"
     # shellcheck disable=SC2086
+    ethtool -S "$IFACE" > "$LOG/ethtool_S_${tag}_before.txt" 2>/dev/null
     "$ECM_RUN" "${BASE[@]}" "${MOT[@]}" $extra --cia402-script "$script" --duration-sec "$dur" \
         --diag-file "$LOG/diag_$tag.txt" > "$LOG/er_$tag.log" 2>&1
     RC=$?
+    ethtool -S "$IFACE" > "$LOG/ethtool_S_${tag}_after.txt" 2>/dev/null
     sim_stop
     E=$LOG/er_$tag.log
+}
+nic_delta () {   # error counters of ethtool -S that grew during case $1
+    local r
+    r=$(join <(awk -F': ' '{gsub(/ /,"",$1); print $1, $2}' "$LOG/ethtool_S_$1_before.txt" | sort) \
+             <(awk -F': ' '{gsub(/ /,"",$1); print $1, $2}' "$LOG/ethtool_S_$1_after.txt" | sort) 2>/dev/null |
+        awk '$1 ~ /err|crc|missed|align|symbol|fifo|over|drop/ && $3 != $2 {printf "%s +%d; ", $1, $3-$2}')
+    echo "${r:-none}"
 }
 # helpers on $E
 axline () { grep "  \[CIA402\] axis $1 (" "$E" | head -1; }
@@ -182,15 +194,21 @@ reset_sent () {   # did any controlword of axis $1 in the transition lines carry
     return 1
 }
 absdiff () { local d=$(( ${1:-0} - ${2:-0} )); echo ${d#-}; }
-bus_ok () {   # 0 WKC error, 0 overrun, DC LOCKED 0 unlock, no [AXIS] diagnosis
-    grep -q '\[GROUP_MOTION\] cycles=[0-9]* wkc_mismatch=0 .*overrun=0 ' "$E" &&
+bus_ok () {   # 0 overrun; WKC: no zero/partial/over, NOFRAME <= NOFRAME_MAX and never two in a row;
+              # DC LOCKED 0 unlock; no [AXIS] diagnosis
+    local nf
+    nf=$(grep -o '\[WKC GROUP_MOTION\] ok=[0-9]* noframe=[0-9]*' "$E" | grep -o '[0-9]*$')
+    grep -q '\[GROUP_MOTION\] cycles=[0-9]* wkc_mismatch=[0-9]* .*overrun=0 ' "$E" &&
+    grep -q '\[WKC GROUP_MOTION\] .* zero=0 partial=0 over=0 max_run_bad=[01]$' "$E" &&
+    [ -n "$nf" ] && [ "$nf" -le "$NOFRAME_MAX" ] &&
     grep -q '\[DC\] state=LOCKED locks=[0-9]* unlocks=0' "$E" && ! grep -q 'ecm_run: \[AXIS\]' "$E"
 }
 common () {   # common checks of a motion case: TAG AXES...
     local tag=$1; shift
     chk "$tag ecm_run rc 0, OP, ENI limits applied (6 extra InitCmds ok)" \
         "[ $RC = 0 ] && grep -q 'all slaves in OPERATIONAL' $E && [ \$(grep -c 'CoE download 0x60\(72\|65\|7F\):00 ok' $E) -ge 6 ]"
-    chk "$tag bus: 0 WKC error, 0 overrun, DC LOCKED, no [AXIS] diagnosis" "bus_ok"
+    chk "$tag bus: 0 overrun, NOFRAME $(grep -o 'noframe=[0-9]*' $E | head -1 | cut -d= -f2) <= $NOFRAME_MAX (single frames only), no zero/partial WKC, DC LOCKED, no [AXIS] diagnosis" "bus_ok"
+    [ -f "$LOG/ethtool_S_${tag}_before.txt" ] && info "$tag NIC error counters during the run: $(nic_delta $tag)"
     chk "$tag script parsed" "! grep -q 'cannot parse --cia402-script' $E"
     chk "$tag S6 walk-down before leaving OP" "grep -q 'shutdown (S6): every axis walked down' $E"
     local a

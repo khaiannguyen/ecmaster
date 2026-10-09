@@ -327,6 +327,10 @@ static struct {                              /* Phase 10.6 S6, RT only until the
     int      state;                          /* 0 running, 1 walking down, 2 down, 3 timeout */
     uint64_t t0, ticks, max_ticks;
 } g_cstop;
+/* 10.9: set by the RT thread when S6 starts; the app thread stops measuring
+ * the tracking error from then on (the drive's own stop ramp after Disable
+ * operation is not a tracking error: W-07/W-08 showed ~0.3..0.4 M inc) */
+static atomic_int       g_cstop_pub;
 
 static void hook_cia402(const ecm_hook_args_t *a, void *ctx)
 {
@@ -344,6 +348,7 @@ static int cia402_keep_cycling(uint64_t tick)
     switch (g_cstop.state) {
     case 0:
         ecm_cia402_shutdown(&g_cia);
+        atomic_store_explicit(&g_cstop_pub, 1, memory_order_relaxed);
         g_cstop.state = 1;
         g_cstop.t0 = tick;
         /* fall through */
@@ -1581,6 +1586,7 @@ static void *cia402_app(void)
                         s.hm_phase == ECM_HM_RUNNING ? "started" : s.hm_phase == ECM_HM_DONE ? "attained" :
                         s.hm_phase == ECM_HM_FAILED ? "FAILED" : "idle", s.apos);
             if (s.tick == last_rec[a] + 1 && (kind[a] == P_SINE || kind[a] == P_COS) && s.ds == ECM_DS_OE && s.mode_disp == ECM_OPMODE_CSP &&
+                !atomic_load_explicit(&g_cstop_pub, memory_order_relaxed) &&
                 sp_ok[a][(s.tick - 1) & 1023] && s.tick > t_start[a] + 8) {
                 int64_t e = (int64_t)s.apos - sp[a][(s.tick - 1) & 1023];
                 if (e < 0) e = -e;
