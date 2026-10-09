@@ -63,5 +63,21 @@ Master điều khiển được drive CiA402 (CSP/CSV/PP/PV/HM) mà không đưa
 - Nguyên nhân −0,37 % vận tốc (đơn vị trong drive?).
 - GĐ11: trạng thái/lỗi trục + histogram hook vào `stats.json` (không điều khiển trục qua API); hàng đợi setpoint có timestamp là chỗ nối `ros2_control`.
 
-## 7. Hồi quy cuối trên Jetson
-`sudo -E tools/gd10/run_regression_gd10.sh` (GĐ9 + 10.2…10.8 + recover + `w` + `wmm`) — điền bảng `summary.md` khi chạy xong.
+## 7. Hồi quy cuối trên Jetson (9/10/2026, `6.8.12-1021-rt-tegra`, STRICT=1, soft_bus FIFO 79 core 2, ESI IS620N thật)
+`sudo -E IS620N_ESI=… tools/gd10/run_regression_gd10.sh`, hai lượt: 16:40 (`959f98f`, mọi bước trừ `w`/`wmm` chưa có) và 17:14 (`e02f90b`, `diag w wmm` sau bản vá 0029).
+
+| Bước | Nội dung | Kết quả | Thời gian |
+|---|---|---|---|
+| gd9 | hồi quy GĐ9: offline (gồm negctl CiA402, TSan), golden, G, C, E, DC, M, F, B, V (1 skip), L5 4+4, L5 N=1 | **12/12 ok** | 853 s |
+| servo | 10.2 servo ảo D-01…D-07, A-04 | 26/0 | 41 s |
+| axes | 10.3 K-01n…K-08, K-05 | 24/0 | 26 s |
+| hook | 10.4 Q-01…Q-03 (30 s), H-01…H-05 | 25/0, 1 info | 164 s |
+| cia402 | 10.5 T-01…T-08 | 31/0 | 50 s |
+| safety | 10.6 S1, S2, S4…S7 + đối chứng âm | 22/0 | 64 s |
+| profile | 10.7 P2-01…P2-04 | 14/0 | 32 s |
+| diag | 10.8 E2-01…E2-03, X-05 (tiêu chí 0024) | 13/0 (lượt 16:40: 11/1 — test X-05 cũ, sửa ở 0029) | 38 s |
+| recover | RC-01…RC-06 | 19/0 | 98 s |
+| w | W-01…W-07 trên servo ảo hiệu chỉnh IS620N | 55/0 | 200 s |
+| wmm | W-09csv, W-10pv với ENI TwinCAT + đối chứng âm 0x607F | 24/0; đối chứng âm FAIL đúng ở w00 | 40 s |
+
+**GĐ10 đóng.** Việc treo xem §6.
