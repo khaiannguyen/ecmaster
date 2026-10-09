@@ -26,8 +26,9 @@ lost_pd_fault      1
 lost_op_autoclear  1
 reinit_ms          40
 # statusword in OE (CSP, standing): 0x1637 = bit 12 + bit 10; after disable
-# 0x0631 (bit 10 kept) (X-05). Window: assumption, 0x6067 not read yet.
-csp_target_window  1000
+# 0x0631 (bit 10 kept) (X-05). Window: 0x6067 "Position window" default 734
+# (manual 6.3; not read on our drives yet -- ecm_peek --sdo 0x6067:0).
+csp_target_window  734
 sw_target_hold     1
 # Disable operation while moving: the drive brakes and reports OE until it
 # stands (W-07 / W-08 drift 290 000..400 000 inc from ~2.6e6 inc/s): ~1e7 inc/s^2

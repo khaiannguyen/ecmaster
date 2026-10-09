@@ -69,7 +69,7 @@ Output chỉ có hiệu lực ở **OP**. Ở SAFE-OP, input vẫn được cậ
 | Vận tốc CSV/PV | 0,9963 vòng / 1 vòng (W-09csv, W-10pv) | `vel_scale 0.9963` | thực = lệnh × hệ số | 996 300 ± 1 000 |
 | Mất process data | Fault **0x0E08**, không EMCY, cả khi chỉ RTSO (W-06, X-05) | `code_lost_op`, `lost_op_emcy 0`, `lost_pd_fault 1` | OE: rời OP → Fault; RTSO/SO: AL 0x001B → Fault | ✓ |
 | Tự xoá | về OP: 0x0218 → 0x0210 (0x603F 0) → 0x0231 sau ~40 ms, không cw bit 7 (X-05) | `lost_op_autoclear 1`, `reinit_ms 40` | Fault → Not ready → SOD | ✓; lỗi tiêm (`drv_fault`) không tự xoá |
-| Statusword | 0x1637 đứng ở OE CSP, 0x0631 sau disable (X-05) | `csp_target_window 1000` (giả định, chưa đọc 0x6067), `sw_target_hold 1` | bit 10 khi \|ferr\| ≤ cửa sổ; giữ sau OE | ✓ |
+| Statusword | 0x1637 đứng ở OE CSP, 0x0631 sau disable (X-05) | `csp_target_window 734` (mặc định 0x6067 theo manual, chưa đọc trên drive), `sw_target_hold 1` | bit 10 khi \|ferr\| ≤ cửa sổ; giữ sau OE | ✓ |
 | Disable operation khi chạy | driver tự hãm, vẫn báo OE (W-07/W-08) | `disable_op_decel 1e7` | ở OE, hãm, rồi SO | còn OE sau 50 ms, SO sau 300 ms |
 
 Chưa mô hình: PREOP→SAFEOP 1–2 ms (soft_bus 0), FRA khi lỗi lúc đứng yên (thật ~60 ms FRA, mô hình đi thẳng Fault), điện áp tụt (W-05: drive rời OE trước khi mất giao tiếp).

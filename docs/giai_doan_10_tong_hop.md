@@ -41,7 +41,7 @@ Master điều khiển được drive CiA402 (CSP/CSV/PP/PV/HM) mà không đưa
 | SAFEOP→OP | 297–299 ms; PREOP→SAFEOP 1–2 ms; enable 1,5–2,5 ms/bước |
 | CSP bám | ~26,5 chu kỳ trễ (gain mặc định) |
 | CSV/PV | 0,9963 × lệnh |
-| Mất process data | Fault 0x0E08, AL 0x001B, **không EMCY**, tự xoá khi về OP |
+| Mất process data | Fault 0x0E08 = **Er.E08 Synchronization loss** (ngưỡng 200C-24h = 9 chu kỳ), AL 0x001B, **không EMCY**, tự xoá khi về OP |
 | Statusword OE (CSP) | 0x1637; sau disable 0x0631 |
 | 0x6502 | 0x3AD (PP PV TQ HM CSP CSV CST) |
 | PDO cố định | 0x1701/0x1B01 (12/28 B); 0x1702/0x1B02 (19/25 B, có 0x6060/0x60FF/0x607F, **không** 0x606C) |
@@ -58,7 +58,7 @@ Master điều khiển được drive CiA402 (CSP/CSV/PP/PV/HM) mà không đưa
 
 ## 6. Còn treo, mang sang
 - Nút dừng khẩn vào DI → W-05 gốc; tách CB nguồn điều khiển / động lực.
-- Đọc 0x6067 trên servo thật (thay giả định 1 000 inc của servo ảo); tên lỗi 0x0E08 theo manual.
+- Đọc 0x6067 trên servo thật (servo ảo dùng mặc định 734 của manual). Xác nhận ánh xạ Er.XYZ → 0x603F = 0x0XYZ khi gặp mã lỗi thứ hai.
 - R-08 phần `--link etf` 10 phút.
 - Nguyên nhân −0,37 % vận tốc (đơn vị trong drive?).
 - GĐ11: trạng thái/lỗi trục + histogram hook vào `stats.json` (không điều khiển trục qua API); hàng đợi setpoint có timestamp là chỗ nối `ros2_control`.

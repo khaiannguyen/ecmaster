@@ -1,14 +1,83 @@
-# Inovance IS620N vendor EMCY codes (Phase 10.8).
+# Inovance IS620N fault codes for the EMCY / 0x603F text (Phase 10.8, filled 9/10/2026).
 # Load with: ecm_run ... --emcy-map config/emcy/is620n.emcy
 #
-# Empty on purpose: the codes come from the IS620N manual (fault list,
-# Er.xxx -> EMCY 0x603F mapping) and from R-07 on the real drive (Phase
-# 10.0: cable pulled, mains off in OP, emergency stop DI). Do not guess
-# them -- an unknown code still shows its CiA 301 class.
+# Names: "IS620N Series User Manual", chapter 5 Troubleshooting (Er.xxx).
+# Mapping Er.XYZ -> 0x603F = 0x0XYZ: INFERRED from one real case and not
+# stated in the manual -- W-06 / X-05 (9/10): 0x603F = 0x0E08 while the
+# condition is Er.E08 "Synchronization loss" (drive in OP lost its process
+# data / SYNC). A code that does not fit still shows its CiA 301 class.
+# Notes from the manual for the EtherCAT codes:
+#   Er.E08: abnormal frames, master sync problem, or OP -> non-OP while enabled;
+#           tolerance 200C-24h "permissible interruption loss times of EtherCAT
+#           synchronization" (default 9, range 4..20)
+#   Er.E13: the sync cycle must be a multiple of 125 us or 250 us
+#   Er.E15: sync cycle error above 200C-2Dh (default 500)
 # Format: one "0xCODE text" per line after the vendor line.
 vendor 0x00100000
-# Observed on the real drives (Phase 10.9 W-06, 9/10/2026): drive 2 lost its
-# EtherCAT process data at OP (cable drive 1 -> drive 2 unplugged) and went to
-# Fault with 0x603F = 0x0E08; no EMCY frame arrived (the cable was out). The
-# drive cleared the fault itself when it re-entered OP. Name per the manual: TODO.
-0x0E08 EtherCAT process data lost at OP (seen 10.9 W-06; name: see IS620N manual)
+0x0101 Er.101 Parameter abnormal
+0x0102 Er.102 Programmable logic configuration fault
+0x0103 Er.103 FPGA software version too early
+0x0104 Er.104 Programmable logic interruption fault
+0x0105 Er.105 Internal program abnormal
+0x0108 Er.108 Parameter storage fault
+0x0110 Er.110 Setting error of frequency-division pulse output
+0x0111 Er.111 Servo drive internal parameter abnormal
+0x0120 Er.120 Product model matching fault
+0x0121 Er.121 Invalid S-ON command
+0x0122 Er.122 Product matching fault in absolute position mode
+0x0130 Er.130 Different DIs allocated with the same function
+0x0131 Er.131 DO function No
+0x0136 Er.136 Data check error or no parameter stored in the motor ROM
+0x0200 Er.200 Overcurrent 1
+0x0201 Er.201 Overcurrent 2
+0x0207 Er.207 Shaft D/Q current overflow
+0x0208 Er.208 FPGA sampling operation timeout
+0x0210 Er.210 Output to-ground short-circuit
+0x0220 Er.220 Phase sequence incorrect
+0x0234 Er.234 Runaway
+0x0400 Er.400 Main circuit overvoltage
+0x0410 Er.410 Main circuit undervoltage
+0x0420 Er.420 Main circuit phase loss
+0x0430 Er.430 Control power undervoltage
+0x0500 Er.500 Motor overspeed
+0x0510 Er.510 Pulse output overspeed
+0x0601 Er.601 Homing timeout
+0x0602 Er.602 Angle auto-tuning failure
+0x0610 Er.610 Servo drive overload
+0x0620 Er.620 Motor overload
+0x0630 Er.630 Motor rotor locked
+0x0650 Er.650 Heatsink overheat
+0x0730 Er.730 Encoder battery warning
+0x0731 Er.731 Encoder battery failed
+0x0733 Er.733 Encoder multi-turn counting error
+0x0735 Er.735 Encoder multi-turn counting overflow
+0x0740 Er.740 Encoder interference
+0x0770 Er.770 External encoder scale fault
+0x0900 Er.900 DI emergency braking
+0x0909 Er.909 Motor overload warning
+0x0920 Er.920 Regenerative resistor overload
+0x0922 Er.922 Resistance of the external regenerative resistor too small
+0x0939 Er.939 Motor power cable breaking
+0x0941 Er.941 Parameter modification taking effect only after power-on again
+0x0942 Er.942 Parameter storage too frequent
+0x0950 Er.950 Positive limit switch warning
+0x0952 Er.952 Negative limit switch warning
+0x0980 Er.980 Encoder internal fault
+0x0990 Er.990 Power input phase loss warning
+0x0998 Er.998 Homing mode setting incorrect
+0x0A33 Er.A33 Encoder data abnormal
+0x0A34 Er.A34 Encoder communication check abnormal
+0x0A35 Er.A35 Z signal lost
+0x0A40 Er.A40 Motor auto-tuning failure
+0x0B00 Er.B00 Position deviation excess
+0x0B01 Er.B01 Position reference excess
+0x0B02 Er.B02 Position deviation exceeding threshold in fully closed-loop
+0x0B03 Er.B03 Electronic gear ratio setting exceeding limit
+0x0B04 Er.B04 Parameter setting error with fully closed-loop function
+0x0D09 Er.D09 Software upper/lower limit setting incorrect
+0x0D10 Er.D10 Home offset setting incorrect
+0x0E08 Er.E08 Synchronization loss (process data / SYNC lost at OP; seen 10.9 W-06 and X-05, no EMCY, the drive clears it back in OP)
+0x0E11 Er.E11 The XML configuration file is not burnt
+0x0E12 Er.E12 Network initialization failure
+0x0E13 Er.E13 Synchronization cycle setting incorrect
+0x0E15 Er.E15 Synchronization cycle error being large
