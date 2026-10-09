@@ -101,7 +101,7 @@
 | FP Cable Redundancy — Diagnosis Functions | M | 🤔 | Bundled with the above |
 | FP Cable Redundancy — Redundancy with Hot Connect | O | ❌ | Not implemented, depends on 1201 which is also skipped |
 | FP Cable Redundancy — Redundancy with DC | O | ❌ | Optional, not prioritized |
-| FP Motion Control — Drive Profile CiA402 | M | ✅ | **Directly relevant** — CiA402 lives at the slave/application layer (Platform 1-4); the master needs correct DC sync support (already covered by 1101) |
+| FP Motion Control — Drive Profile CiA402 | M | ✅ | **Directly relevant** — CiA402 lives at the slave/application layer (Platform 1-4); the master needs correct DC sync support (already covered by 1101). Master side (Phase 10): `libecm_cia402` (state machine, CSP/CSV/PP/PV/HM, safety latches S1-S7), tested on 2 Inovance IS620N and against TwinCAT NC (X-05) — `docs/cia402.md` |
 | FP Motion Control — Drive Profile SERCOS | O | ❌ | SERCOS not used |
 | FP Motion Control — Synchronization with DC | M | ✅ | = 1101 |
 | FP Hot Connect | — | ❌ | Spec states "to be defined" (not yet finalized in v1.0.2) |

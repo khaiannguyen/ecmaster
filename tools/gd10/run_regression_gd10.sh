@@ -10,6 +10,7 @@
 #   export IS620N_ESI=$HOME/esi/IS620N-Ecat_v2.6.9.xml
 #   sudo -E tools/gd10/run_regression_gd10.sh              (~25 min)
 #   sudo -E STEPS="servo cia402 safety" tools/gd10/run_regression_gd10.sh
+#   sudo -E STEPS="w wmm" tools/gd10/run_regression_gd10.sh   (10.9 / X-05b on calibrated virtual drives)
 #   sudo -E GD9_STEPS="offline golden" tools/gd10/run_regression_gd10.sh
 #   STRICT=0 SB_PRIO= SB_CPU=1 sudo -E ...                 (sandbox: timing as INFO)
 #
@@ -29,7 +30,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 SB_PRIO=${SB_PRIO-79}; SB_CPU=${SB_CPU:-2}; STRICT=${STRICT:-1}
-STEPS=${STEPS:-"gd9 servo axes hook cia402 safety profile diag recover"}
+STEPS=${STEPS:-"gd9 servo axes hook cia402 safety profile diag recover w wmm"}
 GD9_STEPS=${GD9_STEPS:-}
 IS620N_ESI=${IS620N_ESI:-}
 RLOG=${RLOG:-$ROOT/log_gd10_regression_$(date +%Y%m%d_%H%M%S)}
@@ -99,6 +100,13 @@ cia402)  step cia402  "10.5 drive state machine + CSP/CSV T-01..T-08"          -
 safety)  step safety  "10.6 safety latches S1, S2, S4..S7 + negative controls" -- env LOG="$RLOG/safety"  "$G/run_safety_10_6.sh" ;;
 profile) step profile "10.7 PP / PV / homing P2-01..P2-04"                     -- env LOG="$RLOG/profile" "$G/run_profile_10_7.sh" ;;
 diag)    step diag    "10.8 axis diagnosis E2-01..E2-03, X-05 tool"            -- env LOG="$RLOG/diag"    "$G/run_diag_10_8.sh" ;;
+w)       step w       "10.9 W-01..W-07 rehearsal on drives calibrated as the IS620N (10.2, is620n.cal)" -- \
+             env SIM=1 YES=1 CASES="w01 w02 w03pp w03hm w04 w05 w06 w07" LOG="$RLOG/w" "$G/run_w_10_9.sh" ;;
+wmm)     step wmm     "X-05b CSV / PV with the TwinCAT ENI 0x1702/0x1B02 (W-09csv, W-10pv) + 0x607F negative control" -- \
+             bash -c 'env SIM=1 YES=1 ENI="$0/config/eni/eni_2servo_mm.enicfg" CASES="w01 w09csv w10pv" LOG="$1/wmm" "$0/tools/gd10/run_w_10_9.sh" || exit 1
+                      if env SIM=1 YES=1 PDOSET_OFF=1 ENI="$0/config/eni/eni_2servo_mm.enicfg" CASES="w01" LOG="$1/wmm_neg" "$0/tools/gd10/run_w_10_9.sh" >"$1/wmm_neg.log" 2>&1; then
+                          echo " RESULT: negative control PDOSET_OFF=1 did NOT fail"; exit 1; fi
+                      grep -q "0x607F=0x00000000" "$1/wmm_neg.log" && echo " RESULT: negative control PDOSET_OFF=1 failed at w00 (0x607F = 0), as it must" || { echo " RESULT: negative control failed for another reason"; exit 1; }' "$ROOT" "$RLOG" ;;
 recover) step recover "10.0 recovery re-runs the ENI InitCmds, refuses OP on failure RC-01..RC-06" -- env LOG="$RLOG/recover" "$G/run_recover_10_0.sh" ;;
 *) echo "unknown step $s"; ROWS+=("| $s | unknown step | **FAIL** | | |") ;;
 esac
