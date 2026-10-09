@@ -174,6 +174,13 @@ axstate () { axline "$1" | sed 's/.*): //; s/ sw=.*//'; }
 n_oe ()   { grep -c "\[CIA402\] t=.* axis $1 Switched on -> Operation enabled (" "$E"; }
 pos_oe () { grep "\[CIA402\] t=.* axis $1 Switched on -> Operation enabled (" "$E" | head -1 | grep -o 'pos=[-0-9]*' | cut -d= -f2; }
 pos_leave () { grep "\[CIA402\] t=.* axis $1 Operation enabled -> " "$E" | head -1 | grep -o 'pos=[-0-9]*' | cut -d= -f2; }
+reset_sent () {   # did any controlword of axis $1 in the transition lines carry bit 7 (fault reset)?
+    local h
+    for h in $(grep "\[CIA402\] t=.* axis $1 " "$E" | grep -o 'cw 0x[0-9A-F]*' | cut -d' ' -f2); do
+        (( h & 0x80 )) && return 0
+    done
+    return 1
+}
 absdiff () { local d=$(( ${1:-0} - ${2:-0} )); echo ${d#-}; }
 bus_ok () {   # 0 WKC error, 0 overrun, DC LOCKED 0 unlock, no [AXIS] diagnosis
     grep -q '\[GROUP_MOTION\] cycles=[0-9]* wkc_mismatch=0 .*overrun=0 ' "$E" &&
@@ -304,11 +311,15 @@ w05|w06)
         AX="1"
     fi
     for a in $AX; do
-        # the whole bus lost: S5 'bus lost'; one drive out while the bus is DEGRADED: its axis
-        # sees the drive leave Operation enabled first, S1 'left Operation enabled ...'. Either
-        # latch keeps it disabled; what matters: enabled once only, an error kept, not enabled.
-        chk "$c axis $a: Operation enabled once only, latched (S5/S1): err $(axerr $a), $(n_oe $a) x enabled, ends $(axstate $a)" \
-            "[ \$(n_oe $a) = 1 ] && case \"\$(axerr $a)\" in 'bus lost'|'left Operation enabled without a command') true ;; *) false ;; esac && [ \"\$(axstate $a)\" != 'Operation enabled' ]"
+        # Seen on the real drives (9/10): breaker off -> the drive leaves Operation enabled while
+        # it still talks (S1 'left Operation enabled ...'); cable out -> drive 2 goes to Fault
+        # 0x0E08 ('drive fault', S7), and clears it itself when it re-enters OP. Whatever the
+        # latch: enabled once only, an error kept, not enabled at the end, and the master never
+        # sent a fault reset (controlword bit 7) -- S7.
+        chk "$c axis $a: enabled once only, latched error kept (err: $(axerr $a)), ends $(axstate $a)" \
+            "[ \$(n_oe $a) = 1 ] && [ -n \"\$(axerr $a)\" ] && [ \"\$(axerr $a)\" != none ] && [ \"\$(axstate $a)\" != 'Operation enabled' ]"
+        chk "$c axis $a: no fault reset sent by the master (cw bit 7 never set)" \
+            "! reset_sent $a"
     done
     ;;
 w07)

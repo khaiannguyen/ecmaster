@@ -7,3 +7,8 @@
 # them -- an unknown code still shows its CiA 301 class.
 # Format: one "0xCODE text" per line after the vendor line.
 vendor 0x00100000
+# Observed on the real drives (Phase 10.9 W-06, 9/10/2026): drive 2 lost its
+# EtherCAT process data at OP (cable drive 1 -> drive 2 unplugged) and went to
+# Fault with 0x603F = 0x0E08; no EMCY frame arrived (the cable was out). The
+# drive cleared the fault itself when it re-entered OP. Name per the manual: TODO.
+0x0E08 EtherCAT process data lost at OP (seen 10.9 W-06; name: see IS620N manual)
