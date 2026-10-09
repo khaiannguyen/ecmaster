@@ -96,7 +96,8 @@ int main(int argc, char **argv)
     int coe_delay_ms = 0;                                /* Phase 9.6, off by default */
     int prof_node[16], n_prof = 0;                       /* Phase 9.9 --profile N=FILE */
     const char *prof_file[16];
-    int drv_node[16], drv_axes[16], n_drv = 0;           /* Phase 10.2 --cia402 N[:AXES] */
+    int drv_node[16], drv_axes[16], n_drv = 0;
+    int cal_node[16], n_cal = 0; const char *cal_file[16];   /* 10.2 --cia402-cal N=FILE */           /* Phase 10.2 --cia402 N[:AXES] */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) {
@@ -146,6 +147,12 @@ int main(int argc, char **argv)
             prof_node[n_prof] = k;
             prof_file[n_prof] = eq + 1;
             n_prof++;
+        } else if (strcmp(argv[i], "--cia402-cal") == 0 && i + 1 < argc) {
+            /* 10.2: N=FILE -- calibration of slave N's virtual drive (config/profiles/is620n.cal) */
+            char *v = argv[++i], *eq = strchr(v, '=');
+            int k = atoi(v);
+            if (!eq || k < 1 || k > 64 || n_cal >= 16) { fprintf(stderr, "--cia402-cal expects N=FILE\n"); return 1; }
+            cal_node[n_cal] = k; cal_file[n_cal] = eq + 1; n_cal++;
         } else if (strcmp(argv[i], "--cia402") == 0 && i + 1 < argc) {
             /* Phase 10.2: N[:AXES] -- slave N (needs --profile N=...) is a CiA402 drive */
             char *v = argv[++i], *colon = strchr(v, ':');
@@ -179,7 +186,8 @@ int main(int argc, char **argv)
                 "       [--sii-poke WORD=VALUE ...] [--coe-pdo-od] [--coe-ca] [--coe-delay-ms MS]\n"
                 "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, Phase 9.5)\n"
                 "       [--profile N=FILE ...] (slave N emulates the profile's slave, Phase 9.9)\n"
-                "       [--cia402 N[:AXES] ...] (slave N with a profile is a virtual CiA402 drive, Phase 10.2)\n",
+                "       [--cia402 N[:AXES] ...] (slave N with a profile is a virtual CiA402 drive, Phase 10.2)\n"
+                "       [--cia402-cal N=FILE ...] (calibration of that drive, e.g. config/profiles/is620n.cal)\n",
                 argv[0]);
         return 1;
     }
@@ -226,6 +234,23 @@ int main(int argc, char **argv)
         }
         if (esc_cia402_attach(&chain[s - 1], drv_axes[k])) { fprintf(stderr, "--cia402 %d: out of memory\n", s); return 1; }
         printf("soft_bus: node %d = virtual CiA402 drive, %d axis/axes (objects + 0x800 per axis)\n", s, drv_axes[k]);
+    }
+    for (int k = 0; k < n_cal; k++) {                  /* 10.2 */
+        int s = cal_node[k];
+        char cerr[256];
+        if (s > n || !chain[s - 1].drv) { fprintf(stderr, "--cia402-cal %d: slave %d is not a --cia402 drive\n", s, s); return 1; }
+        if (esc_cia402_cal_load(&chain[s - 1].drv->cal, cal_file[k], cerr, sizeof(cerr))) {
+            fprintf(stderr, "--cia402-cal %d: %s\n", s, cerr); return 1;
+        }
+        esc_cia402_reset(&chain[s - 1]);
+        chain[s - 1].fault.op_delay_ms = chain[s - 1].drv->cal.op_delay_ms;
+        const esc_cia402_cal_t *c = &chain[s - 1].drv->cal;
+        printf("soft_bus: node %d drive calibration %s: CSP lag %.1f ms, vel x%.4f, trans %u cycles, "
+               "SAFEOP->OP %u ms, lost OP 0x%04X%s%s%s, disable-op brake %.0f inc/s^2\n",
+               s, cal_file[k], c->csp_lag_ms, c->vel_scale > 0 ? c->vel_scale : 1.0, c->trans_cycles,
+               c->op_delay_ms, c->code_lost_op, c->lost_op_emcy ? " +EMCY" : " no EMCY",
+               c->lost_pd_fault ? ", also in RTSO/SO" : "", c->lost_op_autoclear ? ", self-clearing" : "",
+               c->disable_op_decel);
     }
     if (coe_pdo_od || coe_ca)
         printf("soft_bus: CoE %s%s\n", "PDO objects 0x1C00/0x1C12/0x1C13/0x1600/0x1A00",

@@ -870,6 +870,11 @@ void esc_al_control_write(esc_t *esc)
         return;
     }
 
+    /* 10.2: a calibrated drive (IS620N ~300 ms) takes time for SAFEOP -> OP:
+     * the status stays SAFEOP, esc_cia402_step_dt completes it later. */
+    if (current == ESM_SAFEOP && requested == ESM_OP && esc->fault.op_delay_ms && !esc->fault.powered_off)
+        return;
+
     /* Valid -- change state, clear the error flag. */
     wr_le16(esc->regs + REG_AL_STATUS, requested);
     wr_le16(esc->regs + REG_AL_STATUS_CODE, ALSTATUSCODE_NOERROR);

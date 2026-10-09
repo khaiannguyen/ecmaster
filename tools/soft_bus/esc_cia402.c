@@ -48,6 +48,44 @@ void esc_cia402_cal_default(esc_cia402_cal_t *c)
     c->code_ferr       = 0x8611;   /* CiA 402: following error              */
     c->code_sync       = 0x8700;
     c->supported_modes = 0x000001A5; /* PP, PV, HM, CSP, CSV (0x6502 bits 0,2,5,7,8) */
+    c->lost_op_emcy    = 1;
+}
+
+int esc_cia402_cal_load(esc_cia402_cal_t *c, const char *path, char *err, size_t errlen)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(err, errlen, "%s: cannot open", path); return -1; }
+    char ln[256];
+    int no = 0;
+    while (fgets(ln, sizeof(ln), f)) {
+        no++;
+        char *h = strchr(ln, '#');
+        if (h) *h = 0;
+        char k[64];
+        double v;
+        int n = sscanf(ln, " %63s %lf", k, &v);
+        if (n <= 0) continue;
+        if (n != 2 || v < 0) { snprintf(err, errlen, "%s:%d: expected 'key value' (value >= 0)", path, no); fclose(f); return -1; }
+        if      (!strcmp(k, "power_on_ms"))       c->power_on_ms = (uint32_t)v;
+        else if (!strcmp(k, "trans_cycles"))      c->trans_cycles = (uint32_t)v;
+        else if (!strcmp(k, "code_lost_op"))      c->code_lost_op = (uint16_t)v;
+        else if (!strcmp(k, "code_ferr"))         c->code_ferr = (uint16_t)v;
+        else if (!strcmp(k, "code_sync"))         c->code_sync = (uint16_t)v;
+        else if (!strcmp(k, "supported_modes"))   c->supported_modes = (uint32_t)v;
+        else if (!strcmp(k, "csp_lag_ms"))        c->csp_lag_ms = v;
+        else if (!strcmp(k, "vel_scale"))         c->vel_scale = v;
+        else if (!strcmp(k, "lost_pd_fault"))     c->lost_pd_fault = v != 0;
+        else if (!strcmp(k, "lost_op_emcy"))      c->lost_op_emcy = v != 0;
+        else if (!strcmp(k, "lost_op_autoclear")) c->lost_op_autoclear = v != 0;
+        else if (!strcmp(k, "reinit_ms"))         c->reinit_ms = (uint32_t)v;
+        else if (!strcmp(k, "csp_target_window")) c->csp_target_window = (uint32_t)v;
+        else if (!strcmp(k, "sw_target_hold"))    c->sw_target_hold = v != 0;
+        else if (!strcmp(k, "disable_op_decel"))  c->disable_op_decel = v;
+        else if (!strcmp(k, "op_delay_ms"))       c->op_delay_ms = (uint32_t)v;
+        else { snprintf(err, errlen, "%s:%d: unknown key '%s'", path, no, k); fclose(f); return -1; }
+    }
+    fclose(f);
+    return 0;
 }
 
 static const char *const DS_NAME[DS_COUNT] = {
@@ -364,6 +402,10 @@ static void set_ds(esc_t *e, int a, cia402_ds_t to, FILE *log, const char *why)
     if (x->ds == to) return;
     LOGD(log, "node %d axis %d %s -> %s (%s, cw 0x%04X)", e->position_in_chain, a,
          esc_cia402_ds_name(x->ds), esc_cia402_ds_name(to), why, x->cw);
+    if (x->ds == DS_OE && e->drv->cal.sw_target_hold && (x->sw & SW_TARGET) && to != DS_FRA && to != DS_FAULT)
+        x->tr_hold = 1;                        /* IS620N: 0x0631 after disable */
+    if (to == DS_OE) x->tr_hold = 0;
+    if (to != DS_OE) x->braking = 0;
     x->ds = to;
     x->transitions++;
     x->wait_cycles = 0;
@@ -379,10 +421,14 @@ static void raise_fault(esc_t *e, int a, uint16_t code, FILE *log, const char *w
     if (x->ds == DS_FAULT || x->ds == DS_FRA) return;
     x->err_code = code;
     x->faults++;
-    x->emcy++;
-    e->fault.emcy_code = code;                 /* posted through SM1 (esc_fault.c, Phase 9.7) */
-    e->fault.emcy_reg = 0x01;                  /* error register: generic error          */
-    e->fault.emcy_left++;
+    x->tr_hold = 0;
+    x->braking = 0;
+    if (code != e->drv->cal.code_lost_op || e->drv->cal.lost_op_emcy) {   /* IS620N: 0x0E08, no EMCY */
+        x->emcy++;
+        e->fault.emcy_code = code;             /* posted through SM1 (esc_fault.c, Phase 9.7) */
+        e->fault.emcy_reg = 0x01;              /* error register: generic error          */
+        e->fault.emcy_left++;
+    }
     int moving = x->ds == DS_OE || x->ds == DS_QSA;
     set_ds(e, a, moving ? DS_FRA : DS_FAULT, log, why);
 }
@@ -448,14 +494,22 @@ static void motion(esc_t *e, int a, double dt, FILE *log)
         return;
     }
     if (x->ds != DS_OE) { x->vel = 0; return; }
+    if (x->braking) {                                          /* 10.2: Disable operation, IS620N brakes in OE */
+        stop_motion(x, e->drv->cal.disable_op_decel, dt);
+        x->ferr = (int32_t)llround((double)x->target_pos - x->pos);
+        return;
+    }
 
     int halt = (x->cw & CW_HALT) != 0;
+    double vs = e->drv->cal.vel_scale > 0 ? e->drv->cal.vel_scale : 1.0;   /* 10.2: IS620N -0.37 % */
     switch (x->mode) {
     case MODE_CSP: {
-        double v_des = ((double)x->target_pos - x->pos) / dt;
+        double tau = e->drv->cal.csp_lag_ms > 0 ? e->drv->cal.csp_lag_ms * 1e-3 : dt;   /* 10.2: IS620N ~26 ms */
+        if (tau < dt) tau = dt;
+        double v_des = ((double)x->target_pos - x->pos) / tau;
         /* 32-bit wrap: the shortest way round, as a drive with a 32-bit target does */
-        if (v_des * dt > 2147483648.0) v_des -= 4294967296.0 / dt;
-        if (v_des * dt < -2147483648.0) v_des += 4294967296.0 / dt;
+        if (v_des * tau > 2147483648.0) v_des -= 4294967296.0 / tau;
+        if (v_des * tau < -2147483648.0) v_des += 4294967296.0 / tau;
         double v = ramp(x->vel, v_des, acc, dec, dt);
         if (v > vmax) v = vmax;
         if (v < -vmax) v = -vmax;
@@ -463,6 +517,8 @@ static void motion(esc_t *e, int a, double dt, FILE *log)
         x->pos += v * dt;
         x->ferr = (int32_t)llround((double)x->target_pos - x->pos) + x->inj_ferr;
         sw_oms |= SW_OMS12;                                   /* following the target */
+        if (e->drv->cal.csp_target_window && (uint32_t)abs(x->ferr) <= e->drv->cal.csp_target_window)
+            sw_oms |= SW_TARGET;                              /* IS620N 0x1637 standing */
         if (x->ferr_window != 0xFFFFFFFFu && (uint32_t)abs(x->ferr) > x->ferr_window) {
             sw_oms |= SW_OMS13;
             raise_fault(e, a, e->drv->cal.code_ferr, log, "following error > 0x6065");
@@ -471,7 +527,7 @@ static void motion(esc_t *e, int a, double dt, FILE *log)
         break;
     }
     case MODE_CSV: {
-        double v = ramp(x->vel, halt ? 0.0 : (double)x->target_vel, acc, dec, dt);
+        double v = ramp(x->vel, halt ? 0.0 : (double)x->target_vel * vs, acc, dec, dt);
         if (v > vmax) v = vmax;
         if (v < -vmax) v = -vmax;
         x->vel = v;
@@ -481,7 +537,7 @@ static void motion(esc_t *e, int a, double dt, FILE *log)
     }
     case MODE_PV: {
         double pa = lim_or(x->accel, DFLT_ACCEL), pd = lim_or(x->decel, DFLT_ACCEL);
-        double to = halt ? 0.0 : (double)x->target_vel;
+        double to = halt ? 0.0 : (double)x->target_vel * vs;
         x->vel = ramp(x->vel, to, pa, pd, dt);
         x->pos += x->vel * dt;
         if (fabs(x->vel - to) < 0.5) sw_oms |= SW_TARGET;
@@ -579,8 +635,11 @@ static void axis_step(esc_t *e, int a, int op, double dt, uint64_t dt_ns, FILE *
 
     if (x->ds == DS_NOT_READY) {
         x->t_since_power_ns += dt_ns;
-        if (x->t_since_power_ns >= (uint64_t)d->cal.power_on_ms * 1000000ull)
-            set_ds(e, a, DS_SOD, log, "power-on self test done");
+        uint32_t ms = x->reinit ? d->cal.reinit_ms : d->cal.power_on_ms;
+        if (x->t_since_power_ns >= (uint64_t)ms * 1000000ull) {
+            set_ds(e, a, DS_SOD, log, x->reinit ? "re-initialised after the cleared fault" : "power-on self test done");
+            x->reinit = 0;
+        }
     }
 
     /* faults first: injected, ESM left OP while enabled */
@@ -588,8 +647,23 @@ static void axis_step(esc_t *e, int a, int op, double dt, uint64_t dt_ns, FILE *
         raise_fault(e, a, x->inj_fault_code, log, "drv_fault");
     if (!op && (x->ds == DS_OE || x->ds == DS_QSA))
         raise_fault(e, a, d->cal.code_lost_op, log, "EtherCAT state left OP while enabled");
-    else if (!op && (x->ds == DS_RTSO || x->ds == DS_SO))
-        set_ds(e, a, DS_SOD, log, "EtherCAT state left OP");
+    else if (!op && (x->ds == DS_RTSO || x->ds == DS_SO)) {
+        /* 10.2: IS620N, TwinCAT capture 9/10: process data lost (SM watchdog,
+         * AL 0x001B) in Ready to switch on -> Fault 0x0E08 too */
+        if (d->cal.lost_pd_fault && rd16(e->regs + REG_AL_STATUS_CODE) == 0x001B)
+            raise_fault(e, a, d->cal.code_lost_op, log, "process data lost (SM watchdog)");
+        else
+            set_ds(e, a, DS_SOD, log, "EtherCAT state left OP");
+    }
+    /* 10.2: IS620N clears the lost-OP fault itself back in OP (W-06, X-05):
+     * Fault -> Not ready (0x603F 0) -> Switch on disabled after reinit_ms */
+    if (op && d->cal.lost_op_autoclear && x->ds == DS_FAULT && x->err_code == d->cal.code_lost_op
+        && !x->inj_fault_code) {
+        x->err_code = 0;
+        x->reinit = 1;
+        x->t_since_power_ns = 0;
+        set_ds(e, a, DS_NOT_READY, log, "lost-OP fault cleared by the drive");
+    }
     if (x->inj_quickstop && x->ds == DS_OE) {
         x->inj_quickstop = 0;
         set_ds(e, a, DS_QSA, log, "drv_quickstop");
@@ -619,6 +693,13 @@ static void axis_step(esc_t *e, int a, int op, double dt, uint64_t dt_ns, FILE *
             nx = DS_FAULT;
         }
         if (nx == DS_OE && x->ds != DS_QSA && x->inj_refuse_enable) nx = x->ds;
+        /* 10.2: Disable operation while moving: the IS620N brakes and reports
+         * Operation enabled until it stands (W-07 / W-08) */
+        if (x->ds == DS_OE && nx == DS_SO && d->cal.disable_op_decel > 0 && fabs(x->vel) >= 0.5) {
+            if (!x->braking) LOGD(log, "node %d axis %d Disable operation: braking in OE", e->position_in_chain, a);
+            x->braking = 1;
+            nx = DS_OE;
+        }
         if (nx != x->ds) {
             int urgent = nx == DS_QSA || nx == DS_SOD;   /* stopping is never delayed */
             uint32_t need = urgent ? 0 : (d->cal.trans_cycles ? d->cal.trans_cycles - 1 : 0)
@@ -648,6 +729,7 @@ static void axis_step(esc_t *e, int a, int op, double dt, uint64_t dt_ns, FILE *
     }
     x->sw = (uint16_t)((x->sw & ~0x006Fu) | esc_cia402_sw_state(x->ds));
     if (x->ds != DS_OE) x->sw &= (uint16_t)~(SW_OMS12 | SW_OMS13 | SW_TARGET);
+    if (x->tr_hold && (x->ds == DS_RTSO || x->ds == DS_SO || x->ds == DS_SOD)) x->sw |= SW_TARGET;
     x->cw_prev = x->cw;
     x->steps++;
 }
@@ -675,6 +757,20 @@ void esc_cia402_step_dt(esc_t *e, uint64_t dt_ns, FILE *log)
     esc_cia402_t *d = e->drv;
     if (!d || !e->prof || e->fault.powered_off) return;
     uint8_t al = e->regs[REG_AL_STATUS] & 0x0F;
+    e->fault.op_delay_ms = d->cal.op_delay_ms;  /* survives a ctl "clear" of the fault block */
+    /* 10.2: SAFEOP -> OP deferred by op_delay_ms (IS620N ~300 ms) */
+    if (d->cal.op_delay_ms && al == ESM_SAFEOP && (e->regs[REG_AL_CONTROL] & 0x0F) == ESM_OP
+        && !(e->regs[REG_AL_STATUS] & 0x10)) {
+        d->op_since_ns += dt_ns;
+        if (d->op_since_ns >= (uint64_t)d->cal.op_delay_ms * 1000000ull) {
+            e->regs[REG_AL_STATUS] = ESM_OP; e->regs[REG_AL_STATUS + 1] = 0;
+            e->regs[REG_AL_STATUS_CODE] = 0; e->regs[REG_AL_STATUS_CODE + 1] = 0;
+            d->op_since_ns = 0;
+            al = ESM_OP;
+        }
+    } else {
+        d->op_since_ns = 0;
+    }
     int op = al == ESM_OP;
     int safeop = al == ESM_SAFEOP || al == ESM_OP;
     d->dt_ns = dt_ns;

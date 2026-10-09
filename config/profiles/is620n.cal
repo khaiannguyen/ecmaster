@@ -1,0 +1,36 @@
+# is620n.cal -- Phase 10.2: calibration of the virtual CiA402 drive (soft_bus
+# --cia402-cal N=FILE) against the two real Inovance IS620N of 8-9/10/2026.
+# Source of every number: claude/giai_doan_10_nhat_ky_10_0.md (R-), _10_9.md
+# (W-, X-05b) and _10_8.md (X-05). "key value", values >= 0.
+
+# SAFEOP -> OP 297..299 ms (R-05, R-09, X-05b); PREOP -> SAFEOP 1-2 ms (not modelled)
+op_delay_ms        300
+# enable: RTSO -07-> SO -0F-> OE answered in 3-5 frames with our master
+# (1.5-2.5 ms) and 4-6 ms with TwinCAT (X-05)
+trans_cycles       2
+# CSP tracking: W-02 (1 - cos) 1 rev 0.2 Hz -> the master's tracking max
+# |actual(k) - setpoint(k-1)| = 139 640 inc (~26.5 cycles at the peak 5 271
+# inc/ms); W-04 1/2 rev: 70 992. Default gains, no feed-forward. Model: first-
+# order lag 28.5 ms reproduces 139 588 on the W-02 trajectory (test_cia402
+# A-10; the jittery sandbox shows ~152 000, the Jetson should show ~140 000).
+csp_lag_ms         28.5
+# CSV and PV: 0.9963 rev for 1 rev commanded (W-09csv, W-10pv, same ratio)
+vel_scale          0.9963
+# process data lost: Fault 0x0E08, no EMCY (W-06, X-05), also when only Ready
+# to switch on (X-05: laptop stalled 116 / 382 ms), and the drive clears it
+# itself when the process data are back in OP; Not ready (sw 0x0210) -> ~40 ms
+# -> Switch on disabled (X-05: 0x0218 -> 0x0210 -> 0x0231)
+code_lost_op       0x0E08
+lost_op_emcy       0
+lost_pd_fault      1
+lost_op_autoclear  1
+reinit_ms          40
+# statusword in OE (CSP, standing): 0x1637 = bit 12 + bit 10; after disable
+# 0x0631 (bit 10 kept) (X-05). Window: assumption, 0x6067 not read yet.
+csp_target_window  1000
+sw_target_hold     1
+# Disable operation while moving: the drive brakes and reports OE until it
+# stands (W-07 / W-08 drift 290 000..400 000 inc from ~2.6e6 inc/s): ~1e7 inc/s^2
+disable_op_decel   10000000
+# 0x6502 0x3AD = PP PV TQ HM CSP CSV CST (R-04)
+supported_modes    0x3AD

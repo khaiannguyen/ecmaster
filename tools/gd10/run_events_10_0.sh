@@ -44,6 +44,7 @@ CAP=${CAP:-1}; YES=${YES:-0}
 SB_PRIO=${SB_PRIO-79}; SB_CPU=${SB_CPU:-2}
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 SOFT_BUS=${SOFT_BUS:-$ROOT/tools/soft_bus/soft_bus}
+SIM_CAL=${SIM_CAL:-$ROOT/config/profiles/is620n.cal}   # 10.2: virtual drives calibrated as the real IS620N; SIM_CAL=none: generic
 EMCY_MAP=$ROOT/config/emcy/is620n.emcy
 LOG=${LOG:-log_gd10_events_$(date +%Y%m%d_%H%M%S)}
 LOG=$(mkdir -p "$LOG" && cd "$LOG" && pwd)
@@ -81,7 +82,7 @@ if [ "$SIM" = 1 ]; then
     { cat "$ROOT/config/profiles/is620n_min.prof"; echo "obj 0x6502 var 1"; echo "sub 0x6502 0 bits 32 ro a5010000"; } > "$IS"
     rm -f "$CTL"
     sb=("$SOFT_BUS"); [ -n "$SB_PRIO" ] && sb=(chrt -f "$SB_PRIO" taskset -c "$SB_CPU" "$SOFT_BUS")
-    SBA=""; for s in $(seq 1 "$N"); do SBA="$SBA --profile $s=$IS --cia402 $s"; done
+    SBA=""; for s in $(seq 1 "$N"); do SBA="$SBA --profile $s=$IS --cia402 $s"; [ "$SIM_CAL" != none ] && SBA="$SBA --cia402-cal $s=$SIM_CAL"; done
     "${sb[@]}" --iface "$IF_S" --n "$N" --dc 32 --no-sm-wd --ctl "$CTL" $SBA > "$LOG/soft_bus.log" 2>&1 &
     SBP=$!; sleep 0.5
     kill -0 $SBP 2>/dev/null || { cat "$LOG/soft_bus.log"; die "soft_bus did not start"; }

@@ -78,6 +78,7 @@ IS620N_ESI=${IS620N_ESI:-}
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 ECM_PEEK=${ECM_PEEK:-$ROOT/apps/ecm_peek/ecm_peek}
 SOFT_BUS=${SOFT_BUS:-$ROOT/tools/soft_bus/soft_bus}
+SIM_CAL=${SIM_CAL:-$ROOT/config/profiles/is620n.cal}   # 10.2: virtual drives calibrated as the real IS620N; SIM_CAL=none: generic
 LOG=${LOG:-log_gd10_w_$(date +%Y%m%d_%H%M%S)}
 LOG=$(mkdir -p "$LOG" && cd "$LOG" && pwd)
 REP=$LOG/report.md
@@ -145,6 +146,8 @@ HAS_60FF=0; awk '$1 == "pdo" && $4 == "out" && $8 == "0x60FF"' "$ENI" | grep -q 
 
 # ---- SIM: two virtual IS620N with the limit objects ----
 SBP=
+SBCAL=; [ "$SIM_CAL" != none ] && SBCAL="--cia402-cal 1=$SIM_CAL --cia402-cal 2=$SIM_CAL"
+[ "$SIM" = 1 ] && say "- virtual drives: calibration ${SIM_CAL##*/} (10.2)"
 if [ "$SIM" = 1 ]; then
     IS=$LOG/is620n_sim.prof
     if [ -n "$IS620N_ESI" ]; then
@@ -169,7 +172,7 @@ sim_start () {
     local sb=("$SOFT_BUS")
     [ -n "$SB_PRIO" ] && sb=(chrt -f "$SB_PRIO" taskset -c "$SB_CPU" "$SOFT_BUS")
     "${sb[@]}" --iface "$IF_S" --n 2 --dc 32 --no-sm-wd --ctl "$CTL" \
-        --profile 1="$IS" --cia402 1 --profile 2="$IS" --cia402 2 > "$LOG/sb_$1.log" 2>&1 &
+        --profile 1="$IS" --cia402 1 --profile 2="$IS" --cia402 2 $SBCAL > "$LOG/sb_$1.log" 2>&1 &
     SBP=$!; sleep 0.5
 }
 sim_stop () { [ -n "$SBP" ] && { kill -INT $SBP 2>/dev/null; wait $SBP 2>/dev/null; SBP=; }; return 0; }

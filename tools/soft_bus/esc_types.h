@@ -263,6 +263,7 @@ typedef struct {
     uint16_t app_seq;           /* --app-seq: slave application counter        */
     uint64_t mbx_repeats_served;/* master repeat requests answered (0x080E)    */
     uint32_t coe_delay_ms;      /* Phase 9.6: SDO download responses held this long */
+    uint32_t op_delay_ms;       /* 10.2: SAFEOP -> OP completes this late (the drive step does it) */
     uint32_t emcy_left;         /* Phase 9.7: EMCY still to post (ctl "emcy")      */
     uint16_t emcy_code;
     uint8_t  emcy_reg;

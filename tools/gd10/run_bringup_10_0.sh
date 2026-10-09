@@ -58,6 +58,7 @@ SB_PRIO=${SB_PRIO-79}; SB_CPU=${SB_CPU:-2}   # SIM: like the soaks (FIFO 79, cor
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 ECM_PEEK=${ECM_PEEK:-$ROOT/apps/ecm_peek/ecm_peek}
 SOFT_BUS=${SOFT_BUS:-$ROOT/tools/soft_bus/soft_bus}
+SIM_CAL=${SIM_CAL:-$ROOT/config/profiles/is620n.cal}   # 10.2: virtual drives calibrated as the real IS620N; SIM_CAL=none: generic
 EMCY_MAP=$ROOT/config/emcy/is620n.emcy
 LOG=${LOG:-log_gd10_bringup_$(date +%Y%m%d_%H%M%S)}
 LOG=$(mkdir -p "$LOG" && cd "$LOG" && pwd)
@@ -148,7 +149,7 @@ if [ "$SIM" = 1 ]; then
         sed -i "s/^\(sub 0x1018 3 bits 32 ro\) .*/\1 $(printf '%08x' "$SIM_REV" | sed 's/\(..\)\(..\)\(..\)\(..\)/\4\3\2\1/')/" "$IS"
     fi
     SB_PROFS=""
-    for s in $(seq 1 "$N"); do SB_PROFS="$SB_PROFS --profile $s=$IS --cia402 $s"; done
+    for s in $(seq 1 "$N"); do SB_PROFS="$SB_PROFS --profile $s=$IS --cia402 $s"; [ "$SIM_CAL" != none ] && SB_PROFS="$SB_PROFS --cia402-cal $s=$SIM_CAL"; done
 fi
 
 # ------------------------------------------------------------------ r01

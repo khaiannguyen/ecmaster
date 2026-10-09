@@ -87,6 +87,18 @@ typedef struct {
     uint16_t code_ferr;          /* following error (0x8611 CiA402)          */
     uint16_t code_sync;          /* sync lost (drv_lose_sync)               */
     uint32_t supported_modes;    /* 0x6502 when the profile has none        */
+    /* 10.2 calibration against the real IS620N (config/profiles/is620n.cal);
+     * 0 = the generic behaviour of the defaults */
+    double   csp_lag_ms;         /* CSP: first-order lag of actual behind target */
+    double   vel_scale;          /* CSV / PV: actual velocity = target x scale (0 = 1) */
+    uint8_t  lost_pd_fault;      /* SM watchdog (AL 0x001B) in RTSO / SO -> fault too */
+    uint8_t  lost_op_emcy;       /* post an EMCY with the lost-OP fault (1 = yes) */
+    uint8_t  lost_op_autoclear;  /* lost-OP fault clears itself back in OP   */
+    uint32_t reinit_ms;          /* after that: Not ready -> Switch on disabled */
+    uint32_t csp_target_window;  /* CSP: statusword bit 10 when |following error| <= this */
+    uint8_t  sw_target_hold;     /* bit 10 stays after leaving OE (until enable / fault) */
+    double   disable_op_decel;   /* Disable operation while moving: stay OE, brake (inc/s^2) */
+    uint32_t op_delay_ms;        /* ESM SAFEOP -> OP takes this long        */
 } esc_cia402_cal_t;
 
 typedef struct {
@@ -141,6 +153,11 @@ typedef struct {
     uint8_t  inj_latched;        /* fault stays until drv_clear             */
     uint8_t  inj_quickstop;
 
+    /* 10.2 calibration state */
+    uint8_t  braking;            /* Disable operation accepted, braking in OE */
+    uint8_t  reinit;             /* Not ready after an auto-cleared fault    */
+    uint8_t  tr_hold;            /* statusword bit 10 kept after OE          */
+
     /* counters */
     uint64_t steps, transitions, faults, emcy;
 } esc_cia402_axis_t;
@@ -152,10 +169,15 @@ typedef struct esc_cia402 {
     uint64_t last_pd_ns;
     uint64_t dt_ns;               /* last step's dt                         */
     uint8_t  was_op;
+    uint64_t op_since_ns;         /* 10.2: SAFEOP -> OP request pending since */
 } esc_cia402_t;
 
 /* Defaults (spec + generic drive behaviour, before calibration). */
 void esc_cia402_cal_default(esc_cia402_cal_t *c);
+
+/* 10.2: read "key value" lines (# comments) into c over the defaults.
+ * 0 ok, -1 error (message in err). Keys: see config/profiles/is620n.cal. */
+int  esc_cia402_cal_load(esc_cia402_cal_t *c, const char *path, char *err, size_t errlen);
 
 /* Enable the model on a profile node. 0 ok, -1 no profile / bad axes /
  * out of memory. The node keeps it across drop_node/restore_node (power

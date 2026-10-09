@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int g_pass, g_fail;
 static void check(const char *name, long got, long want)
@@ -439,6 +440,172 @@ static void a07(void)
     check("0x603F (byte 0 of 0x1B01) = 0", in(e, 0x603F), 0);
 }
 
+/* ---- A-10 (10.2): calibration against the real IS620N ------------------- */
+
+/* is620n_min.prof with the PDOs of eni_2servo_mm (0x1702/0x1B02, 19/25 byte):
+ * 0x60FF and 0x6060 in the outputs, as on the real drives (X-05b) */
+static esc_t *cal_node(void)
+{
+    char tmp[] = "/tmp/test_cia402_is620n_mm_XXXXXX";
+    int fd = mkstemp(tmp);
+    FILE *in = fopen(PROF_DIR "is620n_min.prof", "r"), *o = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!in || !o) { fprintf(stderr, "profile copy\n"); exit(2); }
+    char ln[512];
+    while (fgets(ln, sizeof(ln), in)) {
+        if (!strncmp(ln, "sm 2 ", 5)) fputs("sm 2 start 0x1800 len 19 ctrl 0x64 en 1\n", o);
+        else if (!strncmp(ln, "sm 3 ", 5)) fputs("sm 3 start 0x1C00 len 25 ctrl 0x20 en 1\n", o);
+        else if (!strncmp(ln, "sub 0x1C12 1 ", 13)) fputs("sub 0x1C12 1 bits 16 rw_preop 0217\n", o);
+        else if (!strncmp(ln, "sub 0x1C13 1 ", 13)) fputs("sub 0x1C13 1 bits 16 rw_preop 021b\n", o);
+        else fputs(ln, o);
+    }
+    fclose(in); fclose(o);
+    esc_t *e = g_e = make_node(tmp, 1);
+    unlink(tmp);
+    char err[256];
+    if (esc_cia402_cal_load(&e->drv->cal, PROF_DIR "is620n.cal", err, sizeof(err))) { fprintf(stderr, "%s\n", err); exit(2); }
+    esc_cia402_reset(e);
+    out(e, 0x6060, MODE_CSP);
+    out(e, 0x607F, 0);
+    steps(e, 2);                                    /* power-on: Not ready -> Switch on disabled */
+    return e;
+}
+
+static void enable_cal(esc_t *e)
+{
+    out(e, 0x6040, 0x06); steps(e, 3);
+    out(e, 0x6040, 0x07); steps(e, 3);
+    out(e, 0x6040, 0x0F); steps(e, 3);
+}
+
+static void a10(void)
+{
+    printf("[A-10 calibration: config/profiles/is620n.cal]\n");
+    {
+        char err[256];
+        esc_cia402_cal_t c;
+        esc_cia402_cal_default(&c);
+        check("is620n.cal loads", esc_cia402_cal_load(&c, PROF_DIR "is620n.cal", err, sizeof(err)), 0);
+        check("  code_lost_op 0x0E08 (hex accepted)", c.code_lost_op, 0x0E08);
+        check("  SAFEOP->OP 300 ms", c.op_delay_ms, 300);
+        FILE *f = fopen("/tmp/test_cia402_bad.cal", "w");
+        fputs("csp_lag_ms 26\nbogus 1\n", f); fclose(f);
+        check("unknown key refused", esc_cia402_cal_load(&c, "/tmp/test_cia402_bad.cal", err, sizeof(err)), -1);
+        check_true("  names file:line and key", strstr(err, ":2: unknown key 'bogus'") != NULL);
+        unlink("/tmp/test_cia402_bad.cal");
+        esc_cia402_cal_default(&c);
+        check("defaults unchanged: no CSP lag, lost-OP with EMCY", (long)(c.csp_lag_ms * 10) + c.lost_op_emcy, 1);
+    }
+
+    /* enable timing: 2 cycles per transition (X-05: 1.5-2.5 ms) */
+    esc_t *e = cal_node();
+    out(e, 0x6040, 0x06); step(e);
+    check("trans_cycles 2: Ready to switch on not after 1 cycle", swst(e) == 0x21, 0);
+    step(e);
+    check("  after 2 cycles", swst(e), 0x21);
+    out(e, 0x6040, 0x07); steps(e, 2); out(e, 0x6040, 0x0F); steps(e, 2);
+    check("Operation enabled after 6 cycles", swst(e), 0x27);
+    steps(e, 5);
+    check("statusword standing in CSP OE = 0x1637 (X-05)", sw(e), 0x1637);
+
+    /* CSP lag on the W-02 trajectory: (1 - cos) of 1 rev at 0.2 Hz, the
+     * master's measure max |actual(k) - setpoint(k-1)|: 139 640 on the real drive */
+    int32_t p0 = (int32_t)in(e, 0x6064), t = p0;
+    long lag = 0, prev = p0;
+    for (int k = 1; k <= 5000; k++) {
+        t = p0 + (int32_t)llround(8388608.0 * 0.5 * (1.0 - cos(2.0 * M_PI * 0.2 * k * 1e-3)));
+        out(e, 0x607A, t); step(e);
+        long d = labs((long)in(e, 0x6064) - prev);
+        if (k > 8 && d > lag) lag = d;
+        prev = t;
+        if (k == 1250) check_true("  following at peak velocity: bit 10 off, bit 12 on", (sw(e) & 0x1400) == 0x1000);
+    }
+    check_true("CSP W-02 trajectory: tracking max 139 640 +- 5 % (real IS620N)", labs(lag - 139640) <= 6982);
+    printf("    (tracking max %ld inc)\n", lag);
+    for (int k = 0; k < 300; k++) step(e);           /* setpoint stands: converges */
+    check_true("  converges to the setpoint within 1 000 inc after 300 ms", labs((long)t - (long)in(e, 0x6064)) <= 1000);
+    check("  standing again: 0x1637", sw(e), 0x1637);
+
+    /* disable: bit 10 kept (0x0631 after OE -06-> RTSO in X-05) */
+    out(e, 0x6040, 0x06); steps(e, 3);
+    check("after Shutdown from OE: 0x0631 (bit 10 kept)", sw(e), 0x0631);
+    enable_cal(e);
+    check("enable again: OE", swst(e), 0x27);
+
+    /* CSV velocity scale */
+    out(e, 0x6060, MODE_CSV);
+    out(e, 0x60FF, 1000000);
+    steps(e, 3);
+    int32_t c0 = (int32_t)in(e, 0x6064);
+    steps(e, 1000);
+    long mv = (long)in(e, 0x6064) - c0;
+    check_true("CSV 1 000 000 inc/s for 1 s: 996 300 +- 1 000 (x0.9963, W-09csv)", labs(mv - 996300) <= 1000);
+
+    /* Disable operation while moving: brakes in OE (W-07/W-08) */
+    out(e, 0x60FF, 2000000);
+    steps(e, 50);
+    out(e, 0x6040, 0x07); steps(e, 50);
+    check("Disable operation at 2e6 inc/s: still Operation enabled 50 ms later (braking)", swst(e), 0x27);
+    check_true("  slower than 2e6 inc/s", e->drv->ax[0].vel < 1.6e6);
+    steps(e, 250);
+    check("  stopped (1e7 inc/s^2: 200 ms), then Switched on", swst(e), 0x23);
+    check("  velocity 0", (long)e->drv->ax[0].vel, 0);
+
+    /* process data lost in Ready to switch on: 0x0E08, no EMCY, self-clearing */
+    out(e, 0x6040, 0x06); steps(e, 3);
+    check("Ready to switch on", swst(e), 0x21);
+    uint32_t emcy0 = e->fault.emcy_left;
+    e->regs[REG_AL_STATUS] = ESM_SAFEOP | 0x10;
+    e->regs[REG_AL_STATUS_CODE] = 0x1B; e->regs[REG_AL_STATUS_CODE + 1] = 0;
+    step(e);
+    check("SM watchdog (AL 0x001B) in RTSO: Fault", e->drv->ax[0].ds, DS_FAULT);
+    check("  0x603F 0x0E08", e->drv->ax[0].err_code, 0x0E08);
+    check("  no EMCY posted (IS620N)", (long)(e->fault.emcy_left - emcy0), 0);
+    e->regs[REG_AL_STATUS] = ESM_OP; e->regs[REG_AL_STATUS_CODE] = 0;
+    out(e, 0x6040, 0x06);                           /* the master keeps Shutdown, no bit 7 */
+    step(e);
+    check("back in OP: Not ready, sw 0x0210, 0x603F 0 (cleared by the drive)", sw(e), 0x0210);
+    check("  0x603F 0", in(e, 0x603F), 0);
+    steps(e, 45);
+    check("  ~40 ms later Ready to switch on (cw 0x06 still there)", swst(e), 0x21);
+
+    /* left OP while enabled: 0x0E08, no EMCY, self-clearing back in OP */
+    out(e, 0x60FF, 0);
+    out(e, 0x6060, MODE_CSP);
+    out(e, 0x607A, in(e, 0x6064));                  /* S2: target = actual before enabling */
+    enable_cal(e);
+    steps(e, 3);
+    check("enabled again, standing", swst(e), 0x27);
+    emcy0 = e->fault.emcy_left;
+    e->regs[REG_AL_STATUS] = ESM_SAFEOP | 0x10; e->regs[REG_AL_STATUS_CODE] = 0x1B;
+    steps(e, 3);
+    check("left OP in OE: Fault 0x0E08 (W-06)", e->drv->ax[0].err_code * 100 + e->drv->ax[0].ds, 0x0E08 * 100 + DS_FAULT);
+    check("  no EMCY", (long)(e->fault.emcy_left - emcy0), 0);
+    e->regs[REG_AL_STATUS] = ESM_OP; e->regs[REG_AL_STATUS_CODE] = 0;
+    out(e, 0x6040, 0x00); steps(e, 45);
+    check("  cleared by the drive, master sent no reset: Switch on disabled", swst(e) & 0x4F, 0x40);
+
+    /* injected faults are not self-clearing */
+    ctl("drv_fault 0 0 0x2310");
+    steps(e, 3);
+    check("drv_fault 0x2310: Fault, not cleared in OP", e->drv->ax[0].ds * 0x10000 + e->drv->ax[0].err_code, DS_FAULT * 0x10000 + 0x2310);
+    ctl("drv_clear 0 0");
+
+    /* SAFEOP -> OP takes 300 ms */
+    e->regs[REG_AL_STATUS] = ESM_SAFEOP; e->regs[REG_AL_STATUS_CODE] = 0;
+    e->got_valid_outputs = 1;
+    e->regs[REG_AL_CONTROL] = ESM_OP; e->regs[REG_AL_CONTROL + 1] = 0;
+    esc_al_control_write(e);
+    check("AL Control OP: status stays SAFEOP at once", e->regs[REG_AL_STATUS] & 0x0F, ESM_SAFEOP);
+    steps(e, 290);
+    check("  still SAFEOP after 290 ms", e->regs[REG_AL_STATUS] & 0x0F, ESM_SAFEOP);
+    steps(e, 15);
+    check("  OP after 300 ms", e->regs[REG_AL_STATUS] & 0x0F, ESM_OP);
+    e->regs[REG_AL_STATUS] = ESM_PREOP;
+    e->regs[REG_AL_CONTROL] = ESM_PREOP;
+    steps(e, 400);
+    check("  no OP on its own when PREOP is asked", e->regs[REG_AL_STATUS] & 0x0F, ESM_PREOP);
+}
+
 int main(void)
 {
     g_log = getenv("CIA402_VERBOSE") ? stdout : NULL;
@@ -447,6 +614,7 @@ int main(void)
     a03();
     a06();
     a07();
+    a10();
     printf("\nRESULT: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
