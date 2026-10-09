@@ -29,7 +29,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 SB_PRIO=${SB_PRIO-79}; SB_CPU=${SB_CPU:-2}; STRICT=${STRICT:-1}
-STEPS=${STEPS:-"gd9 servo axes hook cia402 safety profile diag"}
+STEPS=${STEPS:-"gd9 servo axes hook cia402 safety profile diag recover"}
 GD9_STEPS=${GD9_STEPS:-}
 IS620N_ESI=${IS620N_ESI:-}
 RLOG=${RLOG:-$ROOT/log_gd10_regression_$(date +%Y%m%d_%H%M%S)}
@@ -99,6 +99,7 @@ cia402)  step cia402  "10.5 drive state machine + CSP/CSV T-01..T-08"          -
 safety)  step safety  "10.6 safety latches S1, S2, S4..S7 + negative controls" -- env LOG="$RLOG/safety"  "$G/run_safety_10_6.sh" ;;
 profile) step profile "10.7 PP / PV / homing P2-01..P2-04"                     -- env LOG="$RLOG/profile" "$G/run_profile_10_7.sh" ;;
 diag)    step diag    "10.8 axis diagnosis E2-01..E2-03, X-05 tool"            -- env LOG="$RLOG/diag"    "$G/run_diag_10_8.sh" ;;
+recover) step recover "10.0 recovery re-runs the ENI InitCmds, refuses OP on failure RC-01..RC-06" -- env LOG="$RLOG/recover" "$G/run_recover_10_0.sh" ;;
 *) echo "unknown step $s"; ROWS+=("| $s | unknown step | **FAIL** | | |") ;;
 esac
 done

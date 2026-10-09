@@ -106,3 +106,10 @@ Mã EMCY thu được → điền `config/emcy/is620n.emcy` (tra manual IS620N) 
 
 ### 6.4 R-08 đầy đủ
 1 h (đã làm rút gọn 8/10) + 10 phút `--link etf`: làm sau R-09.
+
+### 6.5 R-07 lặp lại sau bản vá 0018 (recovery)
+Kết quả 9/10: rút cáp PASS (diag định vị đúng đoạn, slave 2 về OP 2,3 s sau khi cắm lại; AL 0x001B SM watchdog, không EMCY). Mất nguồn: về OP sau 606 ms **nhưng 14/14 InitCmd FAILED (wkc=0)** — lỗi recovery, sửa ở 0018 (`docs/fault_policy.md`). Kiểm offline: `sudo -E tools/gd10/run_recover_10_0.sh` (RC-01…RC-06, có đối chứng âm). Rồi trên servo thật:
+```bash
+sudo -E EVENTS="mainpower" HOLD=30 SETTLE=60 tools/gd10/run_events_10_0.sh
+```
+Kỳ vọng: sau khi bật lại CB, 14 dòng `ecm_eni: slave N CoE download ... ok`, **không** dòng FAILED, `[RECOVER] ... 2/2 in OP`.

@@ -64,14 +64,29 @@ def main():
         if t0 is None:
             print("- (no DO time recorded)")
             continue
-        print(f"- DO at t=0, RESTORE at t=+{t1 - t0:.1f} s; window until +{t1 - t0 + a.settle:.1f} s\n")
-        win = [(t, s) for t, s in lines if t0 - 0.5 <= t <= t1 + a.settle and EVENT_RE.search(s)]
-        # one lost frame = RUN -> DEGRADED (motion NOFRAME) -> RUN: counted, not listed
-        blip = re.compile(r"\[BUS\] .*(RUN -> DEGRADED \(motion NOFRAME\)|DEGRADED -> RUN)\s*$")
-        hits = [(t, s) for t, s in win if not blip.search(s)]
-        nblip = sum(1 for _, s in win if "RUN -> DEGRADED (motion NOFRAME)" in s)
+        print(f"- DO at t=0, RESTORE at t=+{t1 - t0:.1f} s; window -5.0 s .. +{t1 - t0 + a.settle:.1f} s\n")
+        # operators press Enter 1..2 s after the action (seen on 9/10): start 5 s early
+        win = [(t, s) for t, s in lines if t0 - 5.0 <= t <= t1 + a.settle and EVENT_RE.search(s)]
+        # one lost frame = RUN -> DEGRADED (motion NOFRAME) and DEGRADED -> RUN within a few
+        # ticks: counted, not listed. A DEGRADED -> RUN that ends a real episode is listed.
+        hits, nblip, prev = [], 0, None
+        for t, s in win:
+            m = re.search(r"\[BUS\] tick=(\d+) .*?(RUN -> DEGRADED \(motion NOFRAME\)|DEGRADED -> RUN)\s*$", s)
+            if m and m.group(2).startswith("RUN"):
+                prev = (int(m.group(1)), t, s)
+                continue
+            if m and prev and int(m.group(1)) - prev[0] <= 5:
+                nblip += 1
+                prev = None
+                continue
+            if prev:
+                hits.append(prev[1:])
+                prev = None
+            hits.append((t, s))
+        if prev:
+            hits.append(prev[1:])
         if nblip:
-            print(f"- single-frame NOFRAME blips (RUN -> DEGRADED -> RUN) in the window: {nblip}")
+            print(f"- single-frame NOFRAME blips (RUN -> DEGRADED -> RUN within 5 ticks) in the window: {nblip}")
         if hits:
             print("| t (s) | ecm_run |")
             print("|---|---|")

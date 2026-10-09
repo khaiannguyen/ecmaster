@@ -1862,13 +1862,76 @@ static void dc_restore_slave(int s)
 /* PRE-OP -> SAFE-OP hook for ecx_reconfig_slave(): everything ecm_run
  * wrote by hand at startup that a power cycle erases. Registered only for
  * the duration of one reconfiguration. */
+static int g_reconf_eni_fail;       /* Phase 10.0: PS InitCmds failed in the last reconfiguration */
+static int g_recover_cyclic_mbx;    /* --recover-cyclic-mbx: pre-0018 behaviour (negative control) */
+
 static int reconfig_po2so_hook(ecx_contextt *c, uint16 slave)
 {
     int f = write_sm_watchdog(slave);
-    /* Phase 8.4: a power-cycled slave lost the ENI's PS CoE writes too */
+    /* Phase 8.4: a power-cycled slave lost the ENI's PS CoE writes too.
+     * SOEM ignores this hook's return value (ec_config.c), so a failure is
+     * remembered here and acted on by recover_path_b(). */
     int eni_ok = g_eni_on ? ecm_eni_soem_po2so(c, slave) : 1;
+    if (!eni_ok) g_reconf_eni_fail = 1;
     dc_restore_slave(slave);
     return f == 0 && eni_ok;
+}
+
+/* Phase 10.0 R-07 (power loss of the real IS620N drives, and soft_bus
+ * restore_node): the PS InitCmds of the reconfiguration all failed with
+ * wkc=0, yet the slave was taken to OP. The slave's mailbox was still in
+ * SOEM's CYCLIC mode: requests are queued for ecx_mbxhandler(), which runs in
+ * the RT thread from the process data -- stopped during a full-bus RECOVER,
+ * and a slave in INIT/PRE-OP has no process data anyway. The receive counter
+ * (patches/soem-mbx-cnt.patch) was also reset only after the reconfiguration,
+ * so the fresh slave's first response (Cnt 1) could be dropped as a
+ * duplicate. While a slave is reconfigured its mailbox is therefore polled
+ * (ECT_MBXH_NONE) with both counters reset; cyclic mode comes back after. */
+static void mbx_polled_for_reconfig(int s, uint8 *saved)
+{
+    ec_slavet *sl = &ctx.slavelist[s];
+    *saved = sl->mbxhandlerstate;
+    if (g_recover_cyclic_mbx) return;
+    sl->mbxhandlerstate = ECT_MBXH_NONE;
+    sl->mbx_cnt = 0;
+#ifdef ECMASTER_SOEM_MBXCNT_PATCH
+    sl->mbxincnt = 0;
+#endif
+    if (sl->coembxinfull == TRUE && sl->coembxin && sl->coembxin != EC_MBXINENABLE)
+        ecx_dropmbx(&ctx, (ec_mbxbuft *)sl->coembxin);   /* a response of the slave's previous life */
+    sl->coembxinfull = FALSE;
+    sl->coembxin = EC_MBXINENABLE;
+}
+
+static void mbx_restore_after_reconfig(int s, uint8 saved)
+{
+    if (g_recover_cyclic_mbx) return;
+    if (saved == ECT_MBXH_CYCLIC) ecx_slavembxcyclic(&ctx, (uint16)s);
+    else ctx.slavelist[s].mbxhandlerstate = saved;
+}
+
+/* The ENI's PS InitCmds did not reach a reconfigured slave: its PDO
+ * assignment / mode may be the slave's defaults, not the ENI's. Taking it to
+ * OP would exchange process data under the wrong layout. Keep it in PRE-OP
+ * (mailbox usable for diagnosis), mark it FAILED(config) -- no retry, the same
+ * configuration would be sent again -- and fail its CiA402 axes. */
+static void recover_config_failed(int s)
+{
+    uint16_t v = htoes((uint16_t)EC_STATE_PRE_OP);
+    ecx_FPWR(&ctx.port, ctx.slavelist[s].configadr, ECT_REG_ALCTL, sizeof(v), &v, EC_TIMEOUTRET);
+    if (s - 1 < ECM_SREC_MAX_SLAVES) {
+        g_srec.s[s - 1].failed = 1;
+        g_srec.s[s - 1].failed_config = 1;
+        g_srec.s[s - 1].failed_code = 0;
+    }
+    fprintf(stderr, "ecm_run: [RECOVERY] slave %d: ENI CoE InitCmd(s) failed during reconfiguration -> "
+            "kept in PRE-OP, FAILED(config), no OP (its PDO layout is not the ENI's), needs an operator\n", s);
+    for (int k = 0; k < g_cia.naxes && g_hook == hook_cia402; k++) {
+        if (g_cia.ax[k].cfg.slave != (uint16_t)s) continue;
+        ecm_cia402_set_ext_error(&g_cia, k, ECM_AXERR_CONFIG);
+        fprintf(stderr, "ecm_run: [AXIS] axis %s (slave %d): %s -> axis disabled, ENABLE refused until an operator clears it\n",
+                g_cia.ax[k].cfg.name, s, ecm_cia402_err_str(ECM_AXERR_CONFIG));
+    }
 }
 
 /* Path B: address + full reconfiguration of one slave (1-based), leaves it
@@ -1878,23 +1941,34 @@ static int recover_path_b(int s)
     excl_begin();
     double t0 = mono_now_s();
     int addr_ok = ecx_recover_slave(&ctx, (uint16)s, EC_TIMEOUTRET3);
-    int st = 0;
+    int st = 0, cfg_fail = 0;
     if (addr_ok > 0) {
+        uint8 mbxh;
+        mbx_polled_for_reconfig(s, &mbxh);
+        g_reconf_eni_fail = 0;
         ctx.slavelist[s].PO2SOconfig = reconfig_po2so_hook;
         st = ecx_reconfig_slave(&ctx, (uint16)s, EC_TIMEOUTRET3);
         ctx.slavelist[s].PO2SOconfig = NULL;
 #ifdef ECMASTER_SOEM_MBXCNT_PATCH
         /* Phase 7.4: a power-cycled slave starts its mailbox Cnt at 1
          * again; forget the old one or its first response may be taken
-         * for a duplicate (patches/soem-mbx-cnt.patch). */
+         * for a duplicate (patches/soem-mbx-cnt.patch). Since Phase 10.0
+         * also reset before the reconfiguration (mbx_polled_for_reconfig). */
         ctx.slavelist[s].mbxincnt = 0;
 #endif
+        mbx_restore_after_reconfig(s, mbxh);
+        cfg_fail = g_reconf_eni_fail;
+        if (cfg_fail) {
+            recover_config_failed(s);
+            st = EC_STATE_PRE_OP;
+        }
     }
     excl_end();
     g_recoveries_b++;
     fprintf(stderr, "ecm_run: [RECOVERY] slave %d: recover+reconfigure: address %s, state after = 0x%02x%s (%.0f ms)\n",
             s, addr_ok > 0 ? "ok" : "NOT restored (not the same slave, or not answering)",
-            st, st == EC_STATE_SAFE_OP ? " SAFE-OP" : "", (mono_now_s() - t0) * 1e3);
+            st, st == EC_STATE_SAFE_OP ? " SAFE-OP" : (cfg_fail ? " PRE-OP (InitCmd failed)" : ""),
+            (mono_now_s() - t0) * 1e3);
     return st == EC_STATE_SAFE_OP;
 }
 
@@ -1913,7 +1987,9 @@ static int recover_full(void)
         int w = ecx_FPRD(&ctx.port, ctx.slavelist[s].configadr, ECT_REG_ALSTAT, sizeof(st), &st, EC_TIMEOUTRET);
         st = etohs(st);
         uint8_t state = (uint8_t)(st & 0x0F);
-        if (w <= 0 || state == EC_STATE_INIT || state == EC_STATE_PRE_OP) {
+        if (s - 1 < ECM_SREC_MAX_SLAVES && g_srec.s[s - 1].failed_config) {
+            continue;       /* Phase 10.0: refused its configuration, needs an operator: not again */
+        } else if (w <= 0 || state == EC_STATE_INIT || state == EC_STATE_PRE_OP) {
             recover_path_b(s);
             nb++;
         } else if (st & EC_STATE_ERROR) {
@@ -2130,6 +2206,8 @@ int main(int argc, char **argv)
             g_rx_legacy = 1;
         } else if (strcmp(argv[i], "--n-lost") == 0 && i + 1 < argc) {
             n_lost = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--recover-cyclic-mbx") == 0) {   /* Phase 10.0 R-07: negative control */
+            g_recover_cyclic_mbx = 1;
         } else if (strcmp(argv[i], "--no-dma-latency") == 0) {       /* Phase 10.0 R-09 */
             g_dma_latency = 0;
         } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Phase 7.4 */
@@ -2315,7 +2393,7 @@ int main(int argc, char **argv)
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
-            "       [--no-quarantine] [--no-dma-latency] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
+            "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
