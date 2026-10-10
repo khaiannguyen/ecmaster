@@ -130,6 +130,7 @@
 #define _GNU_SOURCE
 
 #include <math.h>      /* Phase 10.4: test producer sine */
+#include <stdarg.h>    /* Phase 11.2 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,6 +185,9 @@
 #include "libecmaster/diag/ecm_diag_soem.h"
 #include "libecmaster/policy/ecm_policy.h"    /* Phase 7.3 */
 #include "libecmaster/api/ecm_api.h"          /* Phase 11.1 */
+#include "libecmaster/api/ecm_ctl.h"          /* Phase 11.2 */
+#include "libecmaster/api/ecm_sha256.h"
+#include <grp.h>
 #include <stdatomic.h>
 
 #define IOMAP_SIZE   (256 * 1024)   /* see IOMAP_SIZE note in the Phase 3 file header */
@@ -654,6 +658,60 @@ static struct {                                   /* api thread only, printed af
 } g_api_out;
 
 enum { API_RT = 1, API_DC = 2, API_HOOK = 4 };
+
+/* ---- Phase 11.2: ctl.sock (docs/api.md §10). Served by the api thread. ----
+ * SDO from the API goes through the mailbox worker (cyclic mailbox, pumped by
+ * the RT thread: the L4-03 path). The monitor's recovery switches a slave's
+ * mailbox to polled mode and sends on the socket itself: an API SDO must not
+ * be in flight then. The fence: the monitor sets g_sdo_block and takes
+ * g_sdo_mx (waits for an SDO in flight, at most its timeout); the api thread
+ * takes g_sdo_mx around every SDO and refuses while g_sdo_block is set. */
+#ifndef ECM_VERSION
+#define ECM_VERSION "unknown"
+#endif
+static const char      *g_api_allow_path;         /* --api-allow FILE, NULL = empty list */
+static const char      *g_api_group;              /* --api-group NAME */
+static int              g_api_gid = -1;
+static int              g_api_sdo_timeout_ms = 500;
+static ecm_ctl_srv_t    g_ctl;                    /* api thread after start-up */
+static ecm_ctl_allowlist_t g_allow;
+static char             g_ctl_path[300];
+static char             g_eni_sha256[65];
+static pthread_mutex_t  g_sdo_mx = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int       g_sdo_block;              /* monitor: recovery in progress */
+static atomic_int       g_ctl_quiesce;            /* main: the cyclic loop has ended */
+static uint64_t         g_sdo_fence_waits, g_sdo_fence_ns_max;   /* monitor only */
+static unsigned         g_dumps;                  /* api thread only */
+#define API_DUMPS_MAX 32
+static struct {                                   /* monitor writes, api thread reads */
+    pthread_mutex_t mx;
+    uint64_t seq;
+    int      slave;
+    uint16_t index;
+    uint8_t  sub;
+    uint32_t code;
+} g_last_abort = { .mx = PTHREAD_MUTEX_INITIALIZER };
+
+/* monitor: around a recovery that touches the mailbox mode of slaves */
+static void api_fence_begin(void)
+{
+    if (!g_api_on) return;
+    atomic_store_explicit(&g_sdo_block, 1, memory_order_release);
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    pthread_mutex_lock(&g_sdo_mx);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    uint64_t w = (uint64_t)((b.tv_sec - a.tv_sec) * 1000000000L + (b.tv_nsec - a.tv_nsec));
+    g_sdo_fence_waits++;
+    if (w > g_sdo_fence_ns_max) g_sdo_fence_ns_max = w;
+}
+
+static void api_fence_end(void)
+{
+    if (!g_api_on) return;
+    pthread_mutex_unlock(&g_sdo_mx);
+    atomic_store_explicit(&g_sdo_block, 0, memory_order_release);
+}
 
 static void api_rt_group(ecm_api_rt_group_t *o, const group_stats_t *g)
 {
@@ -2122,6 +2180,7 @@ static void recover_config_failed(int s)
  * in SAFE-OP; path A then takes it to OP. Returns 1 on SAFE-OP. */
 static int recover_path_b(int s)
 {
+    api_fence_begin();                     /* Phase 11.2: no API SDO in flight while the mailbox mode changes */
     excl_begin();
     double t0 = mono_now_s();
     int addr_ok = ecx_recover_slave(&ctx, (uint16)s, EC_TIMEOUTRET3);
@@ -2148,6 +2207,7 @@ static int recover_path_b(int s)
         }
     }
     excl_end();
+    api_fence_end();
     g_recoveries_b++;
     fprintf(stderr, "ecm_run: [RECOVERY] slave %d: recover+reconfigure: address %s, state after = 0x%02x%s (%.0f ms)\n",
             s, addr_ok > 0 ? "ok" : "NOT restored (not the same slave, or not answering)",
@@ -2160,6 +2220,7 @@ static int recover_path_b(int s)
  * Returns 1 if at least one slave is back in OP. */
 static int recover_full(void)
 {
+    api_fence_begin();                     /* Phase 11.2 */
     excl_begin();
     double t0 = mono_now_s();
     uint16_t al = 0;
@@ -2193,6 +2254,7 @@ static int recover_full(void)
     int32_t lead = 0;
     int dcw = g_dc_enabled ? dc_anchor(&lead) : 1;
     excl_end();
+    api_fence_end();
     g_recoveries_full++;
     fprintf(stderr, "ecm_run: [RECOVER] bus answered by %d slave(s); reconfigured %d, acked %d; "
             "%d/%d in OP%s%s (%.0f ms)\n", brd, nb, nack, nop, n, all_op ? "" : " (not all)",
@@ -2303,6 +2365,15 @@ static void print_events(void)
                         k == (uint64_t)g_emcy_print_max ? " -- further EMCY of this slave only counted "
                         "(diag snapshot)" : "");
         } else if (e.type == ECM_EV_SDO_ABORT) {
+            if (g_api_on) {                    /* Phase 11.2: the abort code for the ctl.sock reply */
+                pthread_mutex_lock(&g_last_abort.mx);
+                g_last_abort.seq++;
+                g_last_abort.slave = e.from;
+                g_last_abort.index = (uint16_t)((uint32_t)e.b >> 8);
+                g_last_abort.sub = (uint8_t)(e.b & 0xFF);
+                g_last_abort.code = (uint32_t)e.a;
+                pthread_mutex_unlock(&g_last_abort.mx);
+            }
             fprintf(stderr, "ecm_run: [SDO] tick=%llu slave %u 0x%04X:%02X abort 0x%08X (%s)\n",
                     (unsigned long long)e.tick, e.from, (unsigned)((uint32_t)e.b >> 8), (unsigned)(e.b & 0xFF),
                     (unsigned)e.a, ec_sdoerror2string((uint32)e.a));
@@ -2417,6 +2488,7 @@ static void api_static_init(long motion_cycle_us, long io_cycle_us)
     snprintf(st->hook, sizeof(st->hook), "%s", g_hook ? g_hook_name : "");
     snprintf(st->api_cpus, sizeof(st->api_cpus), "%s", g_api_cpus);
     snprintf(st->fsm, sizeof(st->fsm), "STARTING");
+    if (g_eni_on && ecm_sha256_file(g_eni_path, g_eni_sha256)) snprintf(g_eni_sha256, sizeof(g_eni_sha256), "unreadable");
     /* RT publish phases: scalars in the middle of each 100 ms slot, the two
      * histograms 1/4 and 3/4 into the second, shifted off the scalar ticks */
     long tps = motion_cycle_us > 0 ? 1000000L / motion_cycle_us : 1;
@@ -2495,6 +2567,263 @@ static void api_collect(ecm_api_stats_t *st, int nic)
     if (nic) ecm_api_nic_read("/sys", g_ifname, &st->ports[0]);
 }
 
+/* ---- Phase 11.2: the ctl.sock backend (api thread) ---------------------- */
+static int be_identity(void *c, int slave, uint32_t *vendor, uint32_t *product)
+{
+    (void)c;
+    if (slave < 1 || slave > ctx.slavecount) return -1;
+    *vendor = ctx.slavelist[slave].eep_man;
+    *product = ctx.slavelist[slave].eep_id;
+    return 0;
+}
+
+/* CiA402 objects that steer the drive: controlword and mode of operation of
+ * every axis (0x6040/0x6060 + 0x800 n, ETG.6010). Never through the API:
+ * axis control belongs to the CiA402 layer and the application (plan §0.3). */
+static int be_deny(void *c, int slave, uint16_t index, uint8_t sub, char *why, size_t n)
+{
+    (void)c; (void)slave; (void)sub;
+    for (int a = 0; a < 8; a++) {
+        if (index == 0x6040 + 0x800 * a) { snprintf(why, n, "controlword of axis %d: axis control is not offered through the API", a); return 1; }
+        if (index == 0x6060 + 0x800 * a) { snprintf(why, n, "mode of operation of axis %d: axis control is not offered through the API", a); return 1; }
+    }
+    return 0;
+}
+
+static int be_rxpdo(void *c, int slave, uint16_t index, uint8_t sub)
+{
+    (void)c; (void)sub;                    /* any sub: the whole object is the master's */
+    if (!g_pdo) return -1;
+    for (int i = 0; i < g_pdo->n; i++) {
+        const ecm_pdo_entry_t *e = &g_pdo->e[i];
+        if (e->slave == slave && e->dir == ECM_PDO_OUT && e->index == index) return 1;
+    }
+    return 0;
+}
+
+static int be_initcmd(void *c, int slave, uint16_t index, uint8_t sub)
+{
+    (void)c; (void)sub;
+    if (!g_eni_on) return 0;
+    for (int i = 0; i < g_eni.ncoe; i++) {
+        const ecm_eni_coe_t *k = &g_eni.coe[i];
+        if (k->pos == slave && k->ccs == ECM_ENI_CCS_DOWNLOAD && k->index == index) return 1;
+    }
+    return 0;
+}
+
+static int be_ready(void *c, int slave, char *why, size_t n)
+{
+    (void)c;
+    if (atomic_load_explicit(&g_ctl_quiesce, memory_order_acquire)) { snprintf(why, n, "ecm_run is stopping"); return 1; }
+    int bs = atomic_load_explicit(&g_bus_state_pub, memory_order_relaxed);
+    if (bs != ECM_BUS_RUN && bs != ECM_BUS_DEGRADED) { snprintf(why, n, "bus %s: no SDO until it is RUN again", ecm_bus_state_name((ecm_bus_state_t)bs)); return 1; }
+    if (atomic_load_explicit(&g_sdo_block, memory_order_acquire)) { snprintf(why, n, "a slave recovery is in progress"); return 1; }
+    if (!ctx.slavelist[slave].mbx_l) { snprintf(why, n, "slave %d has no mailbox", slave); return 1; }
+    return 0;
+}
+
+static int be_mbx_rc(int rc)
+{
+    return rc == -1 ? ECM_CTL_SDO_BUSY : rc == -2 ? ECM_CTL_SDO_TIMEOUT : rc == -3 ? ECM_CTL_SDO_TOO_LARGE : ECM_CTL_SDO_FAILED;
+}
+
+/* the monitor logs SOEM's abort ~10 ms after the worker returned: wait for it */
+static uint32_t be_abort_after(uint64_t seq0, int slave, uint16_t index, uint8_t sub)
+{
+    for (int k = 0; k < 10; k++) {
+        pthread_mutex_lock(&g_last_abort.mx);
+        int hit = g_last_abort.seq != seq0 && g_last_abort.slave == slave && g_last_abort.index == index && g_last_abort.sub == sub;
+        uint32_t code = g_last_abort.code;
+        pthread_mutex_unlock(&g_last_abort.mx);
+        if (hit) return code;
+        usleep(5000);
+    }
+    return 0;
+}
+
+static uint64_t be_abort_seq(void)
+{
+    pthread_mutex_lock(&g_last_abort.mx);
+    uint64_t q = g_last_abort.seq;
+    pthread_mutex_unlock(&g_last_abort.mx);
+    return q;
+}
+
+/* one SDO under the fence; checks again what may have changed meanwhile */
+static int be_sdo(int write, int slave, uint16_t index, uint8_t sub, uint8_t *buf, int *size, uint32_t *abort)
+{
+    pthread_mutex_lock(&g_sdo_mx);
+    if (atomic_load_explicit(&g_sdo_block, memory_order_acquire) || ctx.slavelist[slave].mbxhandlerstate != ECT_MBXH_CYCLIC) {
+        pthread_mutex_unlock(&g_sdo_mx);
+        return ECM_CTL_SDO_BUSY;
+    }
+    uint64_t q = be_abort_seq();
+    int rc = write ? ecm_mailbox_sdo_write(g_mbx, (uint16_t)slave, index, sub, false, buf, *size, g_api_sdo_timeout_ms * 1000)
+                   : ecm_mailbox_sdo_read(g_mbx, (uint16_t)slave, index, sub, false, buf, size, g_api_sdo_timeout_ms * 1000);
+    pthread_mutex_unlock(&g_sdo_mx);
+    if (rc == -4) *abort = be_abort_after(q, slave, index, sub);
+    return rc ? be_mbx_rc(rc) : ECM_CTL_SDO_OK;
+}
+
+static int be_sdo_read(void *c, int slave, uint16_t index, uint8_t sub, uint8_t *buf, int *size, uint32_t *abort)
+{
+    (void)c;
+    if (*size > ECM_MBX_MAX_DATA) *size = ECM_MBX_MAX_DATA;
+    return be_sdo(0, slave, index, sub, buf, size, abort);
+}
+
+static int be_sdo_write(void *c, int slave, uint16_t index, uint8_t sub, const uint8_t *buf, int size, uint32_t *abort)
+{
+    (void)c;
+    uint8_t b[ECM_MBX_MAX_DATA];
+    if (size > ECM_MBX_MAX_DATA) return ECM_CTL_SDO_TOO_LARGE;
+    memcpy(b, buf, (size_t)size);
+    return be_sdo(1, slave, index, sub, b, &size, abort);
+}
+
+static const char *be_abort_text(uint32_t a) { return ec_sdoerror2string(a); }
+
+typedef struct { char *b; size_t len, cap; } bw_t;
+static void bw(bw_t *w, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void bw(bw_t *w, const char *fmt, ...)
+{
+    if (w->len >= w->cap) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsnprintf(w->b + w->len, w->cap - w->len, fmt, ap);
+    va_end(ap);
+    w->len = r < 0 ? w->cap : w->len + (size_t)r;
+}
+
+static void bw_str(bw_t *w, const char *s)
+{
+    bw(w, "\"");
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p == '"' || *p == '\\') bw(w, "\\%c", *p);
+        else if (*p < 0x20) bw(w, "\\u%04x", *p);
+        else bw(w, "%c", *p);
+    }
+    bw(w, "\"");
+}
+
+static size_t be_info(void *c, char *buf, size_t cap)
+{
+    (void)c;
+    bw_t w = { buf, 0, cap };
+    const ecm_api_stats_t *st = &g_api_st;
+    bw(&w, "\"ecm_run\":{\"version\":\"%s\",\"pid\":%d},\"schema\":%d,\"cycle_ns\":%" PRId64 ",\"link\":\"%s\",",
+       ECM_VERSION, (int)getpid(), ECM_API_SCHEMA, st->cycle_ns, st->link);
+    bw(&w, "\"ports\":[{\"name\":\"primary\",\"iface\":");
+    bw_str(&w, g_ifname);
+    bw(&w, "}],\"path\":\"single\",\"dc_ref\":%d,\"slaves\":[", g_dc_enabled ? (int)g_dc_ref : 0);
+    for (int s = 1; s <= ctx.slavecount; s++) {
+        const ec_slavet *sl = &ctx.slavelist[s];
+        bw(&w, "%s{\"pos\":%d,\"vendor\":\"0x%08X\",\"product\":\"0x%08X\",\"revision\":\"0x%08X\",\"name\":",
+           s > 1 ? "," : "", s, (unsigned)sl->eep_man, (unsigned)sl->eep_id, (unsigned)sl->eep_rev);
+        bw_str(&w, sl->name);
+        bw(&w, ",\"group\":\"%s\",\"mailbox\":%s,\"coe\":%s}", sl->group == GROUP_IO ? "io" : "motion",
+           sl->mbx_l ? "true" : "false", (sl->mbx_proto & ECT_MBXPROT_COE) ? "true" : "false");
+    }
+    bw(&w, "],\"eni\":");
+    if (g_eni_on) {
+        int down = 0;
+        for (int i = 0; i < g_eni.ncoe; i++) down += g_eni.coe[i].ccs == ECM_ENI_CCS_DOWNLOAD;
+        bw(&w, "{\"path\":");
+        bw_str(&w, g_eni_path);
+        bw(&w, ",\"source\":");
+        bw_str(&w, g_eni.source);
+        bw(&w, ",\"sha256\":\"%s\",\"coe_initcmds\":%d,\"coe_downloads\":%d,\"reg_initcmds\":%d,\"pdo_entries\":%d,\"cycle_us\":%u}",
+           g_eni_sha256, g_eni.ncoe, down, g_eni.nreg, g_eni.npdo, (unsigned)g_eni.cycle_us);
+    } else {
+        bw(&w, "null");
+    }
+    bw(&w, ",\"pdo\":{\"source\":\"%s\",\"entries\":[", !g_pdo ? "none" : g_pdo == &g_pdo_eni ? "eni" : "bus");
+    for (int i = 0; g_pdo && i < g_pdo->n; i++) {
+        const ecm_pdo_entry_t *e = &g_pdo->e[i];
+        bw(&w, "%s{\"slave\":%u,\"dir\":\"%s\",\"pdo\":\"0x%04X\",\"index\":\"0x%04X\",\"sub\":%u,\"bits\":%u}",
+           i ? "," : "", e->slave, e->dir == ECM_PDO_OUT ? "out" : "in", e->pdo, e->index, e->sub, e->bits);
+    }
+    bw(&w, "]},\"axes\":[");
+    for (int k = 0; g_hook == hook_cia402 && k < g_cia.naxes; k++) {
+        bw(&w, "%s{\"name\":", k ? "," : "");
+        bw_str(&w, g_cia.ax[k].cfg.name);
+        bw(&w, ",\"slave\":%u,\"n\":%u}", g_cia.ax[k].cfg.slave, g_cia.ax[k].cfg.n);
+    }
+    bw(&w, "],\"api\":{\"dir\":");
+    bw_str(&w, g_api_dir);
+    bw(&w, ",\"cpus\":\"%s\",\"sdo_timeout_ms\":%d,\"dumps\":%u,\"dumps_max\":%d}", g_api_cpus, g_api_sdo_timeout_ms, g_dumps, API_DUMPS_MAX);
+    return w.len;
+}
+
+static int copy_file(const char *from, const char *to)
+{
+    FILE *a = fopen(from, "re");
+    if (!a) return -errno;
+    FILE *b = fopen(to, "we");
+    if (!b) { int e = errno; fclose(a); return -e; }
+    char buf[8192];
+    size_t n;
+    int err = 0;
+    while ((n = fread(buf, 1, sizeof(buf), a)) > 0) if (fwrite(buf, 1, n, b) != n) { err = -EIO; break; }
+    fclose(a);
+    if (fclose(b) && !err) err = -EIO;
+    return err;
+}
+
+/* diag_dump: the last diagnostic snapshot (findings, counters, EMCY, axes)
+ * and the last stats.json, side by side, under a timestamp */
+static int be_dump(void *c, char *buf, size_t cap)
+{
+    (void)c;
+    if (g_dumps >= API_DUMPS_MAX) { snprintf(buf, cap, "at most %d dumps per run (tmpfs)", API_DUMPS_MAX); return -1; }
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct tm tm;
+    localtime_r(&now.tv_sec, &tm);
+    char ts[64], f1[400], f2[400], src[400];
+    snprintf(ts, sizeof(ts), "%04d%02d%02d_%02d%02d%02d_%03ld", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec, (long)(now.tv_nsec / 1000000) % 1000);
+    snprintf(f1, sizeof(f1), "%s/diag_%s.txt", g_api_dir, ts);
+    snprintf(f2, sizeof(f2), "%s/stats_%s.json", g_api_dir, ts);
+    snprintf(src, sizeof(src), "%s/stats.json", g_api_dir);
+    int r1 = g_diag_enabled ? copy_file(g_diag_path, f1) : -ENOENT;
+    int r2 = copy_file(src, f2);
+    if (r2) { snprintf(buf, cap, "%s: %s", f2, strerror(-r2)); return -1; }
+    g_dumps++;
+    bw_t w = { buf, 0, cap };
+    bw(&w, "\"files\":[");
+    if (!r1) { bw_str(&w, f1); bw(&w, ","); }
+    bw_str(&w, f2);
+    bw(&w, "]");
+    if (r1) { bw(&w, ",\"diag\":"); bw_str(&w, g_diag_enabled ? strerror(-r1) : "diagnostics off (--no-diag)"); }
+    return 0;
+}
+
+static const ecm_ctl_backend_t g_ctl_backend = {
+    .identity = be_identity, .deny = be_deny, .rxpdo = be_rxpdo, .initcmd = be_initcmd, .ready = be_ready,
+    .sdo_read = be_sdo_read, .sdo_write = be_sdo_write, .abort_text = be_abort_text, .info = be_info, .dump = be_dump,
+};
+
+/* api thread: serve ctl.sock until `until` (or a stop request) */
+static void api_serve(const struct timespec *until)
+{
+    for (;;) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        int64_t left = ts_diff_ns(until, &now);
+        if (left <= 0 || atomic_load_explicit(&g_api_stop, memory_order_acquire)) return;
+        struct pollfd p[1 + ECM_CTL_MAX_CLIENTS];
+        int np = ecm_ctl_srv_fds(&g_ctl, p, 1 + ECM_CTL_MAX_CLIENTS);
+        int ms = ecm_ctl_srv_pending(&g_ctl) ? 0 : (int)((left + 999999) / 1000000);
+        if (ms > 20) ms = 20;                     /* a stop request is seen within 20 ms */
+        int r = poll(p, (nfds_t)np, ms);
+        if (r < 0 && errno != EINTR) { usleep(1000); continue; }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        ecm_ctl_srv_service(&g_ctl, p, r > 0 ? np : 0, &g_ctl_backend, &g_allow, ts_to_ns(&now), 4);
+    }
+}
+
 static void *api_thread_fn(void *arg)
 {
     (void)arg;
@@ -2537,8 +2866,9 @@ static void *api_thread_fn(void *arg)
         if (stop) break;
         ts_add_ns(&next, API_PERIOD_NS);
         if (ts_diff_ns(&t1, &next) > 0) next = t1;    /* fell behind: no burst to catch up */
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+        api_serve(&next);                             /* Phase 11.2: ctl.sock until the next publish */
     }
+    ecm_ctl_srv_close(&g_ctl);
     struct timespec cpu;
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu);
     g_api_out.cpu_s = (double)cpu.tv_sec + cpu.tv_nsec * 1e-9;
@@ -2635,6 +2965,12 @@ int main(int argc, char **argv)
             g_api_dir = argv[++i];
         } else if (strcmp(argv[i], "--api-cpus") == 0 && i + 1 < argc) {
             g_api_cpus = argv[++i];
+        } else if (strcmp(argv[i], "--api-allow") == 0 && i + 1 < argc) {    /* Phase 11.2 */
+            g_api_allow_path = argv[++i];
+        } else if (strcmp(argv[i], "--api-group") == 0 && i + 1 < argc) {
+            g_api_group = argv[++i];
+        } else if (strcmp(argv[i], "--api-sdo-timeout-ms") == 0 && i + 1 < argc) {
+            g_api_sdo_timeout_ms = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--no-dma-latency") == 0) {       /* Phase 10.0 R-09 */
             g_dma_latency = 0;
         } else if (strcmp(argv[i], "--no-quarantine") == 0) {        /* Phase 7.4 */
@@ -2831,7 +3167,8 @@ int main(int argc, char **argv)
             "       [--axis-pp VEL[:ACC[:DEC]]] [--axis-homing METHOD[:OFFSET[:FAST[:SLOW[:ACC]]]]] [--axis-home-timeout-ms N]   (Phase 10.7, SDO at PREOP)\n"
             "       [--emcy-map FILE ...]   (Phase 10.8: vendor EMCY texts, config/emcy/*.emcy) [--cia402-script \"T CMD ...; ...\"] [--cia402-lead TICKS (default 4)]]   (Phase 10.5)\n"
             "       [--link af_packet|etf] [--etf-lead-us N] [--etf-asap-us N] [--etf-prio N] [--etf-ns-per-byte N]\n"
-            "       [--api [--api-dir DIR (default /run/ecmaster)] [--api-cpus LIST (default 1-2, never 3)]]   (Phase 11.1, docs/api.md)\n", argv[0]);
+            "       [--api [--api-dir DIR (default /run/ecmaster)] [--api-cpus LIST (default 1-2, never 3)]]   (Phase 11.1, docs/api.md)\n"
+            "       [--api-allow FILE (sdo_write allowlist, default none)] [--api-group NAME] [--api-sdo-timeout-ms N (default 500)]   (Phase 11.2)\n", argv[0]);
         return 1;
     }
     if (io_cycle_us % motion_cycle_us != 0) {
@@ -2860,8 +3197,31 @@ int main(int argc, char **argv)
         fprintf(stderr, "ecm_run: API: %s/stats.json every %ld ms, api thread on CPUs %s%s\n", g_api_dir,
                 API_PERIOD_NS / 1000000L, g_api_cpus,
                 (g_api_cpumask & 1ull) ? " -- WARNING: CPU0 takes the i226 interrupts (plan §0.5)" : "");
-    } else if (strcmp(g_api_dir, "/run/ecmaster") || strcmp(g_api_cpus, "1-2")) {
-        fprintf(stderr, "ecm_run: --api-dir / --api-cpus need --api\n"); return 1;
+        /* Phase 11.2: allowlist and socket, still before the bus */
+        if (g_api_sdo_timeout_ms < 50 || g_api_sdo_timeout_ms > 5000) {
+            fprintf(stderr, "ecm_run: --api-sdo-timeout-ms 50..5000\n"); return 1;
+        }
+        char cerr[512];
+        if (ecm_ctl_allow_load(g_api_allow_path, &g_allow, &g_ctl_backend, cerr, sizeof(cerr))) {
+            fprintf(stderr, "ecm_run: --api-allow: %s\n", cerr); return 1;
+        }
+        if (g_api_group) {
+            struct group *gr = getgrnam(g_api_group);
+            if (!gr) { fprintf(stderr, "ecm_run: --api-group %s: no such group\n", g_api_group); return 1; }
+            g_api_gid = (int)gr->gr_gid;
+        } else if (getenv("SUDO_GID")) {
+            g_api_gid = atoi(getenv("SUDO_GID"));     /* run with sudo: the invoking user may connect */
+        }
+        snprintf(g_ctl_path, sizeof(g_ctl_path), "%s/ctl.sock", g_api_dir);
+        if (ecm_ctl_srv_open(&g_ctl, g_ctl_path, 0660, g_api_gid, cerr, sizeof(cerr))) {
+            fprintf(stderr, "ecm_run: --api: %s\n", cerr); return 1;
+        }
+        fprintf(stderr, "ecm_run: API: %s (0660%s%s), sdo_write allowlist %s (%d entr%s), SDO timeout %d ms\n",
+                g_ctl_path, g_api_gid >= 0 ? ", group " : "", g_api_gid >= 0 ? (g_api_group ? g_api_group : "of the sudo user") : "",
+                g_api_allow_path ? g_api_allow_path : "none", g_allow.n, g_allow.n == 1 ? "y" : "ies", g_api_sdo_timeout_ms);
+    } else if (strcmp(g_api_dir, "/run/ecmaster") || strcmp(g_api_cpus, "1-2") || g_api_allow_path || g_api_group ||
+               g_api_sdo_timeout_ms != 500) {
+        fprintf(stderr, "ecm_run: --api-dir / --api-cpus / --api-allow / --api-group / --api-sdo-timeout-ms need --api\n"); return 1;
     }
 
     /* Phase 10.4: hook selection (before the bus is touched) */
@@ -4030,7 +4390,10 @@ int main(int argc, char **argv)
      * SAFEOP+ERR 0x001B just before INIT was requested. A real slave keeps
      * that error until it is acknowledged. Frames from here on are not in
      * the tx_order ring: telemetry exclusion window. */
-    if (g_api_on) api_rt_publish_final(tick);   /* Phase 11.1: RT counters are final now */
+    if (g_api_on) {
+        atomic_store_explicit(&g_ctl_quiesce, 1, memory_order_release);   /* Phase 11.2: no new SDO */
+        api_rt_publish_final(tick);               /* Phase 11.1: RT counters are final now */
+    }
     excl_begin();
     if (!request_all_state(EC_STATE_SAFE_OP, EC_TIMEOUTSTATE))
         fprintf(stderr, "ecm_run: shutdown: not every slave reached SAFE-OP\n");
@@ -4108,6 +4471,13 @@ int main(int argc, char **argv)
                 " hook=%" PRIu64 "/%" PRIu64 " telemetry=%" PRIu64 "/%" PRIu64 " monitor=%" PRIu64 "/%" PRIu64 "\n",
                 g_ho_rt.puts, g_ho_rt.drops, g_ho_dc.puts, g_ho_dc.drops, g_ho_hook.puts, g_ho_hook.drops,
                 g_ho_tel.puts, g_ho_tel.drops, g_ho_mon.puts, g_ho_mon.drops);
+        const ecm_ctl_state_t *cs = &g_ctl.st;
+        fprintf(stderr, "  [API] ctl.sock clients=%" PRIu64 " refused=%" PRIu64 " dropped(slow=%" PRIu64 " long=%" PRIu64 ")"
+                " cmds=%" PRIu64 " ok=%" PRIu64 " errors=%" PRIu64 " rate_limited=%" PRIu64 " refused_writes=%" PRIu64
+                " sdo reads=%" PRIu64 " writes=%" PRIu64 " max=%.1f ms; recovery fence waits=%" PRIu64 " max=%.1f ms; dumps=%u\n",
+                g_ctl.accepted, g_ctl.refused_clients, g_ctl.dropped_slow, g_ctl.dropped_long, cs->cmds, cs->ok, cs->errors,
+                cs->rate_limited, cs->refused_writes, cs->sdo_reads, cs->sdo_writes, (double)cs->sdo_ns_max / 1e6,
+                g_sdo_fence_waits, (double)g_sdo_fence_ns_max / 1e6, g_dumps);
     }
 
     /* ---- Phase 10.4: hook and exchange report (every thread joined) ---- */

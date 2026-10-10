@@ -82,3 +82,6 @@ libecmaster/api/test_api_offline
 libecmaster/api/test_api_offline_asan
 libecmaster/api/test_api_inplace
 log_gd11_*/
+libecmaster/api/test_ctl_offline
+libecmaster/api/test_ctl_offline_asan
+libecmaster/api/test_ctl_neg

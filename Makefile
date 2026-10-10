@@ -50,7 +50,7 @@ test-offline:
 	$(MAKE) -C libecmaster/pdo test test_asan
 	$(MAKE) -C libecm_cia402 test test_asan negctl   # Phase 10.6: S1..S7 negative controls
 	$(MAKE) -C libecmaster/xchg test test_asan tsan
-	$(MAKE) -C libecmaster/api test test_asan negctl tsan schema   # Phase 11.1
+	$(MAKE) -C libecmaster/api test test_asan negctl tsan schema   # Phase 11.1, 11.2 (ctl.sock offline + negative controls)
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
 

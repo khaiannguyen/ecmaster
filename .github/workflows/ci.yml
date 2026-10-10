@@ -82,7 +82,7 @@ jobs:
         run: make -C libecmaster/pdo test test_asan
       - name: libecmaster/xchg app <-> RT exchange (Phase 10.4 X-01o..X-04o, Q-05 TSan + negative controls)
         run: make -C libecmaster/xchg test test_asan tsan
-      - name: libecmaster/api stats.json (Phase 11.1 handoff, JSON, tmp + rename, sysfs; publish negative control; TSan + negative control; schema checker + its negative control)
+      - name: libecmaster/api stats.json + ctl.sock (Phase 11.1 handoff, JSON, tmp + rename, sysfs; 11.2 tokenizer, SHA-256, allowlist, sdo_write refusals, rate limit, server; negative controls; TSan; schema checker)
         run: make -C libecmaster/api test test_asan negctl tsan schema
       - name: libecm_cia402 axis configuration, drive state machine, S1..S7, PP/PV/HM, axis diagnosis + negative controls (Phase 10.3..10.8)
         run: make -C libecm_cia402 test test_asan negctl
@@ -167,6 +167,8 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_diag tools/gd10/run_diag_10_8.sh
       - name: stats.json of ecm_run --api (Phase 11.1 A-01..A-10, golden with --api)
         run: sudo -E env LOG=/tmp/log_gd11_api API_DIR=/dev/shm/ecmaster_api tools/gd11/run_api_11_1.sh
+      - name: ctl.sock of ecm_run --api (Phase 11.2 C-01..C-09, sdo_write refusals, recovery fence, golden with info polling)
+        run: sudo -E env LOG=/tmp/log_gd11_ctl API_DIR=/dev/shm/ecmaster_ctl tools/gd11/run_ctl_11_2.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -184,6 +186,7 @@ jobs:
             /tmp/log_gd10_axes
             /tmp/log_gd10_hook
             /tmp/log_gd11_api
+            /tmp/log_gd11_ctl
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

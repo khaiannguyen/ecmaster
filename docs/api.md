@@ -2,7 +2,7 @@
 
 Giai đoạn 11. Kế hoạch: `claude/giai_doan_11_ke_hoach.md`. Tài liệu này là **hợp đồng** của API: schema, đơn vị, quy tắc version. `ecm_diag`, web UI và node ROS2 sau này đều là client của nó.
 
-Trạng thái: **11.1 `stats.json`** (bản vá 0031). `ctl.sock` (`info`, `sdo_read`, `sdo_write`, `diag_dump`) là bước 11.2 và sẽ được bổ sung vào file này.
+Trạng thái: **11.1 `stats.json`** (bản vá 0031), **11.2 `ctl.sock`** (bản vá 0032, §10).
 
 ## 1. Bật / tắt
 
@@ -11,10 +11,14 @@ Trạng thái: **11.1 `stats.json`** (bản vá 0031). `ctl.sock` (`info`, `sdo_
 | `--api` | tắt | Tạo thread `api` và file `stats.json`. Không có cờ này thì không có thread, không có handoff nào được ghi, không có file (D-06, A-01) |
 | `--api-dir DIR` | `/run/ecmaster` | Thư mục của `stats.json`. Phải là **tmpfs** (`/run`, `/dev/shm`): trên ext4 mỗi `rename` là một lần ghi journal (đo trong sandbox: 333 µs so với 14 µs) |
 | `--api-cpus LIST` | `1-2` | CPU của thread `api` (`1-2`, `1,2`, `2`). **CPU 3 bị từ chối** vì là core RT. CPU 0 vẫn chạy nhưng in cảnh báo, vì ngắt RX của i226 cố định ở đó (§0.5 của kế hoạch) |
+| `--api-allow FILE` | không có | Allowlist của `sdo_write` (§10.4). Không có file thì allowlist rỗng: mọi `sdo_write` bị từ chối. Mẫu rỗng: `config/api_sdo_allow.json` |
+| `--api-group NAME` | nhóm của user gọi `sudo` | Nhóm của `ctl.sock` (quyền `0660`). Khi chạy bằng `sudo` mà không có tuỳ chọn này, socket thuộc nhóm `SUDO_GID`, nên user đã gọi `sudo` kết nối được mà không cần `sudo` |
+| `--api-sdo-timeout-ms N` | 500 | Timeout của một SDO từ API (50…5000). Trong lúc chờ SDO, thread `api` không publish (§10.3) |
 
 - Không tạo được `--api-dir`, không ghi được, hoặc `--api-cpus` sai thì `ecm_run` dừng **trước khi chạm bus** (A-07).
 - `/run` chỉ root ghi được. Khi chạy `ecm_run` bằng capabilities (không sudo), cần dùng `--api-dir` trỏ vào thư mục ghi được (ví dụ `/dev/shm/ecmaster`). Ở GĐ12, unit systemd sẽ tạo `/run/ecmaster` bằng `RuntimeDirectory=`.
-- `--api-dir` hoặc `--api-cpus` mà không kèm `--api` thì bị từ chối, để tránh tưởng API đang bật.
+- `--api-dir`, `--api-cpus`, `--api-allow`, `--api-group`, `--api-sdo-timeout-ms` mà không kèm `--api` thì bị từ chối, để tránh tưởng API đang bật.
+- Allowlist sai, hoặc `ctl.sock` đã có một `ecm_run` khác phục vụ, thì `ecm_run` dừng trước khi chạm bus. Socket cũ không còn ai nghe thì được thay; một file thường cùng tên thì không bị xoá.
 
 ## 2. Dữ liệu đi từ đâu
 
@@ -123,13 +127,101 @@ Phân vị p: cộng dồn `counts` tới khi vượt `p × count`; giá trị l
 | `make -C libecmaster/api tsan` | handoff dưới TSan; đối chứng âm `ECM_API_HO_BROKEN` (state publish relaxed) **phải** bị TSan báo. Test tự báo FAIL nếu consumer không chạy song song đủ 1000 lần get (tránh PASS do may mắn) |
 | `make -C libecmaster/api schema` | tài liệu mẫu qua `tools/gd11/stats_check.py`; `selftest`: 16 tài liệu hỏng **phải** bị từ chối, khoá lạ **phải** được chấp nhận |
 | `sudo -E tools/gd11/run_api_11_1.sh` | A-01…A-10 trên soft_bus (2 IS620N ảo, `is620n.cal`, `eni_2servo_mm`) |
+| §10.5 | `ctl.sock` |
 
 `stats_check.py compare FILE LOG` so file cuối với bản tổng kết của `ecm_run` (D-10): nhóm, WKC theo lớp, DC, hook, 4 histogram telemetry, trục CiA402, diag, policy.
 
-## 9. Hạn chế đã biết (11.1)
+## 9. Hạn chế đã biết (11.1, 11.2)
 
-- Không có lệnh nào qua API (11.2 thêm `ctl.sock`, chỉ đọc và `sdo_write` có allowlist). Không đổi trạng thái bus, không điều khiển trục.
+- Không đổi trạng thái bus, không điều khiển trục, không xoá `FAILED` qua API (kế hoạch §0.3).
+- `ecm_mailbox` (GĐ5): nếu worker mailbox bị kẹt lâu hơn timeout + 500 ms, `ecm_mailbox_sdo_*` trả -2 (`timeout`) trong khi job vẫn nằm trên stack của thread gọi, và worker có thể ghi vào job đó về sau. Với API là caller duy nhất lúc chạy, worker luôn xong trước timeout (SOEM tự hết hạn), nên điều kiện này chỉ xảy ra khi worker chết. Hạn chế này có từ GĐ5 và chưa sửa; ghi để không quên.
 - `stats.json` 10 Hz. Cần nhanh hơn (ROS2) thì thêm shm và thư viện đọc C, không đổi schema.
 - `crc_err` / `rx_missed` là bộ đếm của NIC, không phải của ESC. Lỗi phía slave nằm ở `slaves[].rx_err` / `inv`.
 - `sources.*.mono_ns` không so được giữa hai máy.
 - Chi phí trên RT thread chỉ đo trên Jetson (D-01, STRICT=1). Số trong sandbox chỉ chứng minh chức năng.
+
+## 10. `ctl.sock` (11.2)
+
+### 10.1 Giao thức
+- `AF_UNIX SOCK_STREAM` tại `<api-dir>/ctl.sock`, quyền `0660`. Mỗi request là **một object JSON trên một dòng** (≤ 1023 byte, kết thúc bằng `\n`), và nhận **đúng một dòng reply**. Một kết nối có thể gửi nhiều request liên tiếp; reply giữ đúng thứ tự.
+- `"id"` (số, chuỗi hoặc `null`, ≤ 69 ký tự) được gửi lại nguyên văn trong reply.
+- Reply thành công: `{"id":…,"ok":true,…}`. Reply lỗi: `{"id":…,"ok":false,"error":"<mã>","msg":"<giải thích>"}`. Client phân nhánh theo `error`; `msg` chỉ để đọc.
+- Giới hạn:
+  - Tối đa **4 client** cùng lúc. Client thứ 5 nhận `too_many_clients` rồi bị đóng.
+  - Tổng cộng **20 lệnh/s** cho mọi client (token bucket); mỗi dòng đều tính, kể cả dòng sai. Vượt thì nhận `rate_limited`.
+  - Dòng dài hơn 1023 byte nhận `line_too_long`, phần còn lại của dòng đó bị bỏ, và dòng sau vẫn được phục vụ.
+  - Client không đọc reply tới khi bộ đệm 160 KB của nó đầy thì bị ngắt. Các client khác không bị ảnh hưởng.
+- Client mẫu: `tools/gd11/ecm_ctl.py` (`info`, `read`, `write`, `dump`, `raw`, `spam`, `hold`).
+
+### 10.2 Lệnh
+
+| `cmd` | Tham số | Reply |
+|---|---|---|
+| `info` | — | `info`: `ecm_run` (version = `git describe`, pid), `schema`, `cycle_ns`, `link`, `ports[]`, `path`, `dc_ref`, `slaves[]` (pos, vendor, product, revision, name, group, mailbox, coe), `eni` (path, source, **sha256** của file `.enicfg`, số CoE InitCmd / download / register InitCmd / PDO entry, cycle) hoặc `null`, `pdo` (source `eni`/`bus`/`none`, `entries[]`: slave, dir `out`/`in`, pdo, index, sub, bits), `axes[]`, `api` (dir, cpus, sdo_timeout_ms, dumps), `ctl` (giới hạn và bộ đếm lệnh), `allow` (path, entries) |
+| `sdo_read` | `slave`, `index`, `sub`, `type` (mặc định `raw`) | `size`, `raw` (hex), `value` (khi `type` có kiểu số và kích thước khớp), `ms` |
+| `sdo_write` | `slave`, `index`, `sub`, `type`, `value` | `written`, `raw`, `readback` (đọc lại ngay sau khi ghi), `readback_ok`, `ms` |
+| `diag_dump` | — | `files`: `diag_<thời gian>.txt` (snapshot chẩn đoán: findings, bộ đếm, EMCY, trục) và `stats_<thời gian>.json` (bản sao `stats.json`), nằm trong `<api-dir>`. Tối đa 32 lần mỗi run (tmpfs) |
+
+- `index`, `sub`, `slave` nhận số hoặc chuỗi `"0x6061"`. Không nhận số bát phân (`"010"`).
+- `type`: `u8 i8 u16 i16 u32 i32 u64 i64 f32 raw`. Mọi giá trị là little-endian như CoE.
+- **Không có Complete Access** qua API: có khoá `ca` là `bad_request`.
+
+Mã lỗi:
+
+| Mã | Khi nào |
+|---|---|
+| `bad_request` | không phải JSON, thiếu hoặc sai tham số, `cmd` thiếu, `id` sai |
+| `unknown_cmd` | `cmd` không thuộc 4 lệnh trên |
+| `rate_limited`, `too_many_clients`, `line_too_long` | §10.1 |
+| `no_slave` | không có slave đó |
+| `not_ready` | bus không ở RUN/DEGRADED, đang có recovery, `ecm_run` đang dừng, hoặc slave không có mailbox |
+| `busy` | hàng mailbox đầy, hoặc recovery vừa bắt đầu |
+| `timeout` | SDO không xong trong timeout |
+| `sdo_failed` | slave abort (kèm `abort` = mã 32 bit và `msg` = mô tả của SOEM), hoặc không trả lời (`abort: null`) |
+| `size_mismatch` | `type` không khớp kích thước object (reply kèm `raw`) |
+| `too_large` | > 256 byte |
+| `denied_comm_area`, `denied_hard`, `denied_rxpdo`, `denied_no_pdo_table`, `denied_initcmd`, `not_allowed`, `type_mismatch`, `out_of_range` | `sdo_write` bị từ chối (§10.4) |
+| `dump_failed` | không ghi được file, hoặc đã đủ 32 lần |
+
+### 10.3 Thread và an toàn
+
+```
+client ──► ctl.sock ──► thread api (core 1-2) ──► ecm_mailbox_sdo_read/write (blocking)
+                                                    └► mailbox worker ──► hàng mailbox cyclic của SOEM ──► RT pump (1 frame/chu kỳ, đường L4-03)
+```
+
+- Lệnh được xử lý ở các khe giữa hai lần publish `stats.json`: tối đa 4 lệnh mỗi lượt, mỗi client 1 lệnh. Một SDO làm lượt publish đó trễ tối đa bằng `--api-sdo-timeout-ms`. Client theo dõi stale nên đặt ngưỡng lớn hơn timeout này (D-04: 2 s).
+- **Fence với recovery.** Recovery của monitor (path B, RECOVER) chuyển mailbox của slave sang chế độ polled và gửi thẳng lên socket. Monitor bật cờ chặn rồi lấy một mutex mà thread `api` giữ suốt mỗi SDO, nên monitor chờ SDO đang chạy kết thúc (tối đa bằng timeout). Trong lúc recovery, API trả `not_ready` hoặc `busy`.
+  - Khi bus ở RECOVER, RT không bơm mailbox. Nếu đúng lúc đó có một SDO đang chạy, SDO ấy hết timeout rồi recovery mới tiếp tục: recovery trễ thêm tối đa 500 ms.
+  - `[API] … recovery fence waits=… max=…` ghi lại số lần chờ và thời gian chờ dài nhất.
+- **Mã abort.** SOEM đưa abort vào error list; RT chuyển nó sang monitor; monitor lưu abort gần nhất (slave, index, sub, mã). Thread `api` chờ tối đa 50 ms để ghép abort đó vào reply.
+- Khi vòng cyclic kết thúc, mọi SDO mới nhận `not_ready` ("ecm_run is stopping"). Socket bị xoá khi `ecm_run` thoát bình thường.
+
+### 10.4 `sdo_write`: thứ tự kiểm
+
+Mỗi bước dưới đây từ chối ngay, **trước khi có bất kỳ frame nào được gửi**:
+
+1. `0x1000…0x1FFF` → `denied_comm_area`. Gồm PDO mapping và assignment, sync manager, 0x1C32/0x1C33. Rộng hơn danh sách 0x1C12/0x1C13/0x1600–0x1BFF của kế hoạch, có chủ đích.
+2. Danh sách cứng của ứng dụng (`ecm_run`): controlword `0x6040` và mode of operation `0x6060` của mọi trục (+0x800·n, n = 0…7) → `denied_hard`. Danh sách này nằm ở `ecm_run` chứ không ở `libecmaster` (K-05).
+3. Object **đang được map trong RxPDO** của chính slave đó, theo bảng PDO đang dùng (ENI hoặc `--pdo-scan`; mọi sub của index đó) → `denied_rxpdo`. Không có bảng PDO (không `--eni`, không `--pdo-scan`) → `denied_no_pdo_table`, tức là không cho ghi gì.
+4. Object mà ENI ghi bằng **CoE InitCmd** cho slave đó (ví dụ giới hạn 0x6072/0x6065/0x607F của 10.9) → `denied_initcmd`.
+5. Không có trong allowlist (theo vendor + product của slave) → `not_allowed`. `type` khác với allowlist → `type_mismatch`.
+6. Ngoài `[min, max]` của mục allowlist, hoặc ngoài kiểu dữ liệu → `out_of_range`.
+7. Bus chưa sẵn sàng → `not_ready`.
+
+Allowlist (`--api-allow FILE`, JSON):
+```json
+{ "schema": 1,
+  "allow": [ { "vendor": "0x00100000", "product": "0x000C0108", "index": "0x2008", "sub": 0,
+               "type": "u16", "min": 0, "max": 1000, "note": "..." } ] }
+```
+- Mỗi mục bắt buộc có `vendor`, `product`, `index`, `sub`, `type` (không được là `raw`), `min` ≤ `max` trong phạm vi kiểu. Không trùng mục; tối đa 64 mục.
+- Một mục mà bước 1–2 chắc chắn từ chối thì làm `ecm_run` **không khởi động**, vì file không được hứa điều master không bao giờ làm.
+- Bước 3–4 chỉ biết được khi bus đã lên, nên được kiểm lúc ghi. Đó là lý do mục `0x607F` trong runner được chấp nhận khi nạp file nhưng bị `denied_rxpdo` khi ghi.
+
+### 10.5 Kiểm thử 11.2
+| Lệnh | Nội dung |
+|---|---|
+| `make -C libecmaster/api test test_asan` | `test_ctl_offline` (132): tokenizer JSON (cú pháp, độ sâu, số nguyên, escape), SHA-256 (vector FIPS, 1 triệu `a`), mã hoá kiểu, allowlist (1 file đúng, 13 file sai), mọi nhánh từ chối của `sdo_write` với backend giả (và đếm rằng không lần ghi nào tới slave), rate limit, server trên socket thật (client thứ 5, hai request trong một lần ghi, dòng quá dài, client không đọc, socket còn sống / socket cũ / file thường) |
+| `make -C libecmaster/api negctl` | `ECM_CTL_BROKEN` = 1 (bỏ kiểm RxPDO), 2 (bỏ rate limit), 4 (bỏ vùng 0x1000 và danh sách cứng), 8 (bỏ kiểm min/max), 16 (bỏ kiểm InitCmd): mỗi bản **phải** làm test tương ứng FAIL |
+| `sudo -E tools/gd11/run_ctl_11_2.sh` | C-01…C-09 trên soft_bus (§ đầu file runner) |
