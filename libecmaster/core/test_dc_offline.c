@@ -119,6 +119,82 @@ int main(void)
     check("G4b resync counted", (long)dc.gate_resyncs, 1);
     check("G4c then accepted again", dc.last_rejected, 0);
 
+    printf("G6 Phase 11.3b: a stream of old replies (14 cycles behind) never resyncs\n");
+    {
+        /* gate_reuse_ns as ecm_run sets it: (QUAR_TICKS 50 + 16) cycles */
+        for (int legacy = 0; legacy <= 1; legacy++) {
+            ecm_dc_cfg_t c3; ecm_dc_t d3;
+            ecm_dc_default_cfg(&c3, CYC, CYC * 30 / 100);
+            c3.gate_ns = CYC;
+            c3.gate_reuse_ns = legacy ? 0 : 66 * CYC;
+            ecm_dc_init(&d3, &c3);
+            uint64_t h3 = 1000000000ull, r3 = ref_at(h3);
+            ecm_dc_anchor(&d3, r3, r3 + CYC - (r3 % CYC), h3);
+            for (int i = 0; i < 300; i++) { h3 += CYC; ecm_dc_update(&d3, ref_at(h3), h3); }
+            int taken = 0, rej_after = 0;
+            uint64_t smp0 = d3.samples;
+            for (int i = 0; i < 100; i++) {     /* 100 old replies in a row */
+                h3 += CYC;
+                ecm_dc_update(&d3, ref_at(h3 - 14 * CYC), h3);
+                taken += !d3.last_rejected;
+            }
+            uint64_t smp_old = d3.samples - smp0;
+            for (int i = 0; i < 20; i++) {      /* then genuine replies again */
+                h3 += CYC;
+                ecm_dc_update(&d3, ref_at(h3), h3);
+                rej_after += d3.last_rejected;
+            }
+            if (!legacy) {
+                check("G6a none of the 100 old replies taken", taken, 0);
+                check("G6b no resync", (long)d3.gate_resyncs, 0);
+                /* 100 old replies: the 14th carries the DC time of the last
+                 * accepted sample (same frame) and takes the "stale" path */
+                check("G6c held-back resyncs counted (99 rejections - 2)", (long)d3.gate_reuse_held, 97);
+                check("G6d genuine replies accepted at once", rej_after, 0);
+                check("G6e no old reply used as a DC sample", (long)smp_old, 0);
+            } else {
+                check("G6n negative control (reuse window off): old replies taken", taken > 0, 1);
+                check("G6n negative control: genuine replies rejected after", rej_after > 0, 1);
+            }
+        }
+    }
+
+    printf("G7 Phase 11.3b: real clock steps still resync after %d\n", ECM_DC_GATE_RESYNC);
+    {
+        ecm_dc_cfg_t c4; ecm_dc_t d4;
+        ecm_dc_default_cfg(&c4, CYC, CYC * 30 / 100);
+        c4.gate_ns = CYC; c4.gate_reuse_ns = 66 * CYC;
+        ecm_dc_init(&d4, &c4);
+        uint64_t h4 = 1000000000ull, r4 = ref_at(h4);
+        ecm_dc_anchor(&d4, r4, r4 + CYC - (r4 % CYC), h4);
+        for (int i = 0; i < 50; i++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4), h4); }
+        int rej = 0;
+        for (int i = 0; i < 5; i++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4) + 10 * CYC, h4); rej += d4.last_rejected; }
+        check("G7a forward step +10 cycles: resync after 3 (as Phase 7.4)", rej, ECM_DC_GATE_RESYNC - 1);
+        rej = 0;
+        for (int i = 0; i < 5; i++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4) + 10 * CYC - 500 * CYC, h4); rej += d4.last_rejected; }
+        check("G7b backward step -500 cycles (outside the window): resync after 3", rej, ECM_DC_GATE_RESYNC - 1);
+        check("G7c two resyncs counted", (long)d4.gate_resyncs, 2);
+        rej = 0;
+        int i = 0;
+        for (; i < 400; i++) {
+            h4 += CYC; ecm_dc_update(&d4, ref_at(h4) - 490 * CYC - 20 * CYC, h4);
+            if (!d4.last_rejected) break;
+            rej++;
+        }
+        check("G7d backward step -20 cycles (inside the window): resync after ECM_DC_GATE_RESYNC_REUSE", rej, ECM_DC_GATE_RESYNC_REUSE - 1);
+        check("G7e three resyncs counted", (long)d4.gate_resyncs, 3);
+        /* a genuine sample after an accepted one that left late (baseline
+         * ahead): behind by ~1.5 cycles -> keeps the Phase 7.4 rule */
+        for (int j = 0; j < 20; j++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4) - 510 * CYC, h4); }
+        rej = 0;
+        for (int j = 0; j < 5; j++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4) - 510 * CYC - 3 * CYC / 2, h4); rej += d4.last_rejected; }
+        check("G7f behind by 1.5 cycles (not an old reply): resync after 3", rej, ECM_DC_GATE_RESYNC - 1);
+        rej = 0;
+        for (int j = 0; j < 20; j++) { h4 += CYC; ecm_dc_update(&d4, ref_at(h4) - 510 * CYC - 3 * CYC / 2 - 5 * CYC, h4); rej += d4.last_rejected; }
+        check("G7g 5 cycles behind (youngest reused index): held, all 20 rejected", rej, 20);
+    }
+
     printf("G5 gate off: an old sample is not rejected (l6_test behaviour)\n");
     {
         ecm_dc_cfg_t c2;

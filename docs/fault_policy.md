@@ -177,6 +177,16 @@ Bản ASan/UBSan của `ecm_run` qua các ca L5-02/03/05/11b: không có báo c�
 
 Các cờ đối chứng âm: `--no-quarantine`, `--no-reply-check` (chỉ đếm, không loại).
 
+**Sửa 11.3b (11/10/2026): resync của cổng tuổi DC.** Cổng cũ coi 3 lần bị loại liên tiếp là một bước nhảy đồng hồ thật và nhận mẫu thứ 3 làm mốc mới (resync). Khi quarantine tràn (hơn 8 index trễ cùng lúc), một chuỗi reply cũ lọt qua lại nhất quán với nhau. Lần resync vì thế có thể rơi đúng vào một reply cũ, và các reply cũ sau đó được nhận: L5-07 N=1 FAIL khoảng 1/10 lần trên Jetson.
+- Nhận diện reply cũ: một mẫu bị loại có thời gian DC **lùi** so với dự đoán **hơn 2 cổng** (một index chỉ được SOEM dùng lại sau 16 lần gửi, tức nhiều chu kỳ) và **không quá `gate_reuse_ns`**. `ecm_run` đặt cửa sổ này bằng (`QUAR_TICKS` + 16) chu kỳ = 66 chu kỳ.
+- Với mẫu như vậy, cổng chỉ resync sau `ECM_DC_GATE_RESYNC_REUSE` = 256 lần loại liên tiếp, không phải sau 3.
+- Mọi trường hợp khác giữ quy tắc 3 lần: lệch về trước, lùi tối đa 2 cổng (một mẫu thật sau một lần gửi trễ), hoặc lùi xa hơn cửa sổ (slave khởi động lại).
+- Trường hợp xấu nhất là một bước lùi thật nằm trong cửa sổ: khoảng 256 chu kỳ không có mẫu DC. Khi đó bus đi LOST sau 100 NOFRAME và RECOVER neo lại DC, theo đường phục hồi đã có.
+- Chi phí: vài phép so sánh số nguyên, chỉ chạy khi một mẫu đã bị loại.
+- Dòng `[LATE] DC age gate: … resyncs held back …=N` ở cuối run chỉ in khi N > 0, nên golden không đổi.
+- Cờ đối chứng âm `--dc-gate-legacy`: dùng quy tắc cũ.
+- Test: `test_dc_offline` G6/G7 (có đối chứng âm, xác định được); `tools/gd11/run_l507_11_3b.sh` (L5-07 N=1 lặp K lần; đối chứng âm `--dc-gate-legacy`).
+
 ### 11.3. Kết quả sandbox (`run_l5_io.sh`, 18/18)
 | Ca | Có bảo vệ | Đối chứng âm |
 |---|---|---|

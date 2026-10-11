@@ -480,6 +480,7 @@ static int      g_fresh_any;                     /* at least one slave checked *
 static uint32_t g_fresh_stale = 20;             /* --fresh-stale N (cycles) */
 static ecm_fresh_t g_fresh[ECM_SREC_MAX_SLAVES + 1];   /* RT only, [SOEM slave] */
 static uint64_t g_stale_replies;                /* motion replies rejected by the DC age gate */
+static int      g_dc_gate_legacy = 0;           /* --dc-gate-legacy (Phase 11.3b negative control) */
 static int      g_reply_check = 1;              /* --no-reply-check (negative control): count, don't act */
 static uint64_t g_foreign_replies[3];           /* [group]: reply header != what was sent */
 
@@ -1190,6 +1191,10 @@ static int dc_anchor(int32_t *lead_out)
      * ends by the tick deadline (< 1 cycle after the send) and the DC
      * update gets the send time (see ecm_dc.h). */
     dcfg.gate_ns = g_dc_cyc_ns;
+    /* Phase 11.3b (L5-07 N=1): an old reply is at most ~16 sends old, or
+     * QUAR_TICKS more when its index was parked -> rejections behind the
+     * host clock by up to that window never resync after 3. */
+    if (!g_dc_gate_legacy) dcfg.gate_reuse_ns = (int64_t)(QUAR_TICKS + 16) * g_dc_cyc_ns;
     ecm_dc_init(&g_dc, &dcfg);
     ecm_dc_anchor(&g_dc, dc_raw, s0_raw, ts_to_ns(&t_anchor));
     return w;
@@ -2983,6 +2988,8 @@ int main(int argc, char **argv)
             g_quarantine = 0;
         } else if (strcmp(argv[i], "--no-reply-check") == 0) {
             g_reply_check = 0;
+        } else if (strcmp(argv[i], "--dc-gate-legacy") == 0) {       /* Phase 11.3b */
+            g_dc_gate_legacy = 1;
         } else if (strcmp(argv[i], "--fresh-offset") == 0 && i + 1 < argc) {
             g_fresh_off = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--pdo-scan") == 0) {                 /* Phase 9.10 */
@@ -3162,7 +3169,7 @@ int main(int argc, char **argv)
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
-            "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--no-reply-check] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
+            "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--no-reply-check] [--dc-gate-legacy] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
@@ -4578,6 +4585,10 @@ int main(int argc, char **argv)
             "; motion replies rejected by the DC age gate=%" PRIu64 " (gate resyncs=%" PRIu64 ")\n",
             g_quarantine ? "on" : "OFF", g_quar_total, g_quar_overflow, g_stale_replies,
             g_dc_enabled ? g_dc.gate_resyncs : 0);
+    if (g_dc_enabled && (g_dc_gate_legacy || g_dc.gate_reuse_held))   /* Phase 11.3b */
+        fprintf(stderr, "  [LATE] DC age gate: %s; resyncs held back (old replies behind the clock)=%" PRIu64 "\n",
+                g_dc_gate_legacy ? "LEGACY resync after 3 (--dc-gate-legacy)" : "reuse window on",
+                g_dc.gate_reuse_held);
     fprintf(stderr, "  [LATE] replies whose datagram headers differ from the frame sent (another frame's "
             "reply through a reused index): motion=%" PRIu64 " io=%" PRIu64 "%s\n",
             g_foreign_replies[GROUP_MOTION], g_foreign_replies[GROUP_IO],

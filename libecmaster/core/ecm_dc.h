@@ -41,6 +41,16 @@ typedef struct {
                                * SEND time as host_ns (ecm_run: deadline-based
                                * receive, gate = 1 cycle). l6_test keeps it off:
                                * it waits up to EC_TIMEOUTRET (2 ms).          */
+    int64_t  gate_reuse_ns;   /* Phase 11.3b: a rejected sample whose DC time
+                               * lies BEHIND the prediction by more than
+                               * 2 * gate_ns and at most this much is what
+                               * an old reply taken through a
+                               * reused SOEM index looks like (its DC time is
+                               * that of the older frame). Such rejections do
+                               * not count toward the ECM_DC_GATE_RESYNC
+                               * resync, only toward ECM_DC_GATE_RESYNC_REUSE.
+                               * 0 = off: every rejection counts (Phase 7.4
+                               * behaviour, default).                          */
 } ecm_dc_cfg_t;
 
 typedef enum {
@@ -84,6 +94,9 @@ typedef struct {
      * ECM_DC_GATE_RESYNC rejections in a row the sample is taken anyway
      * (a real clock step, e.g. after a long outage, not a stray reply). */
     uint64_t implausible, gate_resyncs;
+    uint64_t gate_reuse_held; /* Phase 11.3b: rejections that would have
+                               * resynced under the Phase 7.4 rule but were
+                               * held because they look like index reuse   */
     uint32_t reject_run;
     int      last_rejected;
 } ecm_dc_t;
@@ -106,5 +119,11 @@ int64_t ecm_dc_update(ecm_dc_t *dc, uint64_t dc_raw, uint64_t host_ns);
 int64_t ecm_dc_ref_drift_ppb(const ecm_dc_t *dc);
 
 #define ECM_DC_GATE_RESYNC 3
+/* Phase 11.3b (L5-07 N=1): a stream of old replies is self-consistent, so
+ * after 3 rejections the Phase 7.4 rule took one of them as a clock step
+ * and the next old replies passed the gate. A backward miss inside
+ * cfg.gate_reuse_ns resyncs only after this many rejections in a row (a
+ * real backward step that happens to fall in the window still resyncs). */
+#define ECM_DC_GATE_RESYNC_REUSE 256
 
 #endif /* ECM_DC_H */

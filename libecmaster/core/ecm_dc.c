@@ -33,6 +33,7 @@ void ecm_dc_default_cfg(ecm_dc_cfg_t *cfg, int64_t cycle_ns, int64_t setpoint_ns
     cfg->lock_window_ns = cycle_ns / 100;
     cfg->unlock_ns      = cycle_ns / 20;
     cfg->gate_ns        = 0;            /* Phase 7.4: reply-age gate off unless the caller sets it */
+    cfg->gate_reuse_ns  = 0;            /* Phase 11.3b: off unless the caller sets it */
 }
 
 void ecm_dc_init(ecm_dc_t *dc, const ecm_dc_cfg_t *cfg)
@@ -92,11 +93,22 @@ int64_t ecm_dc_update(ecm_dc_t *dc, uint64_t dc_raw, uint64_t host_ns)
         int64_t d_lo  = (int64_t)(uint32_t)(lo - dc->prev_lo);
         int64_t k     = floor_div(pred - d_lo + TWO32 / 2, TWO32);
         int64_t delta = d_lo + k * TWO32;
-        int64_t miss  = delta - pred;
-        if (miss < 0) miss = -miss;
+        int64_t smiss = delta - pred;   /* < 0: DC time behind the host clock */
+        int64_t miss  = smiss < 0 ? -smiss : smiss;
         dc->last_rejected = 0;
         if (dc->cfg.gate_ns > 0 && miss > dc->cfg.gate_ns) {
-            if (++dc->reject_run < ECM_DC_GATE_RESYNC) {
+            /* Phase 11.3b: an old reply carries the DC time of an older
+             * frame (>= 16 sends, i.e. several cycles) -> behind by more
+             * than 2 gates, at most the reuse window. A genuine sample is
+             * never more than ~2 gates off the last accepted one (that one
+             * passed the gate itself), so those keep the Phase 7.4 rule. */
+            int reuse = dc->cfg.gate_reuse_ns > 0 && smiss < -2 * dc->cfg.gate_ns
+                        && miss <= dc->cfg.gate_reuse_ns;
+            uint32_t limit = reuse ? ECM_DC_GATE_RESYNC_REUSE : ECM_DC_GATE_RESYNC;
+            ++dc->reject_run;
+            if (reuse && dc->reject_run >= ECM_DC_GATE_RESYNC && dc->reject_run < limit)
+                dc->gate_reuse_held++;
+            if (dc->reject_run < limit) {
                 dc->implausible++;
                 dc->last_rejected = 1;
                 dc->adjust_ns = 0;
