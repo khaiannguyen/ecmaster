@@ -80,6 +80,10 @@ for st in /sys/devices/system/cpu/cpu0/cpuidle/state*; do
     [ -r "$st/latency" ] || continue
     lat=$(cat "$st/latency"); [ "$lat" -gt 100 ] 2>/dev/null && [ "$(cat "$st/disable")" = 0 ] && deep="$deep $(cat "$st/name")(${lat}us)"
 done
+# Phase 11.5: boot profile P0 (cpuidle on, ecm_run holds the fd) / P1 (cpuidle.off=1)
+idrv=$(cat /sys/devices/system/cpu/cpuidle/current_driver 2>/dev/null || echo none)
+if [ "$idrv" = none ]; then info "cpuidle off (boot profile P1, docs/rt_profiles.md)"
+else info "cpuidle driver $idrv (boot profile P0, docs/rt_profiles.md)"; fi
 if [ -n "$deep" ]; then info "deep CPU idle states enabled:$deep -- ecm_run holds /dev/cpu_dma_latency=0 (needs root; WARNING in its log otherwise)"
 else pass "no deep CPU idle state enabled"; fi
 
