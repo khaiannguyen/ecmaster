@@ -11,12 +11,13 @@ SOEM_LIB  = $(shell find $(SOEM_DIR)/build -name 'libsoem*.a' -o -name 'libsoem*
 
 DIAG_DIR = ../../libecmaster/diag
 DIAG_SRC = $(DIAG_DIR)/ecm_diag.c $(DIAG_DIR)/ecm_diag_soem.c
+API_SRC  = ecm_api_view.c ../../libecmaster/api/ecm_json.c        # Phase 11.3: API client
 
 all: $(TARGET)
 
-$(TARGET): ecm_diag.c $(DIAG_SRC) $(DIAG_DIR)/ecm_diag.h $(DIAG_DIR)/ecm_diag_soem.h
+$(TARGET): ecm_diag.c $(DIAG_SRC) $(API_SRC) $(DIAG_DIR)/ecm_diag.h $(DIAG_DIR)/ecm_diag_soem.h ecm_api_view.h
 	@test -n "$(SOEM_LIB)" || { echo "libsoem not found under $(SOEM_DIR)/build — build SOEM first, or set SOEM_DIR=..."; exit 1; }
-	$(CC) $(CFLAGS) -o $@ ecm_diag.c $(DIAG_SRC) $(SOEM_INC) -I../.. -I$(DIAG_DIR) $(SOEM_LIB) -lpthread -lrt
+	$(CC) $(CFLAGS) -o $@ ecm_diag.c $(DIAG_SRC) $(API_SRC) $(SOEM_INC) -I../.. -I$(DIAG_DIR) $(SOEM_LIB) -lpthread -lrt -lm
 
 # --standalone opens a raw socket: same capabilities as the other tools.
 setcap: $(TARGET)

@@ -224,6 +224,17 @@ def schema(d):
     need(isinstance(rt.get("dma_latency_held"), bool), "rt.dma_latency_held")
     need(rt.get("hook") is None or isinstance(rt["hook"], str), "rt.hook")
     need(isinstance(rt.get("api_cpus"), str), "rt.api_cpus")
+    if "rt_cpu" in rt:                                     # Phase 11.3: RT configuration
+        need(isint(rt["rt_cpu"]), "rt.rt_cpu")
+        need(rt.get("isolated_cpus") is None or isinstance(rt["isolated_cpus"], str), "rt.isolated_cpus: string or null")
+        ci = obj(rt, "cpuidle", "rt")
+        need(ci.get("driver") is None or isinstance(ci["driver"], str), "rt.cpuidle.driver")
+        need(isinstance(ci.get("off"), bool), "rt.cpuidle.off: bool")
+        num(ci, "states", "rt.cpuidle")
+        need(all(isinstance(x, str) for x in lst(ci, "states_disabled", "rt.cpuidle")), "rt.cpuidle.states_disabled")
+        need(isinstance(rt.get("kernel"), str), "rt.kernel")
+        need(all(isinstance(x, str) and "=" in x or x in ("threadirqs", "nosoftlockup", "rcu_nocb_poll")
+                 for x in lst(rt, "cmdline_flags", "rt")), "rt.cmdline_flags")
 
     for i, f in enumerate(lst(d, "findings", w)):
         fw = "findings[%d]" % i
@@ -281,6 +292,7 @@ def mutations(d):
         m("sw as a number", lambda c: c["axes"][0].__setitem__("sw", 5687)),
         m("final as a string", lambda c: c.__setitem__("final", "yes")),
         m("hist.hook missing", lambda c: c["hist"].pop("hook")),
+        m("rt.cpuidle.off as a string", lambda c: c["rt"]["cpuidle"].__setitem__("off", "no")),
     ]
 
 

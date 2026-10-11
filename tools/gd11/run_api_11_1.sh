@@ -27,6 +27,9 @@
 #   A-09  golden: datagrams identical with --api (8 nodes, 2 groups) and that
 #         run's stats.json passes the schema and D-10 with an IO group
 #   A-10  --no-diag: slaves without counters, sources.monitor.diag false, schema ok
+#   A-11  (Phase 11.3) rt.* = this machine: isolated CPUs, cpuidle driver, idle states
+#         of core 3, kernel, RT flags of /proc/cmdline; negative control: the same
+#         check on a copy with one value changed MUST fail
 #
 # Env: SOFT_BUS ECM_RUN IF_M IF_S CASES SB_PRIO SB_CPU API_DIR (tmpfs!) LOG
 # ==========================================================================
@@ -37,7 +40,7 @@ SOFT_BUS=${SOFT_BUS:-$ROOT/tools/soft_bus/soft_bus}
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 IF_M=${IF_M:-veth_m}; IF_S=${IF_S:-veth_s}
 SB_PRIO=${SB_PRIO:-}; SB_CPU=${SB_CPU:-2}
-CASES=${CASES:-"a01 a02 a03 a04 a05 a06 a07 a08 a09 a10"}
+CASES=${CASES:-"a01 a02 a03 a04 a05 a06 a07 a08 a09 a10 a11"}
 API_DIR=${API_DIR:-/run/ecmaster_test}          # tmpfs: on ext4 every rename is a journal write
 CHECK="python3 $HERE/stats_check.py"
 ENI=$ROOT/config/eni/eni_2servo_mm.enicfg
@@ -257,6 +260,50 @@ if want a10; then
     $CHECK schema "$API_DIR/stats.json" > /dev/null; S=$?
     chk "A-10 --no-diag: schema ok, no slave counters, sources.monitor.diag false" \
         "[ $S = 0 ] && python3 -c \"import json,sys; d=json.load(open('$API_DIR/stats.json')); s=d['slaves'][0]; sys.exit(not ('rx_err' not in s and 'al' not in s and s['recover']=='ok' and d['sources']['monitor']['diag'] is False))\""
+fi
+
+if want a11; then
+    echo "--- A-11: rt configuration in stats.json"
+    fresh
+    start a11 3 --api --api-dir "$API_DIR"
+    finish
+    cp "$API_DIR/stats.json" "$LOG/stats_a11.json"
+    cat > "$LOG/rtcheck.py" <<'EOF2'
+import json, os, sys
+d = json.load(open(sys.argv[1]))["rt"]
+def rd(p):
+    try:
+        return open(p).read().strip()
+    except OSError:
+        return None
+bad = []
+iso = rd("/sys/devices/system/cpu/isolated")
+if d["isolated_cpus"] != iso: bad.append("isolated_cpus %r != %r" % (d["isolated_cpus"], iso))
+drv = rd("/sys/devices/system/cpu/cpuidle/current_driver")
+want = None if drv in (None, "none") else drv
+if d["cpuidle"]["driver"] != want: bad.append("cpuidle.driver %r != %r" % (d["cpuidle"]["driver"], want))
+states, dis = 0, []
+while True:
+    n = rd("/sys/devices/system/cpu/cpu3/cpuidle/state%d/name" % states)
+    if n is None: break
+    if rd("/sys/devices/system/cpu/cpu3/cpuidle/state%d/disable" % states) not in (None, "0"): dis.append(n)
+    states += 1
+if d["cpuidle"]["states"] != states or d["cpuidle"]["states_disabled"] != dis: bad.append("idle states of core 3")
+if d["kernel"] != os.uname().release: bad.append("kernel %r" % d["kernel"])
+words = open("/proc/cmdline").read().split()
+if not set(d["cmdline_flags"]) <= set(words): bad.append("cmdline_flags not from /proc/cmdline")
+for w in ("isolcpus=", "nohz_full=", "rcu_nocbs=", "irqaffinity=", "cpuidle.off="):
+    if any(x.startswith(w) for x in words) and not any(x.startswith(w) for x in d["cmdline_flags"]): bad.append("missing " + w)
+print("rtcheck: " + ("ok" if not bad else "; ".join(bad)))
+sys.exit(1 if bad else 0)
+EOF2
+    python3 "$LOG/rtcheck.py" "$LOG/stats_a11.json" > "$LOG/rtcheck.txt"; R=$?
+    chk "A-11 rt.* match this machine ($(cat $LOG/rtcheck.txt))" "[ $R = 0 ]"
+    python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d['rt']['kernel']+='-x'; json.dump(d,open(sys.argv[2],'w'))" \
+        "$LOG/stats_a11.json" "$LOG/stats_a11_neg.json"
+    python3 "$LOG/rtcheck.py" "$LOG/stats_a11_neg.json" > /dev/null; R=$?
+    chk "A-11 negative control: a changed value is detected" "[ $R = 1 ]"
+    chk "A-11 schema ok with the rt keys" "$CHECK schema $LOG/stats_a11.json > /dev/null"
 fi
 
 rm -rf "$API_DIR"

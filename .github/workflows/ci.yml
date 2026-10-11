@@ -165,10 +165,14 @@ jobs:
         run: sudo -E env LOG=/tmp/log_gd10_profile tools/gd10/run_profile_10_7.sh
       - name: Axis diagnosis (EMCY, CONFIG) + X-05 trace tool (Phase 10.8)
         run: sudo -E env LOG=/tmp/log_gd10_diag tools/gd10/run_diag_10_8.sh
-      - name: stats.json of ecm_run --api (Phase 11.1 A-01..A-10, golden with --api)
+      - name: stats.json of ecm_run --api (Phase 11.1 A-01..A-10, golden with --api; 11.3 A-11 rt configuration)
         run: sudo -E env LOG=/tmp/log_gd11_api API_DIR=/dev/shm/ecmaster_api tools/gd11/run_api_11_1.sh
       - name: ctl.sock of ecm_run --api (Phase 11.2 C-01..C-09, sdo_write refusals, recovery fence, golden with info polling)
         run: sudo -E env LOG=/tmp/log_gd11_ctl API_DIR=/dev/shm/ecmaster_ctl tools/gd11/run_ctl_11_2.sh
+      - name: ecm_diag through the API (Phase 11.3 G-01..G-07)
+        run: |
+          make -C apps/ecm_diag SOEM_DIR="$SOEM_DIR"
+          sudo -E env LOG=/tmp/log_gd11_diag API_DIR=/dev/shm/ecmaster_diag tools/gd11/run_diag_11_3.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -187,6 +191,7 @@ jobs:
             /tmp/log_gd10_hook
             /tmp/log_gd11_api
             /tmp/log_gd11_ctl
+            /tmp/log_gd11_diag
             /tmp/golden_now_*.txt*
             /tmp/ecm_run_golden.log
 

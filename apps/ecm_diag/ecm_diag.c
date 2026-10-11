@@ -17,8 +17,22 @@
  * not cleared. So it can look at a bus left in any state, including a
  * slave that power-cycled and has station address 0.
  *
+ * Phase 11.3: ecm_run's API (docs/api.md) as the preferred source:
+ *   ecm_diag --api [DIR]             stats.json of `ecm_run --api` (default
+ *                                    /run/ecmaster), rendered; --watch works too
+ *   ecm_diag [--api DIR] info        ctl.sock: identity, ENI, PDO table, allowlist
+ *   ecm_diag [--api DIR] sdo read SLAVE INDEX SUB [TYPE]
+ *   ecm_diag [--api DIR] sdo write SLAVE INDEX SUB TYPE VALUE   (allowlist only)
+ *   ecm_diag [--api DIR] dump        diag_dump: timestamped copies in DIR
+ *   --json                           print the raw JSON instead
+ * --standalone is also refused while ecm_run's API is alive (ctl.sock answers,
+ * or stats.json is fresh): ecm_run may run with --no-diag, no snapshot then.
+ *
  * Exit codes: 0 = no ERROR finding, 1 = at least one ERROR finding,
  *             2 = no/stale snapshot, 3 = refused (ecm_run running), 4 = bus I/O failed.
+ *   --api: 1 also for bus LOST/RECOVER, an axis in fault or with an axis error;
+ *          2 also when stats.json is final (ecm_run has stopped).
+ *   ctl.sock commands: 0 ok, 1 refused/failed, 2 no socket, 4 bad reply.
  * ========================================================================== */
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,8 +43,10 @@
 #include "soem/soem.h"
 #include "libecmaster/diag/ecm_diag.h"
 #include "libecmaster/diag/ecm_diag_soem.h"
+#include "ecm_api_view.h"
 
 #define DEFAULT_FILE "/tmp/ecm_diag.txt"
+#define DEFAULT_API  "/run/ecmaster"
 
 static double mono_s(void)
 {
@@ -73,8 +89,19 @@ static int show_snapshot(const char *path, double max_age)
 
 static const char *al_str(uint16_t code) { return ec_ALstatuscode2string(code); }
 
-static int standalone(const char *iface, int n, const char *path, double max_age, int force)
+static int standalone(const char *iface, int n, const char *path, double max_age, int force, const char *api_dir)
 {
+    char sp[512], sk[512];
+    snprintf(sp, sizeof(sp), "%s/stats.json", api_dir);
+    snprintf(sk, sizeof(sk), "%s/ctl.sock", api_dir);
+    double sage;
+    int fin;
+    if (!force && (ecm_view_ctl_alive(sk) || (ecm_view_load(sp, &sage, &fin) == 0 && !fin && sage <= max_age))) {
+        fprintf(stderr,
+            "ecm_diag: refusing --standalone: ecm_run's API is alive in %s (ctl.sock or a fresh stats.json),\n"
+            "          so ecm_run is running on the bus. Use ecm_diag --api %s instead, or pass --force.\n", api_dir, api_dir);
+        return 3;
+    }
     double age = load_snapshot(path);
     if (age >= 0 && age <= max_age && !force) {
         fprintf(stderr,
@@ -124,17 +151,44 @@ static void usage(const char *p)
 {
     fprintf(stderr,
         "usage: %s [--file PATH] [--max-age SEC] [--watch [SEC]]\n"
-        "       %s --standalone IFACE [--n EXPECTED_SLAVES] [--force] [--file PATH]\n", p, p);
+        "       %s --api [DIR] [--max-age SEC] [--watch [SEC]] [--json]          (Phase 11.3, default DIR %s)\n"
+        "       %s [--api DIR] [--json] info | dump | sdo read SLAVE INDEX SUB [TYPE] | sdo write SLAVE INDEX SUB TYPE VALUE\n"
+        "       %s --standalone IFACE [--n EXPECTED_SLAVES] [--force] [--file PATH] [--api DIR]\n", p, p, DEFAULT_API, p, p);
+}
+
+static int show_api(const char *dir, double max_age, int json)
+{
+    char p[512];
+    snprintf(p, sizeof(p), "%s/stats.json", dir);
+    double age;
+    int fin, r = ecm_view_load(p, &age, &fin);
+    if (r == -1) { fprintf(stderr, "ecm_diag: no %s (is ecm_run running with --api --api-dir %s?)\n", p, dir); return 2; }
+    if (r == -2) { fprintf(stderr, "ecm_diag: %s is not a schema-1 stats.json\n", p); return 2; }
+    return ecm_view_print(p, age, fin, max_age, json);
 }
 
 int main(int argc, char **argv)
 {
-    const char *path = DEFAULT_FILE, *iface = NULL;
+    const char *path = DEFAULT_FILE, *iface = NULL, *api_dir = NULL;
     double max_age = 3.0, watch = 0;
-    int n = 0, force = 0;
+    int n = 0, force = 0, json = 0, use_api = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
-        if      (!strcmp(a, "--file") && v)       { path = v; i++; }
+        if (!strcmp(a, "info") || !strcmp(a, "dump") || !strcmp(a, "sdo")) {   /* ctl.sock commands */
+            char sock[512];
+            snprintf(sock, sizeof(sock), "%s/ctl.sock", api_dir ? api_dir : DEFAULT_API);
+            if (!strcmp(a, "info")) return i + 1 == argc ? ecm_view_simple(sock, "info", json) : (usage(argv[0]), 2);
+            if (!strcmp(a, "dump")) return i + 1 == argc ? ecm_view_simple(sock, "diag_dump", json) : (usage(argv[0]), 2);
+            if (v && (!strcmp(v, "read") || !strcmp(v, "write"))) {
+                int r = ecm_view_sdo(sock, !strcmp(v, "write"), argc - i - 2, argv + i + 2, json);
+                if (r >= 0) return r;
+            }
+            usage(argv[0]);
+            return 2;
+        }
+        if      (!strcmp(a, "--api"))             { use_api = 1; if (v && v[0] != '-' && strcmp(v, "info") && strcmp(v, "dump") && strcmp(v, "sdo")) { api_dir = v; i++; } }
+        else if (!strcmp(a, "--json"))            { json = 1; }
+        else if (!strcmp(a, "--file") && v)       { path = v; i++; }
         else if (!strcmp(a, "--max-age") && v)    { max_age = atof(v); i++; }
         else if (!strcmp(a, "--watch"))           { watch = (v && v[0] != '-') ? atof(argv[++i]) : 1.0; }
         else if (!strcmp(a, "--standalone") && v) { iface = v; i++; }
@@ -142,11 +196,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--force"))           { force = 1; }
         else { usage(argv[0]); return 2; }
     }
-    if (iface) return standalone(iface, n, path, max_age, force);
+    if (!api_dir) api_dir = DEFAULT_API;
+    if (iface) return standalone(iface, n, path, max_age, force, api_dir);
+    if (use_api && watch <= 0) return show_api(api_dir, max_age, json);
     if (watch <= 0) return show_snapshot(path, max_age);
     for (;;) {
         printf("\033[H\033[2J");
-        show_snapshot(path, max_age);
+        if (use_api) show_api(api_dir, max_age, json);
+        else show_snapshot(path, max_age);
         fflush(stdout);
         usleep((useconds_t)(watch * 1e6));
     }

@@ -90,6 +90,9 @@ static void fill_full(ecm_api_stats_t *st)
     snprintf(st->hook, sizeof(st->hook), "cia402");
     snprintf(st->api_cpus, sizeof(st->api_cpus), "1-2");
     st->dma_latency_held = 1;
+    st->rtcfg = (ecm_api_rtcfg_t){ .rt_cpu = 3, .have_isolated = 1, .isolated = "3", .idle_driver = "psci_idle",
+                                   .nstates = 2, .kernel = "6.8.12-1021-rt-tegra", .nflags = 2,
+                                   .flags = { "isolcpus=3", "irqaffinity=0-2" } };
     st->n_slaves = 2; st->nports = 1; st->ngroups = 2; st->dc_ref_pos = 1;
     snprintf(st->ports[0].name, 12, "primary"); snprintf(st->ports[0].iface, 32, "enP1p1s0");
     st->ports[0].link = 1; st->ports[0].crc_err = 3; st->ports[0].rx_missed = -1; st->ports[0].carrier_changes = 2;
@@ -160,6 +163,8 @@ static void test_json(const char *dump_dir)
           "dc_err trimmed after the last non-zero bin");
     CHECK(strstr(g_buf, "\"tracking_max\"") == NULL, "no tracking_max in v1");
     CHECK(strstr(g_buf, "\"final\":true") != NULL, "final flag");
+    CHECK(strstr(g_buf, "\"api_cpus\":\"1-2\",\"rt_cpu\":3,\"isolated_cpus\":\"3\"") != NULL &&
+          strstr(g_buf, "\"cmdline_flags\":[\"isolcpus=3\",\"irqaffinity=0-2\"]") != NULL, "rt config in the document");
     CHECK(strstr(g_buf, "\"error_code\":\"0x0000\"") != NULL && strstr(g_buf, "\"sw\":\"0x1637\"") != NULL, "hex as strings");
     CHECK(strstr(g_buf, "{\"name\":\"2:0\",\"slave\":2,\"n\":0}") != NULL, "unreadable axis: identity only");
     if (dump_dir) {
@@ -212,6 +217,50 @@ static void test_nic(void)
     CHECK(p.link == 0, "down");
     ecm_api_nic_read(root, "nope", &p);
     CHECK(p.crc_err == -1 && p.link == -1, "unknown interface -> all -1");
+    char cmd[600];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+    if (system(cmd)) {}
+}
+
+static void test_rtcfg(void)
+{
+    char root[] = "/tmp/api_rt_XXXXXX";
+    if (!mkdtemp(root)) { CHECK(0, "mkdtemp"); return; }
+    char sys[256], cl[256];
+    snprintf(sys, sizeof(sys), "%s/sys", root);
+    snprintf(cl, sizeof(cl), "%s/cmdline", root);
+    mkp(root, "sys/devices/system/cpu/isolated", "3\n");
+    mkp(root, "sys/devices/system/cpu/cpuidle/current_driver", "psci_idle\n");
+    mkp(root, "sys/devices/system/cpu/cpu3/cpuidle/state0/name", "WFI\n");
+    mkp(root, "sys/devices/system/cpu/cpu3/cpuidle/state0/disable", "0\n");
+    mkp(root, "sys/devices/system/cpu/cpu3/cpuidle/state1/name", "c7\n");
+    mkp(root, "sys/devices/system/cpu/cpu3/cpuidle/state1/disable", "1\n");
+    mkp(root, "cmdline", "root=/dev/nvme0n1p1 rw isolcpus=3 quiet irqaffinity=0-2 transparent_hugepage=never nohz_full=3 console=ttyTCU0\n");
+    ecm_api_rtcfg_t r;
+    ecm_api_rtcfg_read(sys, cl, "6.8.12-test", 3, &r);
+    CHECK(r.have_isolated && !strcmp(r.isolated, "3"), "rt: isolated 3");
+    CHECK(!strcmp(r.idle_driver, "psci_idle") && !r.idle_off, "rt: cpuidle driver, not off");
+    CHECK(r.nstates == 2 && r.ndisabled == 1 && !strcmp(r.disabled[0], "c7"), "rt: state c7 disabled on cpu3");
+    CHECK(r.nflags == 4 && !strcmp(r.flags[0], "isolcpus=3") && !strcmp(r.flags[3], "nohz_full=3"),
+          "rt: only RT flags of the cmdline, in order (%d)", r.nflags);
+    char j[2048];
+    size_t n = ecm_api_rtcfg_json(&r, j, sizeof(j));
+    CHECK(n > 0 && strstr(j, "\"rt_cpu\":3,\"isolated_cpus\":\"3\",\"cpuidle\":{\"driver\":\"psci_idle\",\"off\":false,"
+                          "\"states\":2,\"states_disabled\":[\"c7\"]},\"kernel\":\"6.8.12-test\"") != NULL &&
+          !strstr(j, "root=") && !strstr(j, "console"), "rt: JSON members, no other cmdline word");
+    /* cpuidle.off=1: no driver, off */
+    mkp(root, "cmdline", "isolcpus=3 cpuidle.off=1\n");
+    char rm[512];
+    snprintf(rm, sizeof(rm), "%s/sys/devices/system/cpu/cpuidle/current_driver", root);
+    unlink(rm);
+    ecm_api_rtcfg_read(sys, cl, NULL, 3, &r);
+    CHECK(r.idle_off && !r.idle_driver[0] && r.kernel[0], "rt: cpuidle.off=1 -> off, driver null; kernel from uname");
+    n = ecm_api_rtcfg_json(&r, j, sizeof(j));
+    CHECK(strstr(j, "\"driver\":null,\"off\":true") != NULL, "rt: JSON driver null");
+    /* nothing readable: never fails */
+    ecm_api_rtcfg_read("/nonexistent", "/nonexistent", "k", 3, &r);
+    n = ecm_api_rtcfg_json(&r, j, sizeof(j));
+    CHECK(n > 0 && strstr(j, "\"isolated_cpus\":null") && strstr(j, "\"cmdline_flags\":[]"), "rt: nothing readable -> nulls");
     char cmd[600];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
     if (system(cmd)) {}
@@ -318,6 +367,7 @@ int main(int argc, char **argv)
     test_json(dump);
     test_nic();
     test_cpus();
+    test_rtcfg();
     test_publish_errors();
     int torn = test_torn(2000);
     CHECK(torn == 0, "publish: no torn read (tmp + rename)");

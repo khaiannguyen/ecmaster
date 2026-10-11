@@ -26,13 +26,23 @@ $CC -fsanitize=thread -O1 -g -std=gnu11 -Wall -Wextra -o "$B/ok" $SRC -lpthread 
 sed 's/^/    /' "$B/ok.log" | grep -v "^    $" | head -8
 if [ $rc = 0 ]; then ok "no data race, payloads whole and in order, puts = got"; else bad "rc=$rc (66 = TSan report)"; fi
 
-echo "=== 2. negative control: slot state published with memory_order_relaxed"
+# Phase 11.3 finding (sandbox, kernel 6.18.44, gcc 13 TSan): the broken build was
+# reported in only ~35 % of the runs (10-run samples at 2 000 and 20 000 puts), not
+# 100 % as on 9/10. A missed report is TSan's limit, never a false alarm, so the
+# negative control runs short and up to 30 times (~0.1 s each): one report is
+# enough; 30 misses at 35 % would happen ~2.5e-6 of the time.
+N_NEG=${N_NEG:-2000}
+echo "=== 2. negative control: slot state published with memory_order_relaxed ($N_NEG puts, up to 30 runs)"
 $CC -fsanitize=thread -O1 -g -std=gnu11 -DECM_API_HO_BROKEN -o "$B/broken" $SRC -lpthread -lm
-"$B/broken" "$N" > "$B/broken.log" 2>&1; rc=$?
-if [ $rc = 66 ] && grep -q "WARNING: ThreadSanitizer: data race" "$B/broken.log"; then
-    ok "TSan reports the missing release (exit 66)"
+seen=0
+for k in $(seq 30); do
+    "$B/broken" "$N_NEG" > "$B/broken.log" 2>&1; rc=$?
+    if [ $rc = 66 ] && grep -q "WARNING: ThreadSanitizer: data race" "$B/broken.log"; then seen=$k; break; fi
+done
+if [ $seen != 0 ]; then
+    ok "TSan reports the missing release (exit 66, run $seen of at most 30)"
 else
-    bad "TSan did NOT report the broken handoff (rc=$rc)"
+    bad "TSan did NOT report the broken handoff in 30 runs (rc=$rc)"
 fi
 
 echo "RESULT: $PASS pass, $FAIL fail   (work dir: $B)"

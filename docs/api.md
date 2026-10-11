@@ -2,7 +2,7 @@
 
 Giai đoạn 11. Kế hoạch: `claude/giai_doan_11_ke_hoach.md`. Tài liệu này là **hợp đồng** của API: schema, đơn vị, quy tắc version. `ecm_diag`, web UI và node ROS2 sau này đều là client của nó.
 
-Trạng thái: **11.1 `stats.json`** (bản vá 0031), **11.2 `ctl.sock`** (bản vá 0032, §10).
+Trạng thái: **11.1 `stats.json`** (bản vá 0031), **11.2 `ctl.sock`** (bản vá 0032, §10), **11.3 `ecm_diag` qua API + cấu hình RT** (bản vá 0033, §4 `rt`, §11).
 
 ## 1. Bật / tắt
 
@@ -84,7 +84,7 @@ Khoá tiếng Anh. Mọi **mã/thanh ghi** (statusword, 0x603F, AL code, DL stat
 | `slaves[]` (khi diag bật) | | `answered`, `inv[4]`, `rx_err[4]`, `fwd_err[4]`, `lost_link[4]` (theo cổng 0–3, thanh ghi 0x0300–0x0313, cộng dồn từ đầu run), `pu_err`, `pdi_err` |
 | `slaves[]` (khi monitor đã publish) | | `policy` (`none`/`ack`/`op`/`reconfig`: quyết định gần nhất), `recover` (`ok`/`retrying`/`failed`/`failed_config`), `attempts`, `recoveries`, `initcmd_failed` (số lần InitCmd của ENI thất bại khi reconfigure), `emcy_count`, `emcy[]` (≤ 4, mới nhất trước: `mono_ns`, `tick`, `code`, `reg`, `data` 10 ký tự hex, `class`) |
 | `axes[]` | list | chỉ khi `--hook cia402`. Luôn có `name`, `slave`, `n`; khi đọc được seqlock thì thêm `state` (§7), `sw`, `cw`, `mode` (yêu cầu), `mode_display` (0x6061), `err` (§7), `error_code`, `error_src` (`603F`/`EMCY`/`none`), `error_text` (từ `--emcy-map`), `pos`, `vel`, `tick`, `used`, `late`, `underruns`, `dropped`, `step_refused`, `pp_acked`, `homed` |
-| `rt` | object | `dma_latency_held`, `hook` (tên \| null), `hook_calls`, `api_cpus` |
+| `rt` | object | `dma_latency_held`, `hook` (tên \| null), `hook_calls`, `api_cpus`; *(11.3)* cấu hình RT của máy, đọc một lần lúc khởi động: `rt_cpu` (3), `isolated_cpus` (`/sys/devices/system/cpu/isolated`, `""` = không có, `null` = không đọc được), `cpuidle` (`driver` \| null, `off` = `cpuidle.off=1` hoặc không có driver, `states` = số idle state của core RT, `states_disabled` = tên các state đang bị tắt), `kernel` (`uname -r`), `cmdline_flags` (chỉ các cờ RT của `/proc/cmdline`: `isolcpus=`, `nohz_full=`, `rcu_nocbs=`, `irqaffinity=`, `cpuidle.off=`, `transparent_hugepage=`, …; không chép cả dòng) |
 | `findings[]` | list | `type`, `sev` (`info`/`warn`/`error`), `text`, `a`, `b`, `c`, `count`, `active`. `type` gồm các phát hiện của `ecm_diag_analyze` (§7) và `recover_failed`, `recover_failed_config` |
 | `sources` | object | `rt` / `telemetry` / `monitor`: `seq`, `mono_ns` (\| null); telemetry có thêm `ring_drops`, monitor có thêm `diag`, `diag_reads`, `diag_frames_lost`, `emcy_total`, `emcy_lost`; `handoff_drops` là tổng số cập nhật bị bỏ ở các handoff |
 
@@ -157,7 +157,7 @@ Phân vị p: cộng dồn `counts` tới khi vượt `p × count`; giá trị l
 
 | `cmd` | Tham số | Reply |
 |---|---|---|
-| `info` | — | `info`: `ecm_run` (version = `git describe`, pid), `schema`, `cycle_ns`, `link`, `ports[]`, `path`, `dc_ref`, `slaves[]` (pos, vendor, product, revision, name, group, mailbox, coe), `eni` (path, source, **sha256** của file `.enicfg`, số CoE InitCmd / download / register InitCmd / PDO entry, cycle) hoặc `null`, `pdo` (source `eni`/`bus`/`none`, `entries[]`: slave, dir `out`/`in`, pdo, index, sub, bits), `axes[]`, `api` (dir, cpus, sdo_timeout_ms, dumps), `ctl` (giới hạn và bộ đếm lệnh), `allow` (path, entries) |
+| `info` | — | `info`: *(11.3)* `rt` (cùng các khoá RT như `stats.json`), `ecm_run` (version = `git describe`, pid), `schema`, `cycle_ns`, `link`, `ports[]`, `path`, `dc_ref`, `slaves[]` (pos, vendor, product, revision, name, group, mailbox, coe), `eni` (path, source, **sha256** của file `.enicfg`, số CoE InitCmd / download / register InitCmd / PDO entry, cycle) hoặc `null`, `pdo` (source `eni`/`bus`/`none`, `entries[]`: slave, dir `out`/`in`, pdo, index, sub, bits), `axes[]`, `api` (dir, cpus, sdo_timeout_ms, dumps), `ctl` (giới hạn và bộ đếm lệnh), `allow` (path, entries) |
 | `sdo_read` | `slave`, `index`, `sub`, `type` (mặc định `raw`) | `size`, `raw` (hex), `value` (khi `type` có kiểu số và kích thước khớp), `ms` |
 | `sdo_write` | `slave`, `index`, `sub`, `type`, `value` | `written`, `raw`, `readback` (đọc lại ngay sau khi ghi), `readback_ok`, `ms` |
 | `diag_dump` | — | `files`: `diag_<thời gian>.txt` (snapshot chẩn đoán: findings, bộ đếm, EMCY, trục) và `stats_<thời gian>.json` (bản sao `stats.json`), nằm trong `<api-dir>`. Tối đa 32 lần mỗi run (tmpfs) |
@@ -225,3 +225,30 @@ Allowlist (`--api-allow FILE`, JSON):
 | `make -C libecmaster/api test test_asan` | `test_ctl_offline` (132): tokenizer JSON (cú pháp, độ sâu, số nguyên, escape), SHA-256 (vector FIPS, 1 triệu `a`), mã hoá kiểu, allowlist (1 file đúng, 13 file sai), mọi nhánh từ chối của `sdo_write` với backend giả (và đếm rằng không lần ghi nào tới slave), rate limit, server trên socket thật (client thứ 5, hai request trong một lần ghi, dòng quá dài, client không đọc, socket còn sống / socket cũ / file thường) |
 | `make -C libecmaster/api negctl` | `ECM_CTL_BROKEN` = 1 (bỏ kiểm RxPDO), 2 (bỏ rate limit), 4 (bỏ vùng 0x1000 và danh sách cứng), 8 (bỏ kiểm min/max), 16 (bỏ kiểm InitCmd): mỗi bản **phải** làm test tương ứng FAIL |
 | `sudo -E tools/gd11/run_ctl_11_2.sh` | C-01…C-09 trên soft_bus (§ đầu file runner) |
+
+## 11. `ecm_diag` qua API (11.3)
+
+`ecm_diag` là client mẫu của API. Chế độ cũ (đọc snapshot text `/tmp/ecm_diag.txt`, `--standalone`) giữ nguyên, `run_l5_diag.sh` vẫn 10/10.
+
+| Lệnh | Nguồn | Exit |
+|---|---|---|
+| `ecm_diag --api [DIR]` (mặc định `/run/ecmaster`) | `stats.json` | 0 khoẻ; **1** khi có finding `error`, bus `LOST`/`RECOVER`, trục ở `FAULT`/`FAULT_REACTION_ACTIVE` hoặc có lỗi trục; **2** khi không có file, file `final` (ecm_run đã dừng) hoặc cũ hơn `--max-age` (mặc định 3 s, so `mono_ns` với đồng hồ của chính máy đó) |
+| `ecm_diag --api [DIR] --watch [SEC]` | như trên, làm mới | — |
+| `ecm_diag [--api DIR] info` | `ctl.sock` | 0 ok, 1 bị từ chối/lỗi, 2 không có socket, 4 reply hỏng |
+| `ecm_diag [--api DIR] sdo read SLAVE INDEX SUB [TYPE]` | `ctl.sock` | như trên |
+| `ecm_diag [--api DIR] sdo write SLAVE INDEX SUB TYPE VALUE` | `ctl.sock` (allowlist) | như trên; đọc lại khác giá trị đã ghi → 1 |
+| `ecm_diag [--api DIR] dump` | `ctl.sock` (`diag_dump`) | như trên |
+| `--json` (đặt trước lệnh) | in nguyên JSON thay vì bảng | — |
+
+- Tuỳ chọn đặt trước lệnh: `ecm_diag --api /dev/shm/ecmaster --json sdo read 1 0x6061 0 i8`.
+- Màn hình `--api` gồm:
+  - một dòng nguồn (pid, `pub_seq`, tuổi, `FINAL`/`STALE`);
+  - bus và các cổng;
+  - dòng `rt:` (core, isolated, cpuidle, kernel, các cờ cmdline, `cpu_dma_latency`, hook, CPU của API);
+  - các nhóm, DC, link;
+  - bảng timing (p50/p99/p99.9/p99.99/max, đơn vị µs);
+  - slave (AL, bộ đếm theo cổng, recovery, EMCY);
+  - trục (state, mode, statusword, lỗi trục, mã lỗi và nguồn của nó: 0x603F hay EMCY);
+  - findings.
+- **`--standalone` giờ cũng từ chối (exit 3) khi API của `ecm_run` còn sống**: `ctl.sock` trả lời được, hoặc `stats.json` mới và chưa `final`. Lý do: `ecm_run --no-diag` không ghi snapshot text, nên kiểm tra của GĐ7 không thấy nó. `--force` vẫn bỏ qua được như trước.
+- Kiểm thử: `tools/gd11/run_diag_11_3.sh` (G-01…G-07); `rt.*` trong `run_api_11_1.sh` A-11.

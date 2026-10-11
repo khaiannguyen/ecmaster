@@ -2487,6 +2487,7 @@ static void api_static_init(long motion_cycle_us, long io_cycle_us)
     st->dma_latency_held = g_dma_latency_fd >= 0;
     snprintf(st->hook, sizeof(st->hook), "%s", g_hook ? g_hook_name : "");
     snprintf(st->api_cpus, sizeof(st->api_cpus), "%s", g_api_cpus);
+    ecm_api_rtcfg_read("/sys", "/proc/cmdline", NULL, 3, &st->rtcfg);   /* Phase 11.3: RT core = 3 */
     snprintf(st->fsm, sizeof(st->fsm), "STARTING");
     if (g_eni_on && ecm_sha256_file(g_eni_path, g_eni_sha256)) snprintf(g_eni_sha256, sizeof(g_eni_sha256), "unreadable");
     /* RT publish phases: scalars in the middle of each 100 ms slot, the two
@@ -2750,7 +2751,12 @@ static size_t be_info(void *c, char *buf, size_t cap)
         bw_str(&w, g_cia.ax[k].cfg.name);
         bw(&w, ",\"slave\":%u,\"n\":%u}", g_cia.ax[k].cfg.slave, g_cia.ax[k].cfg.n);
     }
-    bw(&w, "],\"api\":{\"dir\":");
+    {                                       /* Phase 11.3: the same rt members as stats.json */
+        char m[2048];
+        size_t ml = ecm_api_rtcfg_json(&st->rtcfg, m, sizeof(m));
+        bw(&w, "],\"rt\":{\"dma_latency_held\":%s%s%.*s}", st->dma_latency_held ? "true" : "false", ml ? "," : "", (int)ml, m);
+    }
+    bw(&w, ",\"api\":{\"dir\":");
     bw_str(&w, g_api_dir);
     bw(&w, ",\"cpus\":\"%s\",\"sdo_timeout_ms\":%d,\"dumps\":%u,\"dumps_max\":%d}", g_api_cpus, g_api_sdo_timeout_ms, g_dumps, API_DUMPS_MAX);
     return w.len;

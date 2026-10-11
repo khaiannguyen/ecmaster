@@ -179,8 +179,34 @@ typedef struct {
     int32_t  pos, vel;
     uint64_t tick, used, late, underruns, dropped;
     uint32_t step_refused, pp_acked;
-    char     error_text[96];
+    char     error_text[160];
 } ecm_api_axis_t;
+
+/* Phase 11.2+ (plan §2.3, 11.3): the RT configuration of the machine, read
+ * once at start-up so a benchmark or a bug report says what it ran on. */
+#define ECM_API_RT_FLAGS   16
+#define ECM_API_RT_STATES  8
+typedef struct {
+    int  rt_cpu;                          /* the RT thread's core (3)                  */
+    char isolated[64];                    /* /sys/devices/system/cpu/isolated, "" none  */
+    int  have_isolated;                   /* the file was readable                     */
+    char idle_driver[32];                 /* cpuidle/current_driver, "" = none/absent  */
+    int  idle_off;                        /* cpuidle.off=1, or no cpuidle driver       */
+    int  nstates;                         /* idle states of rt_cpu                     */
+    int  ndisabled;
+    char disabled[ECM_API_RT_STATES][24]; /* names of the disabled ones                */
+    char kernel[96];                      /* uname -r                                  */
+    int  nflags;
+    char flags[ECM_API_RT_FLAGS][64];     /* RT-relevant /proc/cmdline words only      */
+} ecm_api_rtcfg_t;
+
+/* sysroot "/sys", cmdline "/proc/cmdline", kernel NULL = uname(). Missing
+ * files leave the field empty/0; never fails. */
+void ecm_api_rtcfg_read(const char *sysroot, const char *cmdline, const char *kernel, int rt_cpu,
+                        ecm_api_rtcfg_t *o);
+/* The JSON members (no braces, no leading comma) of the rt object:
+ * "rt_cpu":3,"isolated_cpus":"3","cpuidle":{...},"kernel":"...","cmdline_flags":[...] */
+size_t ecm_api_rtcfg_json(const ecm_api_rtcfg_t *r, char *buf, size_t cap);
 
 typedef struct {
     /* fixed after start-up (ecm_run fills these once) */
@@ -196,6 +222,7 @@ typedef struct {
     int      dma_latency_held;
     char     hook[16];          /* "" = no hook                                  */
     char     api_cpus[24];
+    ecm_api_rtcfg_t rtcfg;
     /* per publish */
     uint64_t pub_seq, mono_ns;
     int      final;

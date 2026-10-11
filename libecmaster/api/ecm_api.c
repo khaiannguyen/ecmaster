@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 
 #include "../core/ecm_dc.h"
@@ -506,6 +507,11 @@ size_t ecm_api_stats_json(const ecm_api_stats_t *st, char *buf, size_t cap)
     if (st->hook[0]) kstr(j, "hook", st->hook); else knull(j, "hook");
     if (rt) ku64(j, "hook_calls", rt->hook_calls);
     kstr(j, "api_cpus", st->api_cpus);
+    {
+        char m[2048];
+        size_t ml = ecm_api_rtcfg_json(&st->rtcfg, m, sizeof(m));
+        if (ml) { jraw(j, ",", 1); jraw(j, m, ml); }
+    }
     jclose(j, '}');
 
     /* ---- findings ---- */
@@ -656,4 +662,92 @@ int ecm_api_parse_cpus(const char *s, uint64_t *mask)
     if (!m) return -1;
     *mask = m;
     return 0;
+}
+
+/* ------------------------------------------------------------ rt config --- */
+static int read_line(const char *path, char *out, size_t cap)
+{
+    FILE *f = fopen(path, "re");
+    if (!f) { out[0] = '\0'; return -1; }
+    if (!fgets(out, (int)cap, f)) out[0] = '\0';
+    fclose(f);
+    size_t n = strlen(out);
+    while (n && (out[n - 1] == '\n' || out[n - 1] == ' ' || out[n - 1] == '\r')) out[--n] = '\0';
+    return 0;
+}
+
+static const char *const RT_FLAGS[] = {
+    "isolcpus=", "nohz_full=", "nohz=", "rcu_nocbs=", "rcu_nocb_poll", "irqaffinity=", "cpuidle.off=",
+    "cpufreq.off=", "idle=", "processor.max_cstate=", "intel_idle.max_cstate=", "transparent_hugepage=",
+    "threadirqs", "nosoftlockup", "skew_tick=", "kthread_cpus=", "preempt=", "mitigations=",
+};
+
+void ecm_api_rtcfg_read(const char *sysroot, const char *cmdline, const char *kernel, int rt_cpu,
+                        ecm_api_rtcfg_t *o)
+{
+    char p[512], v[64];
+    memset(o, 0, sizeof(*o));
+    o->rt_cpu = rt_cpu;
+    snprintf(p, sizeof(p), "%s/devices/system/cpu/isolated", sysroot);
+    o->have_isolated = read_line(p, o->isolated, sizeof(o->isolated)) == 0;
+    snprintf(p, sizeof(p), "%s/devices/system/cpu/cpuidle/current_driver", sysroot);
+    if (read_line(p, o->idle_driver, sizeof(o->idle_driver)) || !strcmp(o->idle_driver, "none")) {
+        o->idle_driver[0] = '\0';
+        o->idle_off = 1;
+    }
+    for (int k = 0; k < 16; k++) {
+        snprintf(p, sizeof(p), "%s/devices/system/cpu/cpu%d/cpuidle/state%d/name", sysroot, rt_cpu, k);
+        char name[24];
+        if (read_line(p, name, sizeof(name))) break;
+        o->nstates++;
+        snprintf(p, sizeof(p), "%s/devices/system/cpu/cpu%d/cpuidle/state%d/disable", sysroot, rt_cpu, k);
+        if (!read_line(p, v, sizeof(v)) && atoi(v) != 0 && o->ndisabled < ECM_API_RT_STATES)
+            snprintf(o->disabled[o->ndisabled++], sizeof(o->disabled[0]), "%s", name);
+    }
+    static char cl[4096];
+    FILE *f = fopen(cmdline, "re");
+    if (f) {
+        size_t n = fread(cl, 1, sizeof(cl) - 1, f);
+        cl[n] = '\0';
+        fclose(f);
+        char *save = NULL;
+        for (char *w = strtok_r(cl, " \t\n", &save); w; w = strtok_r(NULL, " \t\n", &save)) {
+            for (size_t k = 0; k < sizeof(RT_FLAGS) / sizeof(RT_FLAGS[0]); k++) {
+                size_t l = strlen(RT_FLAGS[k]);
+                int match = RT_FLAGS[k][l - 1] == '=' ? !strncmp(w, RT_FLAGS[k], l) : !strcmp(w, RT_FLAGS[k]);
+                if (!match || o->nflags >= ECM_API_RT_FLAGS) continue;
+                snprintf(o->flags[o->nflags++], sizeof(o->flags[0]), "%s", w);
+                if (!strncmp(w, "cpuidle.off=", 12) && atoi(w + 12) != 0) o->idle_off = 1;
+                break;
+            }
+        }
+    }
+    if (kernel) snprintf(o->kernel, sizeof(o->kernel), "%s", kernel);
+    else {
+        struct utsname u;
+        if (!uname(&u)) snprintf(o->kernel, sizeof(o->kernel), "%s", u.release);
+    }
+}
+
+size_t ecm_api_rtcfg_json(const ecm_api_rtcfg_t *r, char *buf, size_t cap)
+{
+    jw_t jj = { .b = buf, .cap = cap, .depth = 2 }, *j = &jj;   /* inside "rt": "," separators */
+    if (!cap) return 0;
+    buf[0] = '\0';
+    ki64(j, "rt_cpu", r->rt_cpu);
+    if (r->have_isolated) kstr(j, "isolated_cpus", r->isolated); else knull(j, "isolated_cpus");
+    kobj(j, "cpuidle");
+    if (r->idle_driver[0]) kstr(j, "driver", r->idle_driver); else knull(j, "driver");
+    kbool(j, "off", r->idle_off);
+    ki64(j, "states", r->nstates);
+    karr(j, "states_disabled");
+    for (int k = 0; k < r->ndisabled; k++) { jsep(j); jstr(j, r->disabled[k]); }
+    jclose(j, ']');
+    jclose(j, '}');
+    kstr(j, "kernel", r->kernel);
+    karr(j, "cmdline_flags");
+    for (int k = 0; k < r->nflags; k++) { jsep(j); jstr(j, r->flags[k]); }
+    jclose(j, ']');
+    if (j->ovf) { buf[0] = '\0'; return 0; }
+    return j->len;
 }
