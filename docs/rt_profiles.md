@@ -183,7 +183,41 @@ sudo -E PROFILE=P0 tools/gd11/run_is7_11_5.sh            # ~75 min
   - 0x603F = 0 trên cả hai drive (không Er.E08);
   - bộ đếm lỗi của NIC không tăng.
 
-## 9. Phần 2b còn lại
-- IS-08: thời gian chết đầu-cuối.
-- IS-09: lọc EtherType RX.
-- IS-10: bảng ngân sách 250 µs (sau IS-07).
+## 9. Kết quả IS-07 (12/10, 2 IS620N, không enable trục, 600 s/lượt)
+| Lượt | P0 NOFRAME | P1 NOFRAME | turnaround p99.99 / max (P0 → P1) |
+|---|---|---|---|
+| af 1 ms | 0 | – | 71 / 112 |
+| af 500 µs | 0 | – | 79 / 175 |
+| etf d100 500 µs | 0 | – | 112 / 227 (DC \|e\| p99.99 < 1 µs) |
+| af 250 µs | 144 | **64** | 89 / 192 → 71 / 156 |
+| etf d100 250 µs | 218 | – | 126 / 265 |
+| af 500 µs `--no-dma-latency` | **791** | **0** | 355 / 652 → 71 / 176 |
+
+- 500 µs đã kiểm chứng trên servo thật với cả hai backend.
+- **Giữ `cpu_dma_latency` = 0 là bắt buộc ở P0.** P1 (`cpuidle.off=1`) thay được fd và còn rút ngắn đuôi nhận, vì nó tắt cả các trạng thái idle nông trên CPU0, nơi nhận ngắt i226.
+- **Khuyến nghị:** chu kỳ ≥ 500 µs dùng P0 + fd; chu kỳ 250 µs dùng **P1**.
+- **250 µs** vẫn còn khoảng 3·10⁻⁵ NOFRAME, mỗi lần mất đúng 1 chu kỳ. Nguyên nhân là đuôi đường nhận vượt ngân sách `cycle − 150 µs`.
+
+## 10. IS-09: đường nhận của i226 (chỉ đổi cấu hình)
+Quan sát trên Jetson (`/proc/interrupts` khi link đang lên):
+- Mọi MSI của i226 (IRQ 193 và các IRQ `TxRx-0..3`) đều đếm trên CPU0. Bộ điều khiển PCIe Tegra đưa MSI về một đường GIC duy nhất, nên **ngắt cứng không rời được CPU0**.
+- Mỗi vector có một thread `irq/NNN-enP1p1s0-TxRx-Q` (FIFO 50) làm NAPI poll và NET_RX. Trên CPU0 còn khoảng 15 thread ngắt FIFO 50 khác.
+
+```bash
+sudo -E PROFILE=P0 tools/gd11/run_is9_11_5.sh          # ~35 min: map, base, prio, cpu
+```
+| Bước | Thay đổi |
+|---|---|
+| map | Tìm hàng đợi RX chứa frame EtherCAT (`rx_queue_N_packets`) |
+| base | Không đổi gì, làm đối chứng trong cùng buổi |
+| prio | Thread ngắt của i226 → FIFO 85 |
+| cpu | prio + thread của hàng đợi đó dời sang CPU1 (`smp_affinity_list`); bỏ qua nếu kernel từ chối |
+
+Mọi thay đổi được hoàn tác khi script kết thúc. Muốn giữ cấu hình nào thì phải đưa vào `check_env.sh` / systemd. Việc đó để GĐ12.
+
+## 11. Mang sang sau `master-v1.0`
+- **Thay `RX_GUARD_NS` (150 µs cố định) bằng giá trị tỉ lệ theo chu kỳ**, ví dụ `min(150 µs, 25 % chu kỳ)`.
+  - 1 ms và 500 µs không đổi.
+  - 250 µs: hạn nhận nới từ khoảng 92 lên khoảng 180 µs (turnaround max đo được dưới P1 là 156 µs).
+  - Việc này chạm đường cyclic, nên cần cờ chọn chế độ, golden và soak 8 h.
+- Đổi giá trị mặc định của ETF sang delta 100 / lead 50 / asap 25 (sau khi chạy xác nhận 1 h).

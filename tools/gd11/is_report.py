@@ -24,6 +24,7 @@ TITLES = {
     "is05n": "IS-05n af_packet with --no-dma-latency (c7 on the i226 RX IRQ) (µs)",
     "is05p4": "IS-05 P4: 4 axes CiA402 CSP, 250 us (µs)",
     "is07": "IS-07 two IS620N on the i226, no axis enabled (µs)",
+    "is09": "IS-09 i226 receive path (irq thread priority / CPU), af_packet on two IS620N (µs)",
 }
 REF_8_5 = "| GĐ8 8.5 (29/9, no isolcpus, before c7 fix) | | | | | | | | 144 | 277 | reference |"
 
@@ -56,7 +57,7 @@ def main(argv):
         return 3
     rows = load(argv)
     out = []
-    for case in ("is02", "is03", "is06", "is04", "is05", "is05n", "is05p4", "is07"):
+    for case in ("is02", "is03", "is06", "is04", "is05", "is05n", "is05p4", "is07", "is09"):
         sel = [r for r in rows if r["case"] == case]
         if not sel:
             continue
@@ -67,7 +68,7 @@ def main(argv):
         for m in metrics:
             if len(metrics) > 1:
                 out.append(f"**{m}**\n")
-            if case in ("is04", "is05", "is05n", "is05p4", "is07"):
+            if case in ("is04", "is05", "is05n", "is05p4", "is07", "is09"):
                 out.append("| Profile | Run | n | min | p50 | p99 | p99.9 | p99.99 | max | unit | |")
                 out.append("|---|---|---|---|---|---|---|---|---|---|---|")
                 for r in sel:
