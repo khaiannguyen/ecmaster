@@ -152,10 +152,14 @@ is03)
     ;;
 is06)
     have "$TEGRASTATS" || { echo "tegrastats missing (not a Jetson?)"; FAIL=$((FAIL+1)); continue; }
+    # the bus run needs the veth pair too (a reboot removes it; 12/10 P1 run)
+    for i in "$IF_M" "$IF_S"; do ip link show "$i" >/dev/null 2>&1 || {
+        echo "missing $i: sudo ip link add $IF_M type veth peer name $IF_S && sudo ip link set $IF_M up && sudo ip link set $IF_S up"
+        FAIL=$((FAIL+1)); continue 2; }; done
     for var in rest bus; do
         echo "=== IS-06 power, $var, ${DUR} s"
         if [ $var = bus ]; then
-            sb_start is06 || { echo "  soft_bus did not start"; FAIL=$((FAIL+1)); continue; }
+            sb_start is06 || { echo "  soft_bus did not start ($LOG/sb_is06.log)"; FAIL=$((FAIL+1)); continue; }
             "$ECM_RUN" --iface "$IF_M" --n 8 --motion-slaves 4 --duration-sec "$DUR" --diag-file "$LOG/diag_is06.txt" \
                 > "$LOG/is06_bus.log" 2>&1 &
             ERP=$!

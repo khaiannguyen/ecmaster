@@ -19,6 +19,10 @@ TITLES = {
     "is02": "IS-02 cyclictest, RT core, 1 ms (µs)",
     "is03": "IS-03 ecm_run N=8, 1 ms, soft_bus on veth (µs)",
     "is06": "IS-06 power (VDD_IN, mW)",
+    "is04": "IS-04 txtime_probe on the i226, ETF offload, lead = delta - 50 us, 1 ms",
+    "is05": "IS-05 ecm_run N=8 on the i226, 100 Mbit/s, soft_bus on the onboard port (µs)",
+    "is05n": "IS-05n af_packet with --no-dma-latency (c7 on the i226 RX IRQ) (µs)",
+    "is05p4": "IS-05 P4: 4 axes CiA402 CSP, 250 us (µs)",
 }
 REF_8_5 = "| GĐ8 8.5 (29/9, no isolcpus, before c7 fix) | | | | | | | | 144 | 277 | reference |"
 
@@ -51,18 +55,26 @@ def main(argv):
         return 3
     rows = load(argv)
     out = []
-    for case in ("is02", "is03", "is06"):
+    for case in ("is02", "is03", "is06", "is04", "is05", "is05n", "is05p4"):
         sel = [r for r in rows if r["case"] == case]
         if not sel:
             continue
-        sel.sort(key=lambda r: (r["metric"], r["profile"], ORDER.get(r["variant"], 9), ORDER.get(r["load"], 9)))
+        sel.sort(key=lambda r: (r["metric"], r["profile"], ORDER.get(r["variant"], 9), r["variant"], ORDER.get(r["load"], 9)))
         out.append(f"### {TITLES[case]}\n")
-        pref = ["wake_jitter", "occupancy", "prep_send", "turnaround"]
+        pref = ["wake_jitter", "occupancy", "prep_send", "turnaround", "launch_err", "probe_wake", "probe_send"]
         metrics = sorted({r["metric"] for r in sel}, key=lambda m: (pref.index(m) if m in pref else 9, m))
         for m in metrics:
             if len(metrics) > 1:
                 out.append(f"**{m}**\n")
-            if case == "is06":
+            if case in ("is04", "is05", "is05n", "is05p4"):
+                out.append("| Profile | Run | n | min | p50 | p99 | p99.9 | p99.99 | max | unit | |")
+                out.append("|---|---|---|---|---|---|---|---|---|---|---|")
+                for r in sel:
+                    if r["metric"] != m:
+                        continue
+                    out.append(f"| {r['profile']} | {r['variant']} | {r['n']} | {r['min'] or '–'} | {r['p50']} | {r['p99']} | "
+                               f"{r['p999']} | {r['p9999']} | {r['max']} | {r['unit']} | {r['extra']} |")
+            elif case == "is06":
                 out.append("| Profile | Run | n | min | mean | max | |")
                 out.append("|---|---|---|---|---|---|---|")
                 for r in sel:

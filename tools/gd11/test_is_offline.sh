@@ -17,7 +17,8 @@
 #   O-03 is_parse.py on fixtures: cyclictest (percentiles, overflow ->
 #        ">HIST"), ecm_run (last summary block, clamp to max), tegrastats;
 #        a log without the lines gives n=0 + reason (negative control)
-#   O-04 is_report.py: tables from two profiles; a foreign CSV -> exit 2
+#        txtime_probe summary (IS-04)
+#   O-04 is_report.py: tables from two profiles and IS-04; a foreign CSV -> exit 2
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -99,13 +100,23 @@ chk "O-03 tegrastats: mean 6500 mW, max temp 49" "[ '$out' = 'is06,P1,bus,idle,v
 out=$(python3 "$HERE/is_parse.py" tegrastats /dev/null is06 P1 bus idle)
 chk "O-03 tegrastats without VDD_IN -> n=0 + reason" "echo '$out' | grep -q ',vdd_in,0,.*no VDD_IN'"
 
+{ echo "[counts]"; echo "  attempts 600000  sent 600000  send_err 0"
+  echo "  ETF drops: missed 0  invalid_param 1  other 0"; echo "  late wake (woke after t_target) 1"
+  echo "  launch_err = tx_ts - target  min      303  p50      314  p99      328  p99.9      332  p99.99      336  max      344 ns (n=599999)"
+  echo "  wake jitter (MONO)           min     1200  p50     2800  p99     5000  p99.9     8000  p99.99    14000  max    20500 ns (n=600000)"; } > "$T/probe.txt"
+python3 "$HERE/is_parse.py" probe "$T/probe.txt" is04 P0 d150 idle > "$T/probe.csv"; out=$(grep -v probe_send "$T/probe.csv")
+chk "O-03 probe: launch_err row with missed/invalid, wake in us" \
+    "echo '$out' | grep -q '^is04,P0,d150,idle,launch_err,599999,303,,314,328,332,336,344,ns,sent=600000 missed=0 invalid=1 late_wake=1$' && echo '$out' | grep -q '^is04,P0,d150,idle,probe_wake,600000,1.2,,2.8,5.0,8.0,14.0,20.5,us,'"
+chk "O-03 probe: missing send line -> n=0 + reason (negative control)" "grep -q ',probe_send,0,.*no .send call duration. line' $T/probe.csv"
+
 echo "=== O-04 is_report.py"
 H="case,profile,variant,load,metric,n,min,avg,p50,p99,p999,p9999,max,unit,extra"
 { echo "$H"; python3 "$HERE/is_parse.py" ecm_run "$T/er.log" is03 P0 dma idle; } > "$T/a.csv"
 { echo "$H"; python3 "$HERE/is_parse.py" ecm_run "$T/er.log" is03 P1 nodma load; python3 "$HERE/is_parse.py" cyclictest "$T/cyc.txt" is02 P1 dma idle 10; } > "$T/b.csv"
-python3 "$HERE/is_report.py" "$T/a.csv" "$T/b.csv" > "$T/rep.md"; r=$?
+{ echo "$H"; python3 "$HERE/is_parse.py" probe "$T/probe.txt" is04 P0 d150 idle; } > "$T/c.csv"
+python3 "$HERE/is_report.py" "$T/a.csv" "$T/b.csv" "$T/c.csv" > "$T/rep.md"; r=$?
 chk "O-04 report: exit 0, P0 and P1n rows, 8.5 reference, IS-02 table" \
-    "[ $r = 0 ] && grep -q '^| P0 | idle | 600000' $T/rep.md && grep -q '^| P1n | load | 600000' $T/rep.md && grep -q 'GĐ8 8.5' $T/rep.md && grep -q 'IS-02' $T/rep.md"
+    "[ $r = 0 ] && grep -q '^| P0 | idle | 600000' $T/rep.md && grep -q '^| P1n | load | 600000' $T/rep.md && grep -q 'GĐ8 8.5' $T/rep.md && grep -q 'IS-02' $T/rep.md && grep -q '^| P0 | d150 | 599999' $T/rep.md"
 echo "a,b,c" > "$T/x.csv"
 python3 "$HERE/is_report.py" "$T/x.csv" > /dev/null 2>&1; r=$?
 chk "O-04 negative control: foreign CSV -> exit 2" "[ $r = 2 ]"

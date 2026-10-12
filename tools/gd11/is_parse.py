@@ -5,6 +5,7 @@
   is_parse.py cyclictest FILE CASE PROFILE VARIANT LOAD HIST_US
   is_parse.py ecm_run    FILE CASE PROFILE VARIANT LOAD
   is_parse.py tegrastats FILE CASE PROFILE VARIANT LOAD
+  is_parse.py probe      FILE CASE PROFILE VARIANT LOAD   (tools/etf/txtime_probe output)
 
 cyclictest: the -h histogram (1 us bins); a percentile beyond the histogram
 is written ">HIST". ecm_run: the LAST block of wake_jitter / prep_send /
@@ -69,7 +70,17 @@ def ecm_run(path, case, prof, var, load):
     inv = first(r"missed=\d+ invalid=(\d+)")
     extra = "overrun=%s wkc_mismatch=%s noframe=%s dc_unlocks=%s" % (ovr, wkm, nof, unl)
     if late != "?":
-        extra += " etf_missed=%s etf_invalid=%s" % (late, inv)
+        extra += " etf_missed=%s etf_invalid=%s etf_sent_now=%s" % (
+            late, inv, first(r"late\(sent now\)=(\d+)"))
+    dce = first(r"\[DC\] \|e\| \(after 5 s\).*?p99\.99=(\d+) us")
+    if dce != "?":
+        extra += " dc_e_p9999=%sus" % dce
+    und = re.findall(r"\[CIA402\] axis \d+ .*?underrun=(\d+)", txt)
+    if und:
+        extra += " cia402_underrun=%d" % sum(int(u) for u in und)
+    hk = first(r"\[HOOK\].*?p99\.99=(\d+)")
+    if hk != "?":
+        extra += " hook_p9999=%sns" % hk
     out = []
     for m in ("wake_jitter", "prep_send", "occupancy", "turnaround"):
         last = [ln for ln in lines if ln.startswith(m + " ")]
@@ -96,6 +107,32 @@ def ecm_run(path, case, prof, var, load):
     return out
 
 
+def probe(path, case, prof, var, load):
+    """txtime_probe summary: launch_err (ns), wake jitter, send duration (us)"""
+    txt = open(path, errors="replace").read()
+
+    def first(rx):
+        m = re.search(rx, txt)
+        return m.group(1) if m else "?"
+    extra = "sent=%s missed=%s invalid=%s late_wake=%s" % (
+        first(r"attempts \d+\s+sent (\d+)"), first(r"ETF drops: missed (\d+)"),
+        first(r"invalid_param (\d+)"), first(r"late wake \(woke after t_target\) (\d+)"))
+    out = []
+    for name, metric, div, unit in (("launch_err", "launch_err", 1, "ns"),
+                                    ("wake jitter", "probe_wake", 1000.0, "us"),
+                                    ("send call duration", "probe_send", 1000.0, "us")):
+        m = re.search(re.escape(name) + r".*?min\s+(-?\d+)\s+p50\s+(-?\d+)\s+p99\s+(-?\d+)\s+p99\.9\s+(-?\d+)"
+                      r"\s+p99\.99\s+(-?\d+)\s+max\s+(-?\d+) ns \(n=(\d+)\)", txt)
+        if not m:
+            out.append(row(case, prof, var, load, metric, 0, unit=unit, extra="no '%s' line %s" % (name, extra)))
+            continue
+        v = [int(x) for x in m.groups()[:6]]
+        f = (lambda x: str(x)) if div == 1 else (lambda x: "%.1f" % (x / div))
+        out.append(row(case, prof, var, load, metric, m.group(7), f(v[0]), "", f(v[1]), f(v[2]), f(v[3]),
+                       f(v[4]), f(v[5]), unit, extra))
+    return out
+
+
 def tegrastats(path, case, prof, var, load):
     p, t = [], []
     for ln in open(path, errors="replace"):
@@ -119,6 +156,8 @@ def main(a):
             rows = cyclictest(path, *a[2:6], a[6] if len(a) > 6 else "?")
         elif kind == "ecm_run":
             rows = ecm_run(path, *a[2:6])
+        elif kind == "probe":
+            rows = probe(path, *a[2:6])
         elif kind == "tegrastats":
             rows = tegrastats(path, *a[2:6])
         else:
