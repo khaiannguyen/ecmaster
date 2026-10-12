@@ -121,5 +121,25 @@ echo "a,b,c" > "$T/x.csv"
 python3 "$HERE/is_report.py" "$T/x.csv" > /dev/null 2>&1; r=$?
 chk "O-04 negative control: foreign CSV -> exit 2" "[ $r = 2 ]"
 
+echo "=== O-05 is_lib.sh er_verdict / er_axes_used (lines from the 12/10 Jetson logs)"
+ok () { :; }; bad () { echo "      bad: $1"; NB=$((NB+1)); }
+. "$HERE/is_lib.sh"
+{ echo "  [GROUP_MOTION] cycles=1200001 wkc_mismatch=0 (0.0000%) overrun=0 (0.0000%)"
+  echo "  [DC] state=LOCKED locks=1 unlocks=0 clamps=0 stale=0 wraps=3"
+  echo "  [WKC GROUP_MOTION] ok=1200001 noframe=0 zero=0 partial=0 over=0 max_run_bad=0"
+  echo "  [POLICY] final bus state RUN; entered: DEGRADED=0 LOST=0 RECOVER=0 RUN=0; ticks: RUN=1200001 DEGRADED=0 LOST=0 RECOVER=0"; } > "$T/good.log"
+echo 0 > "$T/good.log.rc"
+{ echo "  [GROUP_MOTION] cycles=2400001 wkc_mismatch=1944132 (81.0000%) overrun=0 (0.0000%)"
+  echo "  [DC] state=LOCKED locks=1 unlocks=0 clamps=0 stale=0 wraps=3"
+  echo "  [WKC GROUP_MOTION] ok=2527 noframe=1944132 zero=0 partial=0 over=0 max_run_bad=32845"
+  echo "  [POLICY] final bus state DEGRADED; entered: DEGRADED=20821 LOST=18293 RECOVER=18293 RUN=20820; ticks: RUN=20821 DEGRADED=1925838 LOST=18733 RECOVER=434609"
+  echo "  [CIA402] axis 0 (1:0): Switch on disabled sw=0x0250 cw=0x0000 mode=8 pos=0 vel=0 err=bus lost 0x603F=0x0000 used=0 late=470075 underrun=0 dropped=1921921 track_max=0 (n=0)"
+  echo "  [CIA402] axis 1 (1:1): Switch on disabled sw=0x0250 cw=0x0000 mode=8 pos=0 vel=0 err=bus lost 0x603F=0x0000 used=0 late=470075 underrun=0 dropped=1921921 track_max=0 (n=0)"; } > "$T/p4.log"
+echo 0 > "$T/p4.log.rc"
+NB=0; er_verdict good "$T/good.log" 2; chk "O-05 clean 500 us log: 0 FAIL" "[ $NB = 0 ]"
+NB=0; er_verdict p4 "$T/p4.log" 2 > "$T/v.txt"; cat "$T/v.txt"
+chk "O-05 negative control: the P4 250 us log (36/0 in part 2a) now FAILs NOFRAME + LOST=18293 (2)" "[ $NB = 2 ] && grep -q 'entered LOST 18293 times' $T/v.txt"
+NB=0; er_axes_used p4 "$T/p4.log"; chk "O-05 negative control: axes never used -> FAIL" "[ $NB = 1 ]"
+
 echo "RESULT: $PASS pass, $FAIL fail"
 [ $FAIL = 0 ]

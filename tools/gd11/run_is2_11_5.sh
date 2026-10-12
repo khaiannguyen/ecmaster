@@ -34,6 +34,10 @@
 #           ecm_run --hook cia402, CSP sine on the 4 axes, 250 us, etf then
 #           af_packet: adds CiA402 underruns and hook p99.99
 #
+# Verdict per run (is_lib.sh): rc 0, overrun 0, NOFRAME <= NOFRAME_MAX (2),
+# policy never ENTERED LOST, DC LOCKED 0 unlocks; P4 also every axis used.
+# (Part 2a only checked overrun/DC and matched a bare 'LOST=0': its 36/0
+# passed 250 us runs with 6 % NOFRAME and a P4 run with 18 293 LOST.)
 # A run that FAILs is kept in the table: the histograms say why (wake,
 # prep_send, turnaround, or the cycle budget: at 250 us the receive deadline
 # is next + cycle - asap - 150 us, RX_GUARD_NS, see IS-10).
@@ -45,7 +49,7 @@
 #   may need a replug if it stays NO-CARRIER (i226.md).
 #
 # Env: PROFILE CASES I226 ONB RT_CPU SB_CPU SB_PRIO DELTAS PROBE_S DUR CYCLES
-#      NCYCLE ETF_DELTA ETF_LEAD ETF_ASAP P4_AMP P4_HZ P4_LEAD RESTORE LOG
+#      NOFRAME_MAX NCYCLE ETF_DELTA ETF_LEAD ETF_ASAP P4_AMP P4_HZ P4_LEAD RESTORE LOG
 #      SOFT_BUS ECM_RUN PROBE CLOCK_CHECK
 # ==========================================================================
 set -u
@@ -75,6 +79,8 @@ PASS=0; FAIL=0
 ok  () { echo "  [PASS] $1"; PASS=$((PASS+1)); }
 bad () { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+. "$HERE/is_lib.sh"
+NOFRAME_MAX=${NOFRAME_MAX:-2}
 for f in "$SOFT_BUS" "$ECM_RUN" "$PROF4"; do [ -e "$f" ] || { echo "missing $f (make all caps)"; exit 3; }; done
 for t in txtime_probe clock_check; do
     [ -x "$ROOT/tools/etf/$t" ] || gcc -O2 -Wall -Wextra -o "$ROOT/tools/etf/$t" "$ROOT/tools/etf/$t.c" \
@@ -130,12 +136,10 @@ run_n8 () {   # tag cycle_us variant(csv) extra ecm_run args...
     sb_start "$tag" --n 8 --pdo-size 4 || { bad "$tag soft_bus did not start ($LOG/sb_$tag.log)"; return; }
     "$ECM_RUN" --iface "$I226" --n 8 --motion-slaves 4 --motion-cycle-us "$cyc" --duration-sec "$DUR" \
         --diag-file "$LOG/diag_$tag.txt" "$@" > "$LOG/er_$tag.log" 2>&1
-    local rc=$?; sb_stop
+    echo $? > "$LOG/er_$tag.log.rc"; sb_stop
     python3 "$HERE/is_parse.py" ecm_run "$LOG/er_$tag.log" "${tag%%_*}" "$PROFILE" "$var" idle >> "$CSV"
     grep ",wake_jitter," "$CSV" | tail -1 | sed 's/^/    /'
-    chk "$tag rc 0" "[ $rc = 0 ]"
-    chk "$tag 0 overrun, DC 0 unlocks, never LOST" \
-        "grep -q '\[GROUP_MOTION\] cycles=.* overrun=0 ' $LOG/er_$tag.log && grep -q '\[DC\] state=LOCKED locks=1 unlocks=0' $LOG/er_$tag.log && grep -q 'LOST=0' $LOG/er_$tag.log"
+    er_verdict "$tag" "$LOG/er_$tag.log" "$NOFRAME_MAX"
 }
 
 run_p4 () {   # tag variant extra ecm_run args...
@@ -145,12 +149,11 @@ run_p4 () {   # tag variant extra ecm_run args...
     "$ECM_RUN" --iface "$I226" --n 1 --motion-cycle-us 250 --duration-sec "$DUR" --diag-file "$LOG/diag_$tag.txt" \
         --pdo-scan --axis 1:0,1:1,1:2,1:3 --axis-modes csp --hook cia402 --cia402-lead "$P4_LEAD" \
         --cia402-script "1 enable all; 2 sine all $P4_AMP $P4_HZ" "$@" > "$LOG/er_$tag.log" 2>&1
-    local rc=$?; sb_stop
+    echo $? > "$LOG/er_$tag.log.rc"; sb_stop
     python3 "$HERE/is_parse.py" ecm_run "$LOG/er_$tag.log" is05p4 "$PROFILE" "$var" idle >> "$CSV"
     grep ",wake_jitter," "$CSV" | tail -1 | sed 's/^/    /'
-    chk "$tag rc 0" "[ $rc = 0 ]"
-    chk "$tag 0 overrun, DC 0 unlocks, 0 CiA402 underrun" \
-        "grep -q '\[GROUP_MOTION\] cycles=.* overrun=0 ' $LOG/er_$tag.log && grep -q 'unlocks=0' $LOG/er_$tag.log && ! grep -E '\[CIA402\] axis [0-9] .*underrun=[1-9]' $LOG/er_$tag.log | grep -q ."
+    er_verdict "$tag" "$LOG/er_$tag.log" "$NOFRAME_MAX"
+    er_axes_used "$tag" "$LOG/er_$tag.log"
 }
 
 etf_args () {   # delta -> ecm_run args for --link etf

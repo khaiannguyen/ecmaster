@@ -152,7 +152,38 @@ python3 tools/gd11/is_report.py log_gd11_is2_P0_*/results.csv log_gd11_is2_P1_*/
 - **Xác nhận delta đã chọn:** sau IS-04 chạy lại 1 h với `CASES="rig is04" DELTAS=<delta> PROBE_S=3600`. Lượt 600 000 frame không lỗi chỉ cho cận trên tỉ lệ lỗi khoảng 5·10⁻⁶.
 - **Ngân sách nhận ở 250 µs** (IS-10): deadline = `next + cycle − asap − 150 µs` (`RX_GUARD_NS`, cố định trong code). Với `af_packet` còn 100 µs kể từ thời điểm chu kỳ, với `etf` còn 100 − asap µs kể từ lúc frame phát. Ca nào FAIL ở 250 µs thì đọc turnaround so với con số này trước khi kết luận.
 
-## 7. Phần 2b (sẽ thêm)
-- IS-08: thời gian chết đầu-cuối (pcap + log).
-- IS-09: lọc EtherType RX vào hàng đợi riêng.
-- IS-10: bảng ngân sách 250 µs (lý thuyết cạnh số đo của IS-05).
+## 7. Kết quả phần 2a (12/10, P0, rig loopback)
+- **IS-04:** delta 400 → 100 µs đều 0 missed / 0 invalid trên 600 000 frame. launch_err p99.99 166 ns. Cặp mới **delta 100 / lead 50 / asap 25** thay cho 400 / 350 / 150 (còn chờ một lượt xác nhận 1 h).
+- **IS-05 N=8:**
+  - 1 ms và 500 µs: 0 NOFRAME với cả af_packet lẫn etf.
+  - 250 µs: NOFRAME 0,4 % (af) và 6,3 % (etf).
+  - P4 250 µs: 80 % NOFRAME, LOST/RECOVER lặp 18 293 lần.
+- **Giới hạn ở 250 µs là turnaround của slave giả**, không phải phía master: `soft_bus` nhận qua NIC Realtek và xử lý trong user space, cho p50 79 µs (N=8) và 178 µs (P4), đuôi 250–400 µs. Trong khi đó ngân sách nhận chỉ còn `cycle − asap − 150 µs` (100 µs với af).
+- Phần 2a in "36/0" là sai: tiêu chí PASS khi đó không kiểm NOFRAME và kiểm LOST quá lỏng. Từ 0037, tiêu chí dùng chung nằm ở `tools/gd11/is_lib.sh`.
+- **P0n ≈ P0** trên rig loopback. Phép so bị nhiễu: ngắt của cả hai NIC đều nằm trên CPU0, nên CPU0 không có lúc nào rảnh để vào c7.
+
+## 8. IS-07: hai IS620N thật
+
+```bash
+# servo: chỉ cần nguồn điều khiển (L1C/L2C); không trục nào được enable
+# rút cáp loopback khỏi enP8p1s0, cắm i226 -> IS620N #1 -> #2
+sudo -E PROFILE=P0 tools/gd11/run_is7_11_5.sh            # ~75 min
+```
+| Ca | Chu kỳ | Backend |
+|---|---|---|
+| af1000 / af500 / af250 | 1 ms / 500 / 250 µs | af_packet |
+| nodma500 | 500 µs | af_packet `--no-dma-latency` (câu hỏi c7, lần này CPU0 chỉ phục vụ i226) |
+| etf500 / etf250 | 500 / 250 µs | etf delta 100 / lead 50 / asap 25 |
+
+- Mỗi lượt dùng một bản ENI riêng cho chu kỳ đó (`eni_cycle.py`). Không có `--hook`, `--axis` hay `--pdo-set`, nên controlword luôn bằng 0.
+- PASS khi:
+  - rc 0, 0 overrun, NOFRAME ≤ 2;
+  - policy không lần nào vào LOST;
+  - DC LOCKED, 0 unlock;
+  - 0x603F = 0 trên cả hai drive (không Er.E08);
+  - bộ đếm lỗi của NIC không tăng.
+
+## 9. Phần 2b còn lại
+- IS-08: thời gian chết đầu-cuối.
+- IS-09: lọc EtherType RX.
+- IS-10: bảng ngân sách 250 µs (sau IS-07).
