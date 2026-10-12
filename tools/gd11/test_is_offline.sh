@@ -141,5 +141,19 @@ NB=0; er_verdict p4 "$T/p4.log" 2 > "$T/v.txt"; cat "$T/v.txt"
 chk "O-05 negative control: the P4 250 us log (36/0 in part 2a) now FAILs NOFRAME + LOST=18293 (2)" "[ $NB = 2 ] && grep -q 'entered LOST 18293 times' $T/v.txt"
 NB=0; er_axes_used p4 "$T/p4.log"; chk "O-05 negative control: axes never used -> FAIL" "[ $NB = 1 ]"
 
+echo "=== O-06 ecm_run --rx-guard-us refused before the bus is touched (needs apps/ecm_run/ecm_run)"
+ER=$HERE/../../apps/ecm_run/ecm_run
+if [ -x "$ER" ]; then
+    for a in "10" "2000" "200 --motion-cycle-us 250" "180 --motion-cycle-us 250 --link etf --etf-lead-us 50 --etf-asap-us 25"; do
+        # shellcheck disable=SC2086
+        "$ER" --iface lo --n 1 --rx-guard-us $a > "$T/g.txt" 2>&1; r=$?
+        chk "O-06 --rx-guard-us $a: rc 1, refused, bus not touched" "[ $r = 1 ] && grep -q 'rx-guard-us .*: need 20..1000' $T/g.txt && ! grep -q 'expected WKC' $T/g.txt"
+    done
+    "$ER" --iface lo --n 1 --motion-cycle-us 250 --rx-guard-us 60 > "$T/g.txt" 2>&1
+    chk "O-06 negative control: --rx-guard-us 60 at 250 us passes the check" "! grep -q 'rx-guard-us .*: need' $T/g.txt"
+else
+    echo "  [SKIP] ecm_run not built"
+fi
+
 echo "RESULT: $PASS pass, $FAIL fail"
 [ $FAIL = 0 ]

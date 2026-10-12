@@ -426,6 +426,8 @@ static ecm_diag_t         g_diag;          /* monitor only (and main() after joi
 #define RX_MIN_US        50
 #define CMD_MIN_BUDGET_US 100              /* a recovery command needs this much left in the tick */
 #define RECOVER_OP_TIMEOUT_US 3000000
+static long             g_rx_guard_us    = RX_GUARD_NS / 1000;  /* Phase 11.5: --rx-guard-us (default 150) */
+static int              g_rx_guard_set   = 0;
 static int              g_rx_legacy      = 0;  /* --rx-timeout-legacy: EC_TIMEOUTRET (negative control) */
 static int              g_recover_enabled = 1; /* --no-recover: detect and report, never act */
 static long             g_motion_cycle_us = 1000;
@@ -2966,6 +2968,9 @@ int main(int argc, char **argv)
             g_recover_enabled = 0;
         } else if (strcmp(argv[i], "--rx-timeout-legacy") == 0) {
             g_rx_legacy = 1;
+        } else if (strcmp(argv[i], "--rx-guard-us") == 0 && i + 1 < argc) {   /* Phase 11.5 */
+            g_rx_guard_us = atol(argv[++i]);
+            g_rx_guard_set = 1;
         } else if (strcmp(argv[i], "--n-lost") == 0 && i + 1 < argc) {
             n_lost = atol(argv[++i]);
         } else if (strcmp(argv[i], "--recover-cyclic-mbx") == 0) {   /* Phase 10.0 R-07: negative control */
@@ -3168,7 +3173,7 @@ int main(int argc, char **argv)
             "Usage: %s --iface <veth_m> --n <total_slaves> [--io-slaves LIST | --motion-slaves <count>] [--eni FILE.enicfg] "
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
-            "       [--no-recover] [--rx-timeout-legacy] [--n-lost N]\n"
+            "       [--no-recover] [--rx-timeout-legacy] [--n-lost N] [--rx-guard-us N (default 150, Phase 11.5)]\n"
             "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--no-reply-check] [--dc-gate-legacy] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
@@ -3284,6 +3289,20 @@ int main(int argc, char **argv)
 
     g_ifname = ifname;   /* Phase 4: telemetry thread's passive RX socket needs this */
     g_motion_cycle_us = motion_cycle_us;   /* Phase 7.3: receive budget */
+    /* Phase 11.5 (IS-07/IS-09): the part of the tick kept after the receive
+     * deadline. 150 us was sized for 1 ms; at 250 us it leaves ~92 us to
+     * receive and the i226 receive tail (CPU0) crosses it ~3e-5 of the
+     * cycles. Only an explicit --rx-guard-us is checked, so the default
+     * behaviour (any cycle) is exactly the previous one. */
+    if (g_rx_guard_set) {
+        long win = motion_cycle_us - (g_link_etf ? g_etf_asap_us : 0) - g_rx_guard_us;
+        if (g_rx_guard_us < 20 || g_rx_guard_us > 1000 || win < 60) {
+            fprintf(stderr, "ecm_run: --rx-guard-us %ld: need 20..1000 us and cycle%s - guard >= 60 us "
+                    "(cycle %ld us%s, receive window %ld us)\n", g_rx_guard_us, g_link_etf ? " - asap" : "",
+                    motion_cycle_us, g_link_etf ? ", etf" : "", win);
+            return 1;
+        }
+    }
     {   /* Phase 10.0 R-09: SM watchdog >= 3 cycles, capped at the 16-bit register */
         long m = 3 * motion_cycle_us / 100, io = 3 * io_cycle_us / 100;
         if (m > (long)g_wd_motion_ticks) g_wd_motion_ticks = (uint16_t)(m > 65535 ? 65535 : m);
@@ -4058,8 +4077,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "ecm_run: SOEM mailbox Cnt patch: ABSENT -- a duplicated mailbox response shifts every "
                 "later SDO answer by one (L5-12), see patches/soem-mbx-cnt.patch\n");
 #endif
+        char rx_guard_txt[64];   /* Phase 11.5: same text as before with the default 150 us */
+        snprintf(rx_guard_txt, sizeof(rx_guard_txt), "= tick deadline - %ld us%s", g_rx_guard_us,
+                 g_rx_guard_set ? " (--rx-guard-us)" : "");
         fprintf(stderr, "ecm_run: fault policy: rx timeout %s, LOST after %u motion NOFRAME, recovery %s\n",
-                g_rx_legacy ? "LEGACY EC_TIMEOUTRET (negative control)" : "= tick deadline - 150 us",
+                g_rx_legacy ? "LEGACY EC_TIMEOUTRET (negative control)" : rx_guard_txt,
                 bcfg.n_lost, g_recover_enabled ? "ON" : "OFF (--no-recover)");
     }
 
@@ -4173,7 +4195,7 @@ int main(int argc, char **argv)
          * (the lead only covers the sleep), so the receives may run until
          * next + cycle - asap - guard. af_packet: next + cycle - guard. */
         g_tick_deadline_ns = ts_to_ns(&next) + (uint64_t)(motion_cycle_us * 1000L)
-                           - (uint64_t)(g_link_etf ? g_etf_asap_us * 1000L : 0) - RX_GUARD_NS;
+                           - (uint64_t)(g_link_etf ? g_etf_asap_us * 1000L : 0) - (uint64_t)(g_rx_guard_us * 1000L);
         ecm_bus_tick(&g_bus);
         quar_expire(tick);                          /* Phase 7.4 */
         ecm_event_t bus_ev;

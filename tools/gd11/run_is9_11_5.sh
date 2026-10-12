@@ -49,6 +49,14 @@ case "$PROFILE" in P0|P1) ;; *) echo "PROFILE=P0 or PROFILE=P1 (as booted)"; exi
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E)"; exit 3; }
 [ "$(cat /sys/class/net/$IFACE/carrier 2>/dev/null)" = 1 ] || { echo "$IFACE has no link (sudo ip link set $IFACE up; drives powered?)"; exit 3; }
 [ "$THREAD_CPU" = 3 ] && { echo "THREAD_CPU 3 is the RT core"; exit 3; }
+# rig (12/10: the first run went without it, with the igc defaults back after
+# a reboot -- rx-usecs 3 + GRO -- and gave 31 936 NOFRAME instead of ~100)
+ethtool -K "$IFACE" gro off gso off tso off 2>/dev/null
+ethtool -C "$IFACE" rx-usecs 0 2>/dev/null
+rxu=$(ethtool -c "$IFACE" 2>/dev/null | awk -F': *' '/^rx-usecs:/{print $2}')
+[ "$rxu" = 0 ] || { echo "$IFACE rx-usecs is '$rxu', could not set 0"; exit 3; }
+"$HERE/rt_profile.sh" --expect "$PROFILE" --iface "$IFACE" > /tmp/is9_rt_profile.$$ 2>&1 \
+    || { [ $? -le 1 ] || { cat /tmp/is9_rt_profile.$$; echo "rt_profile.sh FAIL: fix the lines above"; exit 3; }; }
 LOG=${LOG:-$ROOT/log_gd11_is9_${PROFILE}_$(date +%Y%m%d_%H%M%S)}
 mkdir -p "$LOG"; LOG=$(cd "$LOG" && pwd)
 CSV=$LOG/results.csv; REP=$LOG/report.md

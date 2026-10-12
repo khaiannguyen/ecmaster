@@ -215,9 +215,21 @@ sudo -E PROFILE=P0 tools/gd11/run_is9_11_5.sh          # ~35 min: map, base, pri
 
 Mọi thay đổi được hoàn tác khi script kết thúc. Muốn giữ cấu hình nào thì phải đưa vào `check_env.sh` / systemd. Việc đó để GĐ12.
 
-## 11. Mang sang sau `master-v1.0`
-- **Thay `RX_GUARD_NS` (150 µs cố định) bằng giá trị tỉ lệ theo chu kỳ**, ví dụ `min(150 µs, 25 % chu kỳ)`.
-  - 1 ms và 500 µs không đổi.
-  - 250 µs: hạn nhận nới từ khoảng 92 lên khoảng 180 µs (turnaround max đo được dưới P1 là 156 µs).
-  - Việc này chạm đường cyclic, nên cần cờ chọn chế độ, golden và soak 8 h.
-- Đổi giá trị mặc định của ETF sang delta 100 / lead 50 / asap 25 (sau khi chạy xác nhận 1 h).
+## 11. Kết quả IS-09 (12/10)
+- Sau reboot, i226 quay về `rx-usecs 3` và GRO bật. Ở trạng thái đó, af 250 µs có **31 936** NOFRAME. Đặt `rx-usecs 0` và tắt GRO/GSO/TSO thì còn **87**. → Thiết lập `ethtool` phải được áp lại sau **mỗi** lần boot (GĐ12: systemd unit). `run_is9_11_5.sh` nay có bước rig tự kiểm việc này.
+- Thread ngắt i226 ở FIFO 85: 77 NOFRAME so với 87 ở base, nằm trong mức dao động giữa các lượt. Không có tác dụng.
+- `smp_affinity` của MSI i226 bị kernel từ chối (`Invalid argument`), vì trên Tegra ngắt cứng luôn ở CPU0. Hướng dời ngắt bị loại.
+
+## 12. `--rx-guard-us` (ngoại lệ §0.2 thứ ba, 12/10)
+Hạn nhận của mỗi chu kỳ là `next + cycle − asap − guard`. Hằng `RX_GUARD_NS` = 150 µs được chọn cho chu kỳ 1 ms. `ecm_run --rx-guard-us N` cho phép đổi `guard`:
+- **Mặc định 150** → hành vi và log giữ nguyên như trước, golden không đổi.
+- Chỉ khi truyền cờ, giá trị mới được kiểm: N phải nằm trong 20…1000 và cửa sổ nhận `cycle − asap − N` phải ≥ 60 µs. Sai thì `ecm_run` từ chối trước khi chạm bus.
+- Log in `rx timeout = tick deadline - N us (--rx-guard-us)`.
+- Đo: `run_is7_11_5.sh` có thêm ca `g250` (af 250 µs, `--rx-guard-us 60`) và `getf250` (etf). Ca `af250` làm đối chứng.
+- Rủi ro cần xem khi guard nhỏ:
+  - phần việc sau hạn nhận (DC, policy, hook, telemetry) phải vừa trong N µs. Số đo hôm nay là 10–20 µs;
+  - lệnh recovery chỉ chạy khi chu kỳ còn ≥ 100 µs (`CMD_MIN_BUDGET_US`).
+
+## 13. Mang sang sau `master-v1.0`
+- Đổi mặc định của `--rx-guard-us` thành giá trị tỉ lệ theo chu kỳ, ví dụ `min(150, 25 % chu kỳ)`, dựa trên kết quả `g250`. Cần golden và soak 8 h.
+- Đổi giá trị mặc định ETF sang delta 100 / lead 50 / asap 25, sau khi chạy xác nhận 1 h.

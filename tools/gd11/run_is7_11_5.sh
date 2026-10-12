@@ -27,6 +27,10 @@
 #             phc2sys + timesyncd stopped; the qdisc is installed here and
 #             removed at the end)
 #   etf500    the same at 500 us
+#   g250      af_packet 250 us --rx-guard-us GUARD (60): the receive window
+#             grows from cycle - 150 to cycle - GUARD (Phase 11.5 option,
+#             default 150 = previous behaviour); af250 is its control
+#   getf250   the same with --link etf (window cycle - asap - GUARD)
 #   nodma500  af_packet 500 us --no-dma-latency: the c7 question on a quiet
 #             CPU0 (Phase 10: replies ~400 us late). Expect it to be worse
 #             than af500 under P0; under P1 (cpuidle.off=1) the P1n answer
@@ -37,7 +41,7 @@
 # never entered LOST, DC LOCKED 0 unlocks; plus 0x603F = 0 on both drives
 # (no Er.E08 sync loss) and no CRC error.
 #
-# Env: PROFILE CASES IFACE N ENI DUR NOFRAME_MAX ETF_DELTA ETF_LEAD ETF_ASAP
+# Env: PROFILE CASES IFACE N ENI DUR NOFRAME_MAX ETF_DELTA ETF_LEAD ETF_ASAP GUARD
 #      ONB RT_CPU ECM_RUN LOG
 # ==========================================================================
 set -u
@@ -49,6 +53,7 @@ IFACE=${IFACE:-enP1p1s0}; ONB=${ONB:-enP8p1s0}; N=${N:-2}
 ENI=${ENI:-$ROOT/config/eni/eni_2servo.enicfg}
 DUR=${DUR:-600}; NOFRAME_MAX=${NOFRAME_MAX:-2}
 ETF_DELTA=${ETF_DELTA:-100}; ETF_LEAD=${ETF_LEAD:-50}; ETF_ASAP=${ETF_ASAP:-25}
+GUARD=${GUARD:-60}
 ECM_RUN=${ECM_RUN:-$ROOT/apps/ecm_run/ecm_run}
 EMCY_MAP=$ROOT/config/emcy/is620n.emcy
 case "$PROFILE" in P0|P1) ;; *) echo "PROFILE=P0 or PROFILE=P1 (as booted)"; exit 3 ;; esac
@@ -134,9 +139,11 @@ rig)
 af1000)   run af1000 1000 af_1000us ;;
 af500)    run af500 500 af_500us ;;
 af250)    run af250 250 af_250us ;;
+g250)     run g250 250 "af_250us_guard$GUARD" --rx-guard-us "$GUARD" ;;
 nodma500) run nodma500 500 af_500us_nodma --no-dma-latency ;;
-etf500|etf250)
-    cyc=${c#etf}
+etf500|etf250|getf250)
+    cyc=${c##*etf}; GX=(); var=""
+    [ "${c%%etf*}" = g ] && { GX=(--rx-guard-us "$GUARD"); var="_guard$GUARD"; }
     if ! tc qdisc show dev "$IFACE" | grep -q "etf.*offload on"; then
         tc qdisc del dev "$IFACE" root 2>/dev/null
         tc qdisc replace dev "$IFACE" parent root handle 100 mqprio num_tc 3 \
@@ -148,7 +155,7 @@ etf500|etf250)
         for _ in $(seq 30); do [ "$(speed "$IFACE")" = 100 ] && break; sleep 1; done
     fi
     chk "$c etf offload on" "tc qdisc show dev $IFACE | grep -q 'etf.*offload on'"
-    run "$c" "$cyc" "etf_d${ETF_DELTA}_${cyc}us" --link etf --etf-lead-us "$ETF_LEAD" --etf-asap-us "$ETF_ASAP"
+    run "$c" "$cyc" "etf_d${ETF_DELTA}_${cyc}us$var" --link etf --etf-lead-us "$ETF_LEAD" --etf-asap-us "$ETF_ASAP" "${GX[@]}"
     grep -h '\[LINK\] etf' "$LOG/er_$c.log" | sed 's/^/    /'
     chk "$c ETF missed=0 invalid=0" "grep -q 'missed=0 invalid=0' $LOG/er_$c.log"
     ;;
