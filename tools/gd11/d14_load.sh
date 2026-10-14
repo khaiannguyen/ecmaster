@@ -20,8 +20,10 @@ mkdir -p "$OUT"
 KIDS=()
 stop () { for p in "${KIDS[@]}"; do kill -TERM "$p" 2>/dev/null; done; wait 2>/dev/null; exit 0; }
 trap stop TERM INT
+echo "no $D/stats.json (yet)" > "$OUT/no_api"     # stays if the run ends first
 for _ in $(seq 300); do [ -s "$D/stats.json" ] && break; sleep 0.1; done
 [ -s "$D/stats.json" ] || { echo "no $D/stats.json after 30 s" > "$OUT/no_api"; exit 0; }
+rm -f "$OUT/no_api"
 CTL=(taskset -c 1-2 python3 "$HERE/ecm_ctl.py" --sock "$D/ctl.sock")
 
 taskset -c 1-2 python3 - "$D/stats.json" "$OUT/samples.jsonl" <<'EOF' &

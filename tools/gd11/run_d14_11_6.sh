@@ -57,6 +57,19 @@ bad () { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 chk () { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 SIM=${SIM:-0}; export SIM
+if [ "$SIM" != 1 ]; then
+    # Asked ONCE here, before anything; both W-08 runs then get YES=1. A run
+    # that does not start (rc 3, no er_w08.log) stops the whole D-14: the
+    # second run must never enable the drives without this answer.
+    cat <<EOT
+=== Phase 11.6 D-14 on the i226: THE DRIVES WILL BE ENABLED, twice (off, then on), ${DUR} s each ===
+  [ ] Motors clamped, nothing on the shafts, nobody near them
+  [ ] Your hand next to the breaker (it is the emergency stop) for the whole run
+  [ ] Cable: enP1p1s0 -> drive 1 IN, drive 1 OUT -> drive 2 IN
+EOT
+    read -r -p "Type yes to start: " ans
+    [ "$(echo "$ans" | tr -d '[:space:]')" = yes ] || { echo "stopped (answer was '$ans')"; exit 3; }
+fi
 if [ "$SIM" = 1 ]; then echo "=== SIM=1: rehearsal on veth (virtual drives), no rig"; else
 echo "=== rig"
 PROFILE=$PROFILE CASES=rig LOG=$LOG/rig "$HERE/run_is7_11_5.sh" > "$LOG/rig.txt" 2>&1
@@ -64,12 +77,12 @@ R=$?; grep -E 'PASS|FAIL|INFO' "$LOG/rig.txt"
 [ $R = 0 ] || { echo "rig not ready: fix the FAIL lines above ($LOG/rig.txt)"; exit 2; }
 fi
 
-echo "=== off: W-08 ${DUR} s, API off (the script asks you to type yes)"
+echo "=== off: W-08 ${DUR} s, API off"
 rm -rf "$API_DIR"
-DURING="$HERE/d14_load.sh $API_DIR $DUR $LOG/load_off" CASES=w08 DUR8=$DUR RES=$RES LOG=$LOG/off \
+YES=1 DURING="$HERE/d14_load.sh $API_DIR $DUR $LOG/load_off" CASES=w08 DUR8=$DUR RES=$RES LOG=$LOG/off \
     "$ROOT/tools/gd10/run_w_10_9.sh"
 R_OFF=$?
-[ -s "$LOG/off/report.md" ] || { echo "the off run did not start"; exit 2; }
+[ -s "$LOG/off/er_w08.log" ] || { echo "the off run did not reach w08 (rc $R_OFF): stopping, the on run is NOT started"; exit 2; }
 grep -q 'w00 FAILED' "$LOG/off/report.md" && { echo "w00 failed: limits not in the drives, stopping"; exit 1; }
 
 echo "=== on: W-08 ${DUR} s, API on + clients"
