@@ -136,8 +136,12 @@ EOF
 R=$?
 # rate_limited is the API's own limiter (docs/api.md §10.1: the 20 Hz spam + these
 # reads exceed it), a legitimate refusal; anything else than the two is a failure
-NOMB=$(grep -c '"error":"no_mailbox"' "$LOG/load_on/sdo6064.txt" 2>/dev/null); TOT=$(grep -c . "$LOG/load_on/sdo6064.txt" 2>/dev/null)
-RL=$(grep -c '"error":"rate_limited"' "$LOG/load_on/sdo6064.txt" 2>/dev/null)
+# lines after the last real answer are reads that met ecm_run stopping
+# ("not_ready ... stopping", then the socket gone): not counted
+F6=$LOG/load_on/sdo6064_counted.txt
+awk '{l[NR]=$0} /"error":"(no_mailbox|rate_limited)"|"ok":true/ {last=NR} END {for (i=1;i<=last;i++) print l[i]}' \
+    "$LOG/load_on/sdo6064.txt" > "$F6" 2>/dev/null
+NOMB=$(grep -c '"error":"no_mailbox"' "$F6"); TOT=$(grep -c . "$F6"); RL=$(grep -c '"error":"rate_limited"' "$F6")
 if [ "$SIM" = 1 ]; then echo "  [INFO] SIM: the virtual drives have no live 0x6064 in their object dictionary: $(cat "$LOG/sdo_check.txt")"
 else
     # 11.6 D-15: the IS620N has 2 FMMUs, no cyclic mailbox in OP -> refused at once
