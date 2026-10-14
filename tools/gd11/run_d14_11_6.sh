@@ -69,7 +69,11 @@ if [ "$SIM" != 1 ]; then
   [ ] Cable: enP1p1s0 -> drive 1 IN, drive 1 OUT -> drive 2 IN
 EOT
     read -r -p "Type yes to start: " ans
-    [ "$(echo "$ans" | tr -d '[:space:]')" = yes ] || { echo "stopped (answer was '$ans')"; exit 3; }
+    # keep letters only: a terminal may add invisible bytes (CR, the bracketed-paste
+    # markers ESC[200~ / ESC[201~) that print as nothing (14/10: 'yes' refused twice)
+    if [ "$(printf '%s' "$ans" | tr -cd '[:alpha:]' | tr '[:upper:]' '[:lower:]')" != yes ]; then
+        echo "stopped: the answer was not yes (bytes: $(printf '%s' "$ans" | od -An -c | tr -s ' '))"; exit 3
+    fi
 fi
 if [ "$SIM" = 1 ]; then echo "=== SIM=1: rehearsal on veth (virtual drives), no rig"; else
 echo "=== rig"
