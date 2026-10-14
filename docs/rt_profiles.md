@@ -230,6 +230,55 @@ Hạn nhận của mỗi chu kỳ là `next + cycle − asap − guard`. Hằng 
   - phần việc sau hạn nhận (DC, policy, hook, telemetry) phải vừa trong N µs. Số đo hôm nay là 10–20 µs;
   - lệnh recovery chỉ chạy khi chu kỳ còn ≥ 100 µs (`CMD_MIN_BUDGET_US`).
 
-## 13. Mang sang sau `master-v1.0`
+## 13. IS-08: thời gian chết đầu-cuối (`tools/gd11/deadtime.py`)
+Mô hình, áp dụng cho `ecm_run` khi có DC và một frame motion mỗi chu kỳ:
+- Master gửi frame k tại T_k. Với af_packet: tick + wake + prep_send. Với etf: launch time = tick, sai số launch < 0,2 µs (IS-04).
+- DC giữ T_k ở SYNC0 + p·c, với p = `--dc-setpoint-pct` (mặc định 30) và c là chu kỳ.
+- Slave chốt input ở cạnh SYNC0 trước T_k một khoảng p·c. Frame k mang input đó về.
+- Hook chạy sau khi nhận. Output của hook đi ra trong frame k+1 (tại T_k + c) và được áp ở cạnh SYNC0 kế tiếp, tại T_k + c + (1 − p)·c.
+
+⇒ **Thời gian chết từ lúc chốt input đến lúc áp output = p·c + c + (1 − p)·c = 2 chu kỳ, không phụ thuộc p.** Cụ thể: 2 ms ở chu kỳ 1 ms, 1 ms ở 500 µs, 500 µs ở 250 µs. Riêng một chu kỳ NOFRAME làm mất input của chu kỳ đó, nên mẫu đó có thời gian chết 3 chu kỳ.
+
+p chỉ dời các biên:
+
+| Biên | Công thức | 250 µs, etf + guard 60, P1, 1 h (11.5 §17) |
+|---|---|---|
+| output tới SYNC0 | (1 − p)·c − \|e\| − độ lệch gửi − thời gian tới slave (lấy turnaround p50) | 175 − 0 − 0,2 − 70,8 = **104 µs** |
+| input | p·c − \|e\| | **75 µs** |
+| nhận (reply trước hạn) | c − asap − guard − turnaround | p99.99: 250 − 25 − 60 − 112 = 53 µs; **max: −48 µs** |
+| chu kỳ | c − occupancy | max: 250 − 246 = 4 µs |
+
+- **Ràng buộc thật nằm ở đường nhận, không ở chỗ đặt SYNC0.** Biên output và input còn dư nhiều ở p = 30 %. Biên nhận âm ở max: đó là 5 NOFRAME trong 1 h. Đuôi turnaround là đường nhận phía master (ngắt i226 trên CPU0, §11).
+- Vì thời gian chết không phụ thuộc p, **không cần quét `--dc-setpoint-pct`** (bước được phép cắt trong kế hoạch §11). Giữ mặc định 30 %.
+- Muốn thời gian chết nhỏ hơn 2 chu kỳ thì slave phải chốt input muộn hơn SYNC0 (input shift / SYNC1) hoặc tính output ngay trong chu kỳ. Việc đó thuộc phía slave (BG-14), không phải master.
+- Turnaround của `ecm_run` đo từ timestamp TX **software** tới timestamp RX **software**. Vì vậy nó gồm cả đường driver/ngắt ở cả hai phía, và với etf gồm cả thời gian chờ từ lúc driver nhận frame tới launch time. Con số này lớn hơn thời gian frame trên dây.
+- Lệnh: `python3 tools/gd11/deadtime.py LOG...` (Markdown) hoặc `--csv`. Đối chứng âm trong `test_is_offline` O-07: cùng số liệu, đặt p = 90 % thì biên output âm.
+
+## 14. IS-10: ngân sách chu kỳ 250 µs
+Công thức lý thuyết (GĐ4): khoảng 5 µs overhead mỗi frame + 80 ns/byte ở 100 Mbit/s. Byte trên dây gồm: Eth 14 + ECAT 2 + datagram DC FRMW (10 + 8 + 2) + LRW (10 + dữ liệu + 2) + FCS 4 + preamble/IFG 20.
+- **2 IS620N** (Rx 12 B / Tx 28 B mỗi drive, LRW 80 B): 152 B → **17,2 µs**.
+- **P4** (1 slave 4 trục, Rx 44 B / Tx 52 B, LRW 96 B): 168 B → **18,4 µs**.
+
+| Thành phần | Lý thuyết | Đo: 2 IS620N, 250 µs, P1 + etf d100/lead 50/asap 25 + `--rx-guard-us 60`, 1 h | Ghi chú |
+|---|---|---|---|
+| Frame trên dây | 17,2 µs (P4: 18,4) | (nằm trong turnaround) | |
+| Turnaround | ~17–21 µs (dây + ~1 µs/cổng ESC) | p50 71, p99.99 112, max 213 µs | Lệch > 2×. Lý do: turnaround đo bằng timestamp software hai đầu (§13), gồm đường driver/ngắt và thời gian chờ launch của etf. Với af, IS-07 cho p50 35 µs |
+| Hook CiA402 | 2,2 µs (4 trục, soak GĐ10) | D-14, 2 trục, 1 ms: p99.99 4,5, max 6,8 µs | IS-07 không bật hook |
+| prep_send | ~8 µs | p99.99 11,2, max 21,4 µs (IS-05n) | |
+| Wake jitter | — | p99.99 7, max 62 µs | Với etf bị che bởi lead 50 µs |
+| Frame mailbox | +~10 µs khi có SDO | 0: IS620N không có cyclic mailbox (D-15) | Slave P4 có 3 FMMU thì có thêm khoản này |
+| Cửa sổ nhận | c − asap − guard = 165 µs | turnaround max 213 → **5 NOFRAME / 14,4 M chu kỳ** | Ràng buộc thật |
+| Occupancy | — | max 246 µs | Gồm cả thời gian chờ reply |
+| Biên output tới SYNC0 (p = 30 %) | 175 − dây | 104 µs | §13 |
+| Thời gian chết | 2c = 500 µs | 500 µs (3c ở 3,5·10⁻⁷ mẫu) | §13 |
+
+**Kết luận cho 250 µs:**
+- Phía master + bus **chạy được** với P1 + etf + `--rx-guard-us 60`: 0 NOFRAME trong 10 phút, 5 NOFRAME trong 1 h, mỗi lần 1 chu kỳ lẻ.
+- Backend etf được chọn vì DC \|e\| < 1 µs. af cũng 0 NOFRAME trong 10 phút.
+- Profile P4 thêm khoảng 1 µs trên dây và khoảng 2–5 µs cho hook 4 trục. Như vậy trung vị còn dư, còn đuôi thì giữ nguyên rủi ro như trên: occupancy max 246 µs, biên nhận âm ở max. Muốn hết đuôi thì phải sửa đường nhận, xem spike AF_XDP (11.8).
+- Phía slave P4 phải xong việc trong khoảng frame → SYNC0 (≈ 175 µs − thời gian tới slave). Nếu slave có cyclic mailbox thì cộng thêm frame mailbox. Ghi vào BG-14.
+- Chưa đo trên slave P4 thật. Bảng này là của 2 IS620N.
+
+## 15. Mang sang sau `master-v1.0`
 - Đổi mặc định của `--rx-guard-us` thành giá trị tỉ lệ theo chu kỳ, ví dụ `min(150, 25 % chu kỳ)`, dựa trên kết quả `g250`. Cần golden và soak 8 h.
 - Đổi giá trị mặc định ETF sang delta 100 / lead 50 / asap 25, sau khi chạy xác nhận 1 h.

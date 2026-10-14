@@ -155,5 +155,30 @@ else
     echo "  [SKIP] ecm_run not built"
 fi
 
+echo "=== O-07 deadtime.py (IS-08): 2-cycle model, margins, negative control setpoint 90 %"
+DT=$HERE/deadtime.py
+mk250 () {   # pct -> a 250 us etf + guard 60 log with the numbers of the 1 h run (11.5 §17)
+    { echo "ecm_run: link etf: lead 50 us, asap 25 us, SO_PRIORITY 7, 80 ns/byte; qdisc on enP1p1s0: etf"
+      echo "ecm_run: DC on -- ref=slave 1, SYNC0 250000 ns on 2 motion slave(s), setpoint $1% after SYNC0, first SYNC0 in 100.0 ms"
+      echo "ecm_run: fault policy: rx timeout = tick deadline - 60 us - asap, LOST after 100 motion NOFRAME, recovery ON"
+      echo "wake_jitter          n=14400456 p50=    2818ns p99=    3981ns p99.9=    5011ns p99.99=    7079ns max=   62000ns overflow=0"
+      echo "prep_send            n=14400456 p50=    4466ns p99=    6309ns p99.9=    7079ns p99.99=   11220ns max=   21400ns overflow=0"
+      echo "occupancy            n=14400456 p50=   89125ns p99=  158489ns p99.9=  177827ns p99.99=  199526ns max=  246000ns overflow=0"
+      echo "turnaround           n=14400451 p50=   70794ns p99=   89125ns p99.9=  100000ns p99.99=  112201ns max=  213000ns overflow=0"
+      echo "  [GROUP_MOTION] cycles=14400456 wkc_mismatch=5 (0.0000%) overrun=0 (0.0000%)"
+      echo "  [DC] |e| (after 5 s) p50=0 p99=0 p99.9=0 p99.99=0 us, mean e=+0.00 us"
+      echo "  [WKC GROUP_MOTION] ok=14400451 noframe=5 zero=0 partial=0 over=0 max_run_bad=1"; } > "$T/dt$1.log"
+}
+mk250 30; mk250 90
+python3 "$DT" "$T/dt30.log" > "$T/dt30.txt" 2>&1; r=$?
+chk "O-07 250 us etf, setpoint 30 %: dead time 500 us (2 cycles), output and input margins >= 0" \
+    "[ $r = 0 ] && grep -q '500.0 us (2 cycles)' $T/dt30.txt && grep -q 'output margin to SYNC0 .* | 104.0 | 104.0 |' $T/dt30.txt && grep -q 'input margin .* | 75.0 | 75.0 |' $T/dt30.txt"
+chk "O-07 receive margin at max 250 - 25 - 60 - 213 = -48 (the 5 NOFRAME of the 1 h run) is reported" \
+    "grep -q 'receive margin .* | 52.8 | -48.0 |' $T/dt30.txt && grep -q 'negative margin at max: rx_margin_max' $T/dt30.txt"
+python3 "$DT" "$T/dt90.log" > "$T/dt90.txt" 2>&1
+chk "O-07 negative control: setpoint 90 % -> negative output margin" "grep -q 'negative margin at max: out_margin_max' $T/dt90.txt"
+python3 "$DT" --csv "$T/dt30.log" "$T/dt90.log" > "$T/dt.csv"
+chk "O-07 --csv: header + 2 rows" "[ \$(wc -l < $T/dt.csv) = 3 ]"
+
 echo "RESULT: $PASS pass, $FAIL fail"
 [ $FAIL = 0 ]
