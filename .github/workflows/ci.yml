@@ -175,6 +175,8 @@ jobs:
           sudo -E env LOG=/tmp/log_gd11_diag API_DIR=/dev/shm/ecmaster_diag tools/gd11/run_diag_11_3.sh
       - name: Phase 11.5 IS tools offline (rt_profile, extlinux_p1, is_parse, is_report)
         run: tools/gd11/test_is_offline.sh
+      - name: Phase 11.7 BM-01 ecm_bench.py offline
+        run: tools/bench/test_bench_offline.sh
       - name: Keep the capture on failure
         if: failure()
         uses: actions/upload-artifact@v4
