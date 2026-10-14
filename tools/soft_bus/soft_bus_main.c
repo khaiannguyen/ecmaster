@@ -97,6 +97,7 @@ int main(int argc, char **argv)
     int prof_node[16], n_prof = 0;                       /* Phase 9.9 --profile N=FILE */
     const char *prof_file[16];
     int drv_node[16], drv_axes[16], n_drv = 0;
+    int fmmu_node[16], fmmu_n[16], n_fmmu = 0;   /* 11.6 --fmmus N=K */
     int cal_node[16], n_cal = 0; const char *cal_file[16];   /* 10.2 --cia402-cal N=FILE */           /* Phase 10.2 --cia402 N[:AXES] */
 
     for (int i = 1; i < argc; i++) {
@@ -147,6 +148,13 @@ int main(int argc, char **argv)
             prof_node[n_prof] = k;
             prof_file[n_prof] = eq + 1;
             n_prof++;
+        } else if (strcmp(argv[i], "--fmmus") == 0 && i + 1 < argc) {
+            /* 11.6: N=K -- slave N's ESC has K FMMUs (0x0004; IS620N: 2, default 3) */
+            char *v = argv[++i], *eq = strchr(v, '=');
+            int k = atoi(v), f = eq ? atoi(eq + 1) : 0;
+            if (!eq || k < 1 || k > 64 || f < 1 || f > REG_FMMU_COUNT || n_fmmu >= 16) {
+                fprintf(stderr, "--fmmus expects N=K, K = 1..%d\n", REG_FMMU_COUNT); return 1; }
+            fmmu_node[n_fmmu] = k; fmmu_n[n_fmmu] = f; n_fmmu++;
         } else if (strcmp(argv[i], "--cia402-cal") == 0 && i + 1 < argc) {
             /* 10.2: N=FILE -- calibration of slave N's virtual drive (config/profiles/is620n.cal) */
             char *v = argv[++i], *eq = strchr(v, '=');
@@ -187,6 +195,7 @@ int main(int argc, char **argv)
                 "       [--no-dc-nodes LIST]   (SOEM slave numbers without a DC unit, Phase 9.5)\n"
                 "       [--profile N=FILE ...] (slave N emulates the profile's slave, Phase 9.9)\n"
                 "       [--cia402 N[:AXES] ...] (slave N with a profile is a virtual CiA402 drive, Phase 10.2)\n"
+                "       [--fmmus N=K ...] (slave N's ESC has K FMMUs, default 3; the IS620N has 2)\n"
                 "       [--cia402-cal N=FILE ...] (calibration of that drive, e.g. config/profiles/is620n.cal)\n",
                 argv[0]);
         return 1;
@@ -267,6 +276,11 @@ int main(int argc, char **argv)
             chain[i].sii_image_buf[sii_poke_word[p]] = (uint16_t)sii_poke_val[p];
         printf("soft_bus: SII poke word 0x%02X = 0x%04X on all %d node(s)\n",
                (unsigned)sii_poke_word[p], (unsigned)sii_poke_val[p], n);
+    }
+    for (int p = 0; p < n_fmmu; p++) {
+        if (fmmu_node[p] > n) { fprintf(stderr, "--fmmus %d: only %d node(s)\n", fmmu_node[p], n); return 1; }
+        chain[fmmu_node[p] - 1].regs[REG_FMMU_SUPPORTED] = (uint8_t)fmmu_n[p];
+        printf("soft_bus: node %d has %d FMMU(s) (--fmmus)\n", fmmu_node[p], fmmu_n[p]);
     }
     esc_chain_wire(chain, n);
     esc_dc_setup(chain, n, &dc_cfg);   /* after esc_init: ORs DC bits into 0x0008 */

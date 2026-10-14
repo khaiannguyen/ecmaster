@@ -95,6 +95,7 @@ enum {                                  /* sdo_read / sdo_write results */
     ECM_CTL_SDO_TIMEOUT = -2,           /* no completion in time          */
     ECM_CTL_SDO_TOO_LARGE = -3,
     ECM_CTL_SDO_FAILED = -4,            /* abort / no answer (abort code if known) */
+    ECM_CTL_SDO_NO_MBX = -5,            /* slave has no mailbox access in SAFE-OP/OP (11.6) */
 };
 
 struct ecm_ctl_backend {

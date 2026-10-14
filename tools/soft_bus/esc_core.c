@@ -707,7 +707,11 @@ static void fmmu_apply(esc_t *esc, uint32_t log_addr, uint8_t *data,
     int any_read = 0, any_write = 0;
     uint32_t dg_end = log_addr + dlen;
 
-    for (int f = 0; f < REG_FMMU_COUNT; f++) {
+    /* Phase 11.6: only the FMMUs the ESC reports in 0x0004 exist (soft_bus
+     * --fmmus N=2: the IS620N); a master's write to a missing entry is kept
+     * in the register array but never acts */
+    int nf = esc->regs[REG_FMMU_SUPPORTED] < REG_FMMU_COUNT ? esc->regs[REG_FMMU_SUPPORTED] : REG_FMMU_COUNT;
+    for (int f = 0; f < nf; f++) {
         uint8_t *e = esc->regs + REG_FMMU_BASE + f * REG_FMMU_ENTRY_SIZE;
         if (!(e[FMMU_OFF_ACTIVATE] & 0x01)) continue;
 

@@ -180,6 +180,7 @@ Mã lỗi:
 | `sdo_failed` | slave abort (kèm `abort` = mã 32 bit và `msg` = mô tả của SOEM), hoặc không trả lời (`abort: null`) |
 | `size_mismatch` | `type` không khớp kích thước object (reply kèm `raw`) |
 | `too_large` | > 256 byte |
+| `no_mailbox` | (11.6) slave không có mailbox ở SAFE-OP/OP: ESC không còn FMMU để ánh xạ SM1 status (IS620N có 2 FMMU, cả hai dùng cho process data). Trả về ngay, không gửi gì lên bus; ecm_run in lý do lúc khởi động. Xem `tools/gd11/esc_info.py`, D-15 |
 | `denied_comm_area`, `denied_hard`, `denied_rxpdo`, `denied_no_pdo_table`, `denied_initcmd`, `not_allowed`, `type_mismatch`, `out_of_range` | `sdo_write` bị từ chối (§10.4) |
 | `dump_failed` | không ghi được file, hoặc đã đủ 32 lần |
 

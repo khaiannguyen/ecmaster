@@ -358,6 +358,8 @@ static size_t sdo_fail(ecm_ctl_state_t *st, rw_t *w, const req_t *r, const ecm_c
     if (rc == ECM_CTL_SDO_BUSY) return fail(st, w, r, "busy", "mailbox queue full, retry");
     if (rc == ECM_CTL_SDO_TIMEOUT) return fail(st, w, r, "timeout", "slave %d 0x%04X:%u: no completion in time", slave, index, sub);
     if (rc == ECM_CTL_SDO_TOO_LARGE) return fail(st, w, r, "too_large", "more than %d bytes", ECM_CTL_DATA_MAX);
+    if (rc == ECM_CTL_SDO_NO_MBX)
+        return fail(st, w, r, "no_mailbox", "slave %d: no mailbox access in SAFE-OP/OP (see the ecm_run start-up log)", slave);
     w->len = 0; w->ovf = 0;
     head(w, r, 0);
     rs(w, ",\"error\":\"sdo_failed\"");
@@ -494,7 +496,8 @@ static size_t cmd_sdo_write(ecm_ctl_state_t *st, const ecm_ctl_backend_t *be, co
     rs(w, ",\"raw\":"); rhex(w, b, size);
     if (rrc) {
         rf(w, ",\"readback\":null,\"readback_ok\":false,\"readback_error\":\"%s\"",
-           rrc == ECM_CTL_SDO_FAILED ? "sdo_failed" : rrc == ECM_CTL_SDO_TIMEOUT ? "timeout" : "busy");
+           rrc == ECM_CTL_SDO_FAILED ? "sdo_failed" : rrc == ECM_CTL_SDO_TIMEOUT ? "timeout" :
+           rrc == ECM_CTL_SDO_NO_MBX ? "no_mailbox" : "busy");
     } else {
         char num[64] = "null";
         ecm_ctl_decode_json(type, rb, rsize, num, sizeof(num));

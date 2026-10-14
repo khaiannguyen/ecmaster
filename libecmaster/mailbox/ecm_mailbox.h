@@ -103,6 +103,10 @@ typedef struct ecm_mailbox ecm_mailbox_t;
  */
 int ecm_mailbox_enable_cyclic(ecx_contextt *ctx);
 
+/* Phase 11.6: enable cyclic mode even where SM1 status has no FMMU (the
+ * pre-11.6 behaviour, negative control of D-15). Call before enable_cyclic. */
+void ecm_mailbox_force_cyclic(int on);
+
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------ */

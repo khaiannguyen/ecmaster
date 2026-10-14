@@ -2111,6 +2111,7 @@ static void dc_restore_slave(int s)
  * the duration of one reconfiguration. */
 static int g_reconf_eni_fail;       /* Phase 10.0: PS InitCmds failed in the last reconfiguration */
 static uint64_t g_initcmd_failed[ECM_SREC_MAX_SLAVES + 1];   /* Phase 11.1: monitor only, per slave */
+static int g_mbx_cyclic_force;     /* --mbx-cyclic-force: pre-11.6 (negative control of D-15) */
 static int g_recover_cyclic_mbx;    /* --recover-cyclic-mbx: pre-0018 behaviour (negative control) */
 
 static int reconfig_po2so_hook(ecx_contextt *c, uint16 slave)
@@ -2662,9 +2663,13 @@ static uint64_t be_abort_seq(void)
 static int be_sdo(int write, int slave, uint16_t index, uint8_t sub, uint8_t *buf, int *size, uint32_t *abort)
 {
     pthread_mutex_lock(&g_sdo_mx);
-    if (atomic_load_explicit(&g_sdo_block, memory_order_acquire) || ctx.slavelist[slave].mbxhandlerstate != ECT_MBXH_CYCLIC) {
+    if (atomic_load_explicit(&g_sdo_block, memory_order_acquire)) {
         pthread_mutex_unlock(&g_sdo_mx);
         return ECM_CTL_SDO_BUSY;
+    }
+    if (ctx.slavelist[slave].mbxhandlerstate != ECT_MBXH_CYCLIC) {   /* 11.6: never enabled (no FMMU) */
+        pthread_mutex_unlock(&g_sdo_mx);
+        return ECM_CTL_SDO_NO_MBX;
     }
     uint64_t q = be_abort_seq();
     int rc = write ? ecm_mailbox_sdo_write(g_mbx, (uint16_t)slave, index, sub, false, buf, *size, g_api_sdo_timeout_ms * 1000)
@@ -2973,6 +2978,8 @@ int main(int argc, char **argv)
             g_rx_guard_set = 1;
         } else if (strcmp(argv[i], "--n-lost") == 0 && i + 1 < argc) {
             n_lost = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--mbx-cyclic-force") == 0) {     /* Phase 11.6 D-15: negative control */
+            g_mbx_cyclic_force = 1;
         } else if (strcmp(argv[i], "--recover-cyclic-mbx") == 0) {   /* Phase 10.0 R-07: negative control */
             g_recover_cyclic_mbx = 1;
         } else if (strcmp(argv[i], "--api") == 0) {                  /* Phase 11.1 */
@@ -3174,7 +3181,7 @@ int main(int argc, char **argv)
             "[--motion-cycle-us N] [--io-cycle-us N] [--duration-sec N] "
             "[--no-dc] [--dc-setpoint-pct N] [--no-diag] [--diag-file PATH] [--no-tx-ts]\n"
             "       [--no-recover] [--rx-timeout-legacy] [--n-lost N] [--rx-guard-us N (default 150, Phase 11.5)]\n"
-            "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--no-reply-check] [--dc-gate-legacy] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
+            "       [--no-quarantine] [--no-dma-latency] [--recover-cyclic-mbx] [--mbx-cyclic-force] [--no-reply-check] [--dc-gate-legacy] [--fresh-offset BYTE] [--fresh-stale CYCLES]\n"
             "       [--fresh all=BYTE[:BITS],N=off,N-M=BYTE[:BITS],...]   (Phase 9.8, per slave)\n"
             "       [--pdo-scan] [--pdo-dump] [--pdo-set S:IDX:SUB=VAL,...] [--pdo-get S:IDX:SUB,...]   (Phase 9.10)\n"
             "       [--pdo-own-vendor 0xV[,0xV...]] [--pdo-trust-eni]   (Phase 10.1: binds into other vendors need --pdo-scan)\n"
@@ -3816,6 +3823,7 @@ int main(int argc, char **argv)
     if (!g_mbx) {
         fprintf(stderr, "ecm_mailbox_create failed\n"); ecx_close(&ctx); return 1;
     }
+    ecm_mailbox_force_cyclic(g_mbx_cyclic_force);
     int mbx_enabled = ecm_mailbox_enable_cyclic(&ctx);
     fprintf(stderr, "ecm_run: cyclic mailbox enabled on %d/%d slave(s)\n", mbx_enabled, n);
 

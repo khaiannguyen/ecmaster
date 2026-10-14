@@ -26,8 +26,9 @@
 #     no axis error, S6 walk-down, both axes end Switch on disabled, 0x603F 0)
 #   - on: stats.json followed the motion: both axes seen in Operation
 #     enabled, position span of each axis >= RES/4 in the samples
-#   - on: SDO 0x6064 read during the motion, >= 90 % ok, span >= RES/4 each
-#   - on: spam ok = sent - not_ready, 0 sdo_failed; [API] 0 write error,
+#   - on: SDO in OP: the IS620N has 2 FMMUs, no cyclic mailbox (D-15): every
+#     sdo_read answered no_mailbox at once (SIM, 3 FMMUs: ok), 0 sdo_failed,
+#     0 timeout; [API] 0 write error,
 #     0 handoff drop
 #   - on vs off: tracking max per axis <= off x 1.2 + RES/1000; wake_jitter
 #     p99.99 <= off + max(2 us, 20 %); occupancy reported (SDO cost, D-01),
@@ -129,13 +130,18 @@ print("ok %d/%d and %d/%d, span %d / %d inc" % (len(v[1]), tot[1], len(v[2]), to
 sys.exit(0 if all(tot[s] and len(v[s]) >= 0.9 * tot[s] and span[s] >= res // 4 for s in (1, 2)) else 1)
 EOF
 R=$?
+NOMB=$(grep -c '"error":"no_mailbox"' "$LOG/load_on/sdo6064.txt" 2>/dev/null); TOT=$(grep -c . "$LOG/load_on/sdo6064.txt" 2>/dev/null)
 if [ "$SIM" = 1 ]; then echo "  [INFO] SIM: the virtual drives have no live 0x6064 in their object dictionary: $(cat "$LOG/sdo_check.txt")"
-else chk "on: SDO 0x6064 during the motion: $(cat "$LOG/sdo_check.txt")" "[ $R = 0 ]"; fi
+else
+    # 11.6 D-15: the IS620N has 2 FMMUs, no cyclic mailbox in OP -> refused at once
+    chk "on: SDO 0x6064 refused at once on both drives (no_mailbox $NOMB / $TOT, D-15)" "[ ${TOT:-0} -gt 0 ] && [ '$NOMB' = '$TOT' ]"
+fi
 
 SP=$(tail -1 "$LOG/load_on/spam.txt" 2>/dev/null)
-chk "on: sdo_read 20 Hz ($SP)" "python3 -c \"
+if [ "$SIM" = 1 ]; then WANT=ok; else WANT=no_mailbox; fi
+chk "on: sdo_read 20 Hz, every answer '$WANT' ($SP)" "python3 -c \"
 import re,sys; s='''$SP'''; g=lambda k: int((re.search(k+'=([0-9]+)', s) or [0,0])[1])
-sys.exit(not (g('sent') > 0 and g('ok') == g('sent') - g('not_ready') and g('sdo_failed') == 0))\""
+sys.exit(not (g('sent') > 0 and g('$WANT') == g('sent') - g('not_ready') and g('sdo_failed') == 0 and g('timeout') == 0))\""
 chk "on: [API] 0 stats.json write error, 0 handoff drop" \
     "grep -q '\[API\] stats.json writes=[1-9][0-9]* errors=0 ' $EN && grep '\[API\] handoff' $EN | grep -qvE '/[1-9]'"
 

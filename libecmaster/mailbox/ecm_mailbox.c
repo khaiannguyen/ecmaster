@@ -204,6 +204,31 @@ void ecm_mailbox_run(ecm_mailbox_t *mbx, volatile sig_atomic_t *stop_flag)
 
 /* ---------------- public API: Part 1 -- enable cyclic mailbox ---------------- */
 
+static int g_force_cyclic;   /* --mbx-cyclic-force: pre-11.6 behaviour (negative control) */
+
+void ecm_mailbox_force_cyclic(int on) { g_force_cyclic = on; }
+
+/* Phase 11.6 (D-14): SOEM maps SM1 status (0x080D) through the next free
+ * FMMU (ecx_config_create_mbxstatus_mappings) whatever the ESC has. The
+ * IS620N reports 2 FMMUs (0x0004), both taken by the process data: the
+ * mapped byte stays 0, "mailbox in full" is never seen, every SDO in
+ * SAFE-OP/OP times out and its blocking frames load the RT thread. Returns
+ * 1 if the FMMU that carries SM1 status exists. Start-up only. */
+static int mbxstatus_fmmu_ok(ecx_contextt *ctx, int slave, int *idx, int *have)
+{
+    ec_slavet *sl = &ctx->slavelist[slave];
+    uint8_t nf = 0;
+    *idx = -1;
+    for (int f = 0; f < sl->FMMUunused && f < EC_MAXFMMU; f++)
+        if (etohs(sl->FMMU[f].PhysStart) == ECT_REG_SM1STAT) *idx = f;
+    if (ecx_FPRD(&ctx->port, sl->configadr, 0x0004 /* ESC FMMUs supported */, 1, &nf, EC_TIMEOUTRET3) <= 0) {
+        *have = -1;
+        return 1;          /* unknown: keep SOEM's behaviour */
+    }
+    *have = nf;
+    return *idx >= 0 && *idx < nf;
+}
+
 int ecm_mailbox_enable_cyclic(ecx_contextt *ctx)
 {
     int enabled = 0;
@@ -215,6 +240,19 @@ int ecm_mailbox_enable_cyclic(ecx_contextt *ctx)
                 "cyclic mailbox enable (call this again once it is up)\n",
                 slave);
             continue;
+        }
+        int idx, have;
+        if (ctx->slavelist[slave].mbxstatus && !mbxstatus_fmmu_ok(ctx, slave, &idx, &have)) {
+            if (!g_force_cyclic) {
+                fprintf(stderr,
+                    "[ecm_mailbox] slave %d (%s): cyclic mailbox NOT enabled: SM1 status needs FMMU %d, "
+                    "the ESC has %d (0x0004) -- no SDO / EMCY in SAFE-OP and OP for this slave "
+                    "(start-up InitCmds are not affected)\n", slave, ctx->slavelist[slave].name, idx, have);
+                continue;
+            }
+            fprintf(stderr,
+                "[ecm_mailbox] slave %d: SM1 status needs FMMU %d, the ESC has %d -- cyclic mailbox "
+                "enabled anyway (--mbx-cyclic-force): SDO in OP will time out\n", slave, idx, have);
         }
         if (ecx_slavembxcyclic(ctx, slave)) {
             enabled++;
