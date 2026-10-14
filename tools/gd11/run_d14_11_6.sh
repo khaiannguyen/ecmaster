@@ -134,18 +134,22 @@ print("ok %d/%d and %d/%d, span %d / %d inc" % (len(v[1]), tot[1], len(v[2]), to
 sys.exit(0 if all(tot[s] and len(v[s]) >= 0.9 * tot[s] and span[s] >= res // 4 for s in (1, 2)) else 1)
 EOF
 R=$?
+# rate_limited is the API's own limiter (docs/api.md §10.1: the 20 Hz spam + these
+# reads exceed it), a legitimate refusal; anything else than the two is a failure
 NOMB=$(grep -c '"error":"no_mailbox"' "$LOG/load_on/sdo6064.txt" 2>/dev/null); TOT=$(grep -c . "$LOG/load_on/sdo6064.txt" 2>/dev/null)
+RL=$(grep -c '"error":"rate_limited"' "$LOG/load_on/sdo6064.txt" 2>/dev/null)
 if [ "$SIM" = 1 ]; then echo "  [INFO] SIM: the virtual drives have no live 0x6064 in their object dictionary: $(cat "$LOG/sdo_check.txt")"
 else
     # 11.6 D-15: the IS620N has 2 FMMUs, no cyclic mailbox in OP -> refused at once
-    chk "on: SDO 0x6064 refused at once on both drives (no_mailbox $NOMB / $TOT, D-15)" "[ ${TOT:-0} -gt 0 ] && [ '$NOMB' = '$TOT' ]"
+    chk "on: SDO 0x6064 refused at once on both drives (no_mailbox $NOMB + rate_limited $RL of $TOT, D-15)" \
+        "[ ${NOMB:-0} -gt 0 ] && [ \$(( ${NOMB:-0} + ${RL:-0} )) = '$TOT' ]"
 fi
 
 SP=$(tail -1 "$LOG/load_on/spam.txt" 2>/dev/null)
 if [ "$SIM" = 1 ]; then WANT=ok; else WANT=no_mailbox; fi
-chk "on: sdo_read 20 Hz, every answer '$WANT' ($SP)" "python3 -c \"
+chk "on: sdo_read 20 Hz, every answer '$WANT' or rate_limited ($SP)" "python3 -c \"
 import re,sys; s='''$SP'''; g=lambda k: int((re.search(k+'=([0-9]+)', s) or [0,0])[1])
-sys.exit(not (g('sent') > 0 and g('$WANT') == g('sent') - g('not_ready') and g('sdo_failed') == 0 and g('timeout') == 0))\""
+sys.exit(not (g('sent') > 0 and g('$WANT') > 0 and g('$WANT') + g('rate_limited') == g('sent') - g('not_ready') and g('sdo_failed') == 0 and g('timeout') == 0))\""
 chk "on: [API] 0 stats.json write error, 0 handoff drop" \
     "grep -q '\[API\] stats.json writes=[1-9][0-9]* errors=0 ' $EN && grep '\[API\] handoff' $EN | grep -qvE '/[1-9]'"
 
