@@ -51,6 +51,8 @@
 #
 # Env: IFACE N ENI CASES RES (inc/rev, 8388608 measured 9/10) MAX_RPM TQ NOFRAME_MAX
 #      FERR (inc) JUMP (inc) HM_METHOD DUR8 YES SIM SB_PRIO SB_CPU IS620N_ESI LOG
+#      EXTRA_ARGS (more ecm_run args) DURING (command run in the background during each case;
+#      Phase 11.6 D-14)
 #      PDOSET_OFF=1 (negative control: 0x607F in the RxPDO left to 0 -> w00 FAILs)
 # ==========================================================================
 set -u
@@ -190,9 +192,14 @@ run () {
     sim_start "$tag"
     # shellcheck disable=SC2086
     ethtool -S "$IFACE" > "$LOG/ethtool_S_${tag}_before.txt" 2>/dev/null
-    "$ECM_RUN" "${BASE[@]}" "${MOT[@]}" $extra --cia402-script "$script" --duration-sec "$dur" \
+    # Phase 11.6 (D-14): EXTRA_ARGS appended to ecm_run, DURING run in the background
+    # for the duration of the case (both empty by default: Phase 10 behaviour)
+    local dp=
+    [ -n "${DURING:-}" ] && { bash -c "$DURING" > "$LOG/during_$tag.txt" 2>&1 & dp=$!; }
+    "$ECM_RUN" "${BASE[@]}" "${MOT[@]}" $extra ${EXTRA_ARGS:-} --cia402-script "$script" --duration-sec "$dur" \
         --diag-file "$LOG/diag_$tag.txt" > "$LOG/er_$tag.log" 2>&1
     RC=$?
+    [ -n "$dp" ] && { pkill -TERM -P "$dp" 2>/dev/null; kill -TERM "$dp" 2>/dev/null; wait "$dp" 2>/dev/null; }
     ethtool -S "$IFACE" > "$LOG/ethtool_S_${tag}_after.txt" 2>/dev/null
     sim_stop
     E=$LOG/er_$tag.log
