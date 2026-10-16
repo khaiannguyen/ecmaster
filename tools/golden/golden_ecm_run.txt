@@ -1,5 +1,5 @@
 # ecmaster golden structure v1 (tools/golden/pcap2struct.py)
-# requests=2870 with_reply=2870 process_data_frames=2257
+# requests=2876 with_reply=2876 process_data_frames=2256
 [CONFIG]
 BWR *:0103/1 w8
 BWR *:0120/2 w8
@@ -438,6 +438,14 @@ FPWR 1007:0120/2 w1
 FPWR 1008:0120/2 w1
 BWR *:0120/2 w8
 BRD *:0130/2 w8
+FPRD 1001:0004/1 w1
+FPRD 1002:0004/1 w1
+FPRD 1003:0004/1 w1
+FPRD 1004:0004/1 w1
+FPRD 1005:0004/1 w1
+FPRD 1006:0004/1 w1
+FPRD 1007:0004/1 w1
+FPRD 1008:0004/1 w1
 FPWR 1001:0400/2 w1
 FPWR 1001:0420/2 w1
 FPWR 1002:0400/2 w1
