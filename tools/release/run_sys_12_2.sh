@@ -43,7 +43,7 @@ mkdir -p "$LOG"; LOG=$(cd "$LOG" && pwd)
 [ $# -gt 0 ] || { sed -n '4,32p' "$0"; exit 2; }
 PASS=0; FAIL=0
 chk () { local n=$1; shift; if eval "$*"; then echo "  [PASS] $n"; PASS=$((PASS + 1)); else echo "  [FAIL] $n"; FAIL=$((FAIL + 1)); fi; }
-rxu () { ethtool -c "$IFACE" 2>/dev/null | awk -F': *' '/^rx-usecs:/{print $2; exit}'; }
+rxu () { ethtool -c "$IFACE" 2>/dev/null | awk -F':' '/^rx-usecs:/{v = $2; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit}'; }
 gro () { ethtool -k "$IFACE" 2>/dev/null | awk -F': *' '/^generic-receive-offload:/{split($2, a, " "); print a[1]; exit}'; }
 CE () { "$ROOT/tools/jetson/check_env.sh" --iface "$IFACE" --boot > "$LOG/check_env_$1.txt" 2>&1; }
 

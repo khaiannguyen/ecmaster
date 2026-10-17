@@ -146,9 +146,9 @@ if [ $NO_IFACE = 0 ]; then
             esac
             gro=$(ethtool -k "$IFACE" 2>/dev/null | awk -F': ' '/^generic-receive-offload:/{print $2}')
             case "$gro" in off*) pass "GRO off" ;; "") ;; *) bootreq "GRO $gro: sudo ethtool -K $IFACE gro off gso off tso off" ;; esac
-            rxu=$(ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
+            rxu=$(ethtool -c "$IFACE" 2>/dev/null | awk -F':' '/^rx-usecs:/{v = $2; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit}')   # Phase 12.2: ethtool 6.x pads with tabs
             # Phase 10.0: without root the query can fail silently -> it passed unseen at 3 us
-            [ -z "$rxu" ] && rxu=$(sudo -n ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
+            [ -z "$rxu" ] && rxu=$(sudo -n ethtool -c "$IFACE" 2>/dev/null | awk -F':' '/^rx-usecs:/{v = $2; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit}')
             case "$rxu" in
                 0) pass "rx-usecs 0" ;;
                 "") bootreq "interrupt coalescing not readable (run check_env with sudo): want rx-usecs 0" ;;

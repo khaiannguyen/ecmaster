@@ -38,12 +38,12 @@ cat > "$F/ethtool" <<'EOF'
 d=$FAKE_DIR; echo "ethtool $*" >> "$d/calls"
 g () { cat "$d/$1" 2>/dev/null || echo "$2"; }
 case $1 in
--c) echo "Coalesce parameters for $2:"; echo "rx-usecs: $(g rx 3)"; echo "tx-usecs: 3" ;;
+-c) echo "Coalesce parameters for $2:"; printf 'rx-usecs:\t\t%s\n' "$(g rx 3)"; printf 'tx-usecs:\t\t3\n' ;;   # tabs as ethtool 6.x
 -k) echo "Features for $2:"
     echo "tcp-segmentation-offload: $(g tso on)"
     echo "generic-segmentation-offload: $(g gso on)"
     echo "generic-receive-offload: $(g gro on)" ;;
---show-eee) echo "EEE settings for $2:"; echo "        EEE status: $(g eee 'enabled - active')" ;;
+--show-eee) echo "EEE settings for $2:"; printf '\tEEE status:\t%s\n' "$(g eee 'enabled - active')" ;;
 -C) [ -n "${FAKE_STUCK:-}" ] && exit 0; [ "$3" = rx-usecs ] && echo "$4" > "$d/rx" ;;
 -K) shift 2; while [ $# -ge 2 ]; do echo "$2" > "$d/$1"; shift 2; done ;;
 --set-eee) [ "$4" = off ] && echo disabled > "$d/eee" || echo 'enabled - active' > "$d/eee" ;;

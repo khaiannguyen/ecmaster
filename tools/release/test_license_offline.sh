@@ -13,6 +13,7 @@
 #            the file mode kept, a second run changes nothing (idempotent)
 #   LIC-01d  every *.sh passes bash -n, every *.py compiles (the headers broke
 #            no script)
+#   LIC-01e  every file with a shebang has its exec bit (+ negative control)
 #   LIC-03a  check_third_party.sh passes on the repository
 #   LIC-03b  negative controls: a vendor ESI, a PDF, an IgH copyright line,
 #            an ESI-generated profile, each planted alone in a copy -> FAIL
@@ -91,6 +92,19 @@ while IFS= read -r f; do
 done < <(git -C "$ROOT" ls-files -co --exclude-standard '*.py')
 chk "LIC-01d bash -n on every .sh, every .py parses ($bad bad)" "[ $bad = 0 ]"
 [ $bad = 0 ] || cat "$T/syntax.txt"
+
+# Phase 12.2: a script shipped without its exec bit fails as "command not
+# found" under sudo (run_sys_12_2.sh in 0056): every file with a shebang
+# must be executable; libraries sourced by others have no shebang
+noexec () {   # DIR: files with '#!' and no exec bit
+    (cd "$1" && find . -type f -not -path './.git/*' | while IFS= read -r f; do
+        [ "$(head -c2 "$f")" = '#!' ] && [ ! -x "$f" ] && echo "${f#./}"; done)
+}
+ne=$(noexec "$T/tree")
+chk "LIC-01e every file with a shebang is executable ($(echo "$ne" | grep -c .) not)" "[ -z \"$ne\" ]"
+[ -z "$ne" ] || echo "$ne" | sed 's/^/    no exec bit: /'
+chmod -x "$T/neg/tools/release/add_spdx.py"
+chk "LIC-01e negative: add_spdx.py without exec bit is found" "noexec $T/neg | grep -qx tools/release/add_spdx.py"
 
 echo "=== LIC-03 nothing we may not redistribute"
 "$HERE/check_third_party.sh" "$ROOT" > "$T/l3.txt"; r=$?

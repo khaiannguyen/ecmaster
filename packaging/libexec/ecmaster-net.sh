@@ -34,9 +34,10 @@ CMD=$1; IF=$2
 [ -e "$SYSNET/$IF" ] || { echo "ecmaster-net: no interface $IF" >&2; exit 1; }
 SAVED=$STATE_DIR/net-$IF.saved
 
-rx_usecs () { $ETHTOOL -c "$IF" 2>/dev/null | awk -F': *' '/^rx-usecs:/{print $2; exit}'; }
+# ethtool 6.x aligns values with tabs ("rx-usecs:\t\t0", seen on the Jetson): trim
+rx_usecs () { $ETHTOOL -c "$IF" 2>/dev/null | awk -F':' '/^rx-usecs:/{v = $2; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit}'; }
 feature () { $ETHTOOL -k "$IF" 2>/dev/null | awk -F': *' -v k="$1" '$1 == k {split($2, a, " "); print a[1]; exit}'; }
-eee () { $ETHTOOL --show-eee "$IF" 2>/dev/null | awk -F': *' '/EEE status:/{print $2; exit}'; }   # line starts with a tab
+eee () { $ETHTOOL --show-eee "$IF" 2>/dev/null | awk -F':' '/EEE status:/{v = $2; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit}'; }   # line starts with a tab
 
 check () {
     local r g c sp
