@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* test_api_offline.c -- Phase 11.1: libecmaster/api without SOEM or network.
  *
  *   ./test_api_offline                 unit tests (handoff, keys, JSON, sysfs, cpus, publish)

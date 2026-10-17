@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_d_11_6.sh -- Phase 11.6: D tests of the remote diagnostics API
 # (claude/giai_doan_11_ke_hoach.md §7). The web UI (11.4) is not built yet:

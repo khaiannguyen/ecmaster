@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_cia402_cfg.c — Phase 10.3, see ecm_cia402_cfg.h */
 #include "ecm_cia402_cfg.h"
 

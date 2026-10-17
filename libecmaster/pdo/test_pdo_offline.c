@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * test_pdo_offline.c -- Phase 9.10 B-03 / B-04 and the table itself, offline;
  * Phase 10.1 B-05: which binds need the bus's own table.

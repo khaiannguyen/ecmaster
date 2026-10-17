@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """apply_soem_txtime_v2.py -- ecmaster Phase 8.5, R-02 fix: only the scheduled frame uses ETF.
 
 Run inside the SOEM tree AFTER apply_soem_txtime.py (v1):

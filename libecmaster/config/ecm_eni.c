@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * ecm_eni.c -- .enicfg loader and ENI checks (no SOEM dependency).
  * Format: see tools/eni/eni2cfg.py. Loading is strict: an unknown record,

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # check_enicfg.sh -- Phase 9.6: every committed config/eni/X.enicfg is exactly
 # what tools/eni/eni2cfg.py makes from config/eni/X.xml today. A stale
 # .enicfg (old eni2cfg, edited by hand, XML re-exported) would make ecm_run

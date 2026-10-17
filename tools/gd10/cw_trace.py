@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """cw_trace.py -- Phase 10.8 (X-05): the CiA402 controlword / statusword
 sequence of one axis, read from a capture of the EtherCAT wire, and the
 comparison of two such sequences (our master vs TwinCAT NC on the same

@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * l1_probe.c — Verifies L1-02, L1-03, L1-04, L1-05, L1-06.
  *

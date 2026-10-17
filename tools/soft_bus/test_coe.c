@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_coe.c — Phase 9.3 C-01 / C-01-neg: the CoE/SDO server of soft_bus
  * (esc_coe.c) driven byte by byte, no network.

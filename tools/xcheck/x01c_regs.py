@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """x01c_regs.py -- Phase 8 X-01c: which ESC registers does each master touch?
 
 Reads two pcap files (SOEM run, IgH run) captured on the master side of a

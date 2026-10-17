@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_xchg.c — Phase 10.4, see ecm_xchg.h and docs/app_rt_exchange.md */
 #include "ecm_xchg.h"
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """apply_ecm_run_etf.py -- Phase 8.5 step 6.3: `ecm_run --link etf`.
 
 Run from the ecmaster repo root:  python3 apply_ecm_run_etf.py

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_d15_11_6.sh -- Phase 11.6 D-15: SDO in OP on a slave whose ESC has no
 # FMMU left for the SM1 status (found by D-14 on the IS620N, 14/10).

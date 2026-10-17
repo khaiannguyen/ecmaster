@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """
 ecm_ctl.py -- Phase 11.2: command-line client of ecm_run's ctl.sock (docs/api.md §10).
 

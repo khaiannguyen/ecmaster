@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/pdo — Phase 9.10 bind process data by (slave, index, sub).
 #   make test        offline unit tests (no SOEM, no network)
 #   make test_asan   same, with ASan/UBSan

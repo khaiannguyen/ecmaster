@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * ecm_eni.h -- Phase 8.4: ENI-derived network configuration for ecm_run.
  *

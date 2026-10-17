@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_api_view.c -- Phase 11.3: ecm_diag as a client of ecm_run's API
  * (docs/api.md): stats.json rendered for a terminal, and ctl.sock commands.

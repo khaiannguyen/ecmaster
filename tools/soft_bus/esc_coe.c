@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_coe.c — see esc_coe.h for scope and design rationale. Byte layouts
  * below (mailbox header, CoE header, SDO command specifiers) are taken

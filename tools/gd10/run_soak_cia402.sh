@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_soak_cia402.sh — Phase 10.10: 8 h CSP soak of the CiA402 layer on the
 # virtual 4-axis drive (plan claude/giai_doan_10_ke_hoach.md §12, DoD "soak

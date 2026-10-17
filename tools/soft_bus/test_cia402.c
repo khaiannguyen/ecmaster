@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * test_cia402.c -- Phase 10.2 virtual CiA402 drive, offline (no sockets).
  *

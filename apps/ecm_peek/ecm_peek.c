@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_peek — READ-ONLY look at a bus before the master ever runs it
  * (Phase 10.0 bring-up of the IS620N drives, R-02 .. R-04).

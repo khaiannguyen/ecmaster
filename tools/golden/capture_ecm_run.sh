@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # capture_ecm_run.sh — Phase 7.5: run the fixed golden scenario and
 # write its structure (tools/golden/pcap2struct.py) to stdout.

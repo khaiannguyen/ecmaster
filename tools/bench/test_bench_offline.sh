@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # test_bench_offline.sh -- Phase 11.7 BM-01: ecm_bench.py on fixture stats.json
 # files (testdata/), with its negative controls. No network, no root.
 set -u

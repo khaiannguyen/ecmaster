@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # d14_load.sh -- Phase 11.6 D-14: the API clients run next to the real drives
 # while they move (started by run_w_10_9.sh through DURING, stopped with TERM).
 #

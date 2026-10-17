@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """eni_limits.py -- Phase 10.9: a copy of an enicfg whose PS CoE InitCmds also
 write the drive limits of the first enable on the real IS620N drives.
 

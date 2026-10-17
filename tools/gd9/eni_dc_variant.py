@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """eni_dc_variant.py -- Phase 9.5: make a DC variant of a TwinCAT ENI, edited the
 way TwinCAT itself would write it (DC element AND the matching PS register
 InitCmds), so tools/eni/eni2cfg.py and the loader see a coherent file.

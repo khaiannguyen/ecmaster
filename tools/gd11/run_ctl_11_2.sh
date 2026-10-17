@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_ctl_11_2.sh -- Phase 11.2: ctl.sock of `ecm_run --api` on soft_bus
 # (claude/giai_doan_11_ke_hoach.md §3, docs/api.md §10). Functional checks;

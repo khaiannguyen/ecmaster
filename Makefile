@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ecmaster top-level Makefile (Phase 9.0)
 #
 #   make all SOEM_DIR=...     build soft_bus and every app against a patched SOEM
@@ -6,6 +8,8 @@
 #                             capabilities -- Phase 8 operating trap), then getcap
 #   make all caps             the usual sequence after a change
 #   make test-offline         the CI "offline" job (no SOEM, no network)
+#   make test-license         Phase 12.1: reuse lint, SPDX headers, LIC-03
+#                             (needs reuse: pip install --user reuse)
 #
 # SOEM must be v2.0.0 built with -DEC_MAXGROUP=4 and patches/soem-mbx-cnt.patch
 # + patches/soem-txtime.patch (see .github/workflows/ci.yml).
@@ -15,7 +19,7 @@ APPS     := apps/ecm_run apps/ecm_diag apps/ecm_peek apps/l4_test apps/l6_test
 CAPS_BIN := tools/soft_bus/soft_bus apps/ecm_run/ecm_run apps/ecm_diag/ecm_diag apps/ecm_peek/ecm_peek \
             apps/l4_test/l4_test apps/l6_test/l6_test
 
-.PHONY: all soft_bus apps caps caps-show test-offline clean
+.PHONY: all soft_bus apps caps caps-show test-offline test-license clean
 
 all: soft_bus apps
 
@@ -53,6 +57,9 @@ test-offline:
 	$(MAKE) -C libecmaster/api test test_asan negctl tsan schema   # Phase 11.1, 11.2 (ctl.sock offline + negative controls)
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
+
+test-license:
+	tools/release/test_license_offline.sh
 
 clean:
 	@for d in tools/soft_bus libecm_cia402 libecmaster/api $(APPS); do $(MAKE) -s -C $$d clean; done

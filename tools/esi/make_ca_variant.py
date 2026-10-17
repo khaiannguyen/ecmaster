@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """make_ca_variant.py -- Phase 9.3: derive the ESI of `soft_bus --coe-ca` from
 config/esi/softbus_esi.xml, for the TwinCAT session of step 9.4 (ENI with
 Complete Access PDO assign InitCmds, eni_8node_ca.xml).

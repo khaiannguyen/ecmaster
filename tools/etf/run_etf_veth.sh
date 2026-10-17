@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # run_etf_veth.sh -- Phase 8.5: `ecm_run --link etf` regression on a multi-queue veth
 # pair with mqprio + ETF in SOFTWARE mode (veth has no launch-time offload).
 #

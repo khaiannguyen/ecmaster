@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * l4_test.c — automated L4-01..L4-05 test tool (Phase 5, mailbox/CoE).
  *

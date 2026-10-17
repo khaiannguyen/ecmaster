@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * ecm_eni_soem.c -- SOEM glue for ecm_eni (Phase 8.4). Not RT: every call here
  * happens during startup or during a recovery that already owns the bus.

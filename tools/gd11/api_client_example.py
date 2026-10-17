@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """api_client_example.py -- Phase 11.6 (D-13): a sample client of stats.json
 written the way docs/api.md §10 asks, so that it keeps working when the file
 grows (v1.1: a second port for cable redundancy, bus.path "ring_open", new

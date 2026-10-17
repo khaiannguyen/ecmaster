@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """ecat_dump.py -- print every EtherCAT datagram of a pcapng as one text line.
 
 Usage: python3 ecat_dump.py FILE.pcapng [first_frame] [last_frame] [--all]

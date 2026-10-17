@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/xchg — Phase 10.4 app <-> RT exchange (docs/app_rt_exchange.md).
 #   make test        offline unit tests (one thread)
 #   make test_asan   same, with ASan/UBSan

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/config -- ENI loader (no SOEM dependency in ecm_eni.c)
 CFLAGS ?= -O2 -Wall -Wextra
 SAN     = -fsanitize=address,undefined -g

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """esi2profile.py -- Phase 9.9: turn an ESI device description into a soft_bus
 node profile, so soft_bus can stand in for a vendor slave (Inovance IS620N)
 or for the draft of our own slave (P1) on a virtual bus.

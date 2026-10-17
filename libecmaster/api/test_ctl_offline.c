@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* test_ctl_offline.c -- Phase 11.2: ctl.sock without SOEM or a bus.
  *
  *   ./test_ctl_offline       JSON tokenizer, SHA-256, value codec, allowlist,

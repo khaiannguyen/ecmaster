@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 #ifndef ESC_FAULT_H
 #define ESC_FAULT_H
 

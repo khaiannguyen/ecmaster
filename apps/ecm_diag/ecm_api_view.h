@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_api_view.h -- Phase 11.3: ecm_diag as an API client (see ecm_api_view.c) */
 #ifndef ECM_API_VIEW_H
 #define ECM_API_VIEW_H

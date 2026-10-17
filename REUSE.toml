@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Phase 12.1: licensing of the files that carry no header of their own
+# (REUSE specification 3.3). Source files (*.c *.h *.py *.sh, Makefile, CI
+# workflow) carry an SPDX header written by tools/release/add_spdx.py; data
+# files (docs, ENI / ESI / profiles, golden, logs, captures, test data) are
+# declared here so that they stay byte-identical. Check: `reuse lint`
+# (tools/release/test_license_offline.sh, LIC-01).
+version = 1
+
+# Data and documents of the project. Deliberately a list of kinds, not "**":
+# a source file that loses its header must make `reuse lint` fail (LIC-01).
+[[annotations]]
+path = [
+    "*.md", "**/*.md", ".gitignore",
+    "docs/**", "config/**",
+    "tools/golden/*.txt", "tools/gd9/*.enicfg", "**/testdata/**",
+    "**/*.log", "**/*.pcap", "**/*.pcapng", "**/log_*/**",
+    "apps/ecm_run/soem.supp",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 khaiannguyen"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# ENIs exported by TwinCAT 3 from the Inovance IS620N ESI (Phase 9.4 / 10):
+# configuration files of this project (bus topology, PDO assignment, init
+# commands); they hold the IS620N identity and PDO entries, not the vendor
+# ESI itself, which is not in this repository (THIRD_PARTY.md).
+[[annotations]]
+path = ["config/eni/eni_2servo*.xml", "config/eni/eni_2servo*.enicfg", "config/eni/eni_mixed*.xml", "config/eni/eni_mixed*.enicfg"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 khaiannguyen"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Patches to SOEM v2.0.0 (GPLv3): they carry SOEM context lines.
+[[annotations]]
+path = "patches/soem-*.patch"
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2005-2025 Speciaal Machinefabriek Ketels v.o.f.",
+    "2005-2025 Arthur Ketels",
+    "2009-2025 RT-Labs AB, Sweden",
+    "2026 khaiannguyen",
+]
+SPDX-License-Identifier = "GPL-3.0-only"

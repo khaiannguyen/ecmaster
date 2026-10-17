@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * ecm_eni_soem.h -- apply an ecm_eni_t to a SOEM context (Phase 8.4).
  *

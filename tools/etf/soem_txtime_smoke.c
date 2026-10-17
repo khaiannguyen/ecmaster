@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * soem_txtime_smoke.c -- Phase 8.5 step 6.3: SOEM + soem-txtime.patch end to end,
  * before touching libecmaster/ecm_run.

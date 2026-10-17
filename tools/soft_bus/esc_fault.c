@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_fault.c — fault injection for soft_bus (Phase 7). See esc_fault.h for
  * the command list and the frame flow.

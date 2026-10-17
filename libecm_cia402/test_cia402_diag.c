@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * test_cia402_diag.c -- Phase 10.8, offline: error code texts, the vendor
  * table file, and the attribution of a slave's EMCY to one of its axes.

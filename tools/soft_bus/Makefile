@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 SUDO ?= sudo   # Phase 9.0: make caps SUDO= when already root
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra

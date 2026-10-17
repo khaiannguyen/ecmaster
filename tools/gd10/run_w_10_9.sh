@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_w_10_9.sh — Phase 10.9: the master drives the two real IS620N axes
 # (plan claude/giai_doan_10_ke_hoach.md section 11, W-01..W-08).

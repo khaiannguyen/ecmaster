@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_servo_10_2.sh — Phase 10.2: the virtual CiA402 drive of soft_bus seen
 # through the real master path (SOEM, ecm_run, veth). Plan:

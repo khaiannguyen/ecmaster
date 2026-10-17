@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # check_xsd.sh -- Phase 8.2: validate the soft_bus ESI against the EtherCAT ESI XML schema.
 #
 # The official schema (ETG, ESI_Schema_V1i21.zip) is for ETG members only and

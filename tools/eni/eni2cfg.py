@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """eni2cfg.py -- Phase 8.4: convert an ENI (EtherCATConfig XML, e.g. exported by
 TwinCAT) into the line-based .enicfg that libecmaster loads at runtime.
 

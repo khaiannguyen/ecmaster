@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_policy_offline.c — unit tests for ecm_policy.c (Phase 7.3), no network.
  * Each group maps to a line of docs/fault_policy.md.

@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * ecm_pdo_soem.c -- Phase 9.10 SOEM glue for ecm_pdo (scan, locate, check).
  */

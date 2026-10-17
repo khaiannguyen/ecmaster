@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # negative_control.sh — Phase 7.5: prove the golden check can fail.
 # Builds a copy of ecm_run with the two SM watchdog writes (0x0400, 0x0420)

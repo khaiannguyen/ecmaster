@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_core.c — ESC logic layer. Does NOT touch sockets/network: receives a
  * frame buffer in memory, mutates it in place, done. This is what makes it

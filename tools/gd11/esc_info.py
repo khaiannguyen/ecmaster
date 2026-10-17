@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """esc_info.py -- Phase 11.6: read the ESC information registers 0x0000-0x0009
 of every slave with APRD (no SOEM, no configuration, nothing written).
 

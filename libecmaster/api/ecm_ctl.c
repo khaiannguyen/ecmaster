@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_ctl.c -- Phase 11.2, see ecm_ctl.h and docs/api.md §10 */
 #define _GNU_SOURCE
 #include "ecm_ctl.h"

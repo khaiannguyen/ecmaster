@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * igh_x01b.c — Phase 8 X-01b: an INDEPENDENT master (IgH EtherCAT Master 1.6,
  * userspace library) drives soft_bus to OP, exchanges process data every

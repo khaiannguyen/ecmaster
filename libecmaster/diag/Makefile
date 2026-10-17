@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/diag — Phase 7.2 bus diagnostics.
 #   make test        offline unit tests (no SOEM, no network)
 #   make test_asan   same, with ASan/UBSan

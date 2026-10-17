@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* sii_dump.c -- write the SII image that soft_bus generates for one node,
  * as raw little-endian bytes, so it can be compared byte-for-byte with what
  * a master reads back (IgH: ethercat sii_read). Phase 8 X-01a.

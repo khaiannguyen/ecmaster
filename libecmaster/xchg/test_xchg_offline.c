@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * test_xchg_offline.c -- Phase 10.4 app <-> RT exchange, offline, one thread.
  *

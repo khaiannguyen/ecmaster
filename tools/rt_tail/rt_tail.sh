@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # rt_tail.sh - long cyclictest on the isolated RT core with ftrace armed on
 # that core only. If one wake-up exceeds BREAK_US, cyclictest writes a trace
 # marker, stops tracing and exits, so trace.txt holds what ran on the core

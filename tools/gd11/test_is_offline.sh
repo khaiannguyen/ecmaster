@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # test_is_offline.sh -- Phase 11.5: offline tests of the IS tools (no root,
 # no Jetson; runs in CI).

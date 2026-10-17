@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # rt_profile.sh -- Phase 11.5 IS-01: which RT boot profile is this Jetson in,
 # and is everything a measurement depends on in place?

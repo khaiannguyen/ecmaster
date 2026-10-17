@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """events_report.py -- Phase 10.0 R-07: per-event view of what ecm_run saw.
 
   events_report.py --log er_r07.log --events events.txt --dir LOGDIR --settle 20 --alive 1

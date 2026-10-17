@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_cia402_axis.c — Phase 10.5, see ecm_cia402_axis.h */
 #include "ecm_cia402_axis.h"
 

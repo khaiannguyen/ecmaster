@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_regression_gd11.sh -- Phase 11.9: the whole Phase 11 regression in one
 # run on the Jetson, veth only (no drive, no i226 change):

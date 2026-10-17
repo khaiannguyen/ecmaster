@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 #include "ring_spsc.h"
 #include <assert.h>
 #include <stdio.h>

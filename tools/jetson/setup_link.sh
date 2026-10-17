@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # setup_link.sh — Phase 10.0: put the i226 EtherCAT port in the state every
 # measurement assumes. Run once after each boot (none of it survives a

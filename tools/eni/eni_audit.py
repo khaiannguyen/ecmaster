@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """eni_audit.py -- Phase 9.4: describe EVERYTHING a (TwinCAT) ENI asks the master
 to do, as Markdown for docs/eni.md, so that the loader decisions of step 9.6
 (which register InitCmds are "known", LRD/LWR, CoE transitions, timeouts)

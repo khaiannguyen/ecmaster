@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_api.h -- Phase 11.1: remote diagnostics API, stats.json side
  * (docs/api.md, claude/giai_doan_11_ke_hoach.md §1.1, §2).

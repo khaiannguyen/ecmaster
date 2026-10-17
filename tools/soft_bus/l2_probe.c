@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * l2_probe.c — Verifies L2-01..06 (ESM state transitions, Phase 3).
  *

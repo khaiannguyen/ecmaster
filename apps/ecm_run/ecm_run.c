@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_run.c — Real cyclic EtherCAT master, two process-data groups running
  * at different rates on the RT thread (Phase 3 / L3 scope), now

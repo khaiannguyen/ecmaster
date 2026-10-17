@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_diag_offline.c — unit tests for ecm_diag.c (Phase 7.2), no network.
  *

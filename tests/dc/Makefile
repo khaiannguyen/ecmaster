@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # Phase 6 offline DC tests — no veth, no root, no Jetson needed.
 #   test_ecm_dc_unit : ecm_dc unwrap / phase math / stale / 10.5 s gap
 #   test_dc_e2e      : closed loop, simulated time: SOEM-equivalent

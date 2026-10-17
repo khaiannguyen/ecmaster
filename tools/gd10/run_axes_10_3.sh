@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_axes_10_3.sh — Phase 10.3: CiA402 axis configuration in ecm_run
 # (libecm_cia402) against virtual drives on soft_bus (Phase 10.2). Plan:

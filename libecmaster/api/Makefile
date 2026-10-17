@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/api — Phase 11.1/11.2 remote diagnostics API (docs/api.md).
 #   make test        offline unit tests: stats.json (11.1) + ctl.sock (11.2)
 #   make test_asan   same, with ASan/UBSan

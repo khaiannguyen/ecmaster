@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_l507_11_3b.sh -- Phase 11.3b: L5-07 on a one-slave bus (N=1), repeated.
 #

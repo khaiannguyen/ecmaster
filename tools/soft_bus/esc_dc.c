@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_dc.c — Distributed Clock model for soft_bus. See esc_dc.h.
  * ========================================================================== */

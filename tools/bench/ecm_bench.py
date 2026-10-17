@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """ecm_bench.py -- Phase 11.7 BM-01: benchmark tables from the final
 stats.json of ecm_run runs (claude/giai_doan_11_ke_hoach.md §8.2), laid out
 like the acontis "EC-Master on Jetson Orin" figures (min / avg / max) plus

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_bm_11_7.sh -- Phase 11.7 BM-02: benchmark on the two REAL IS620N in
 # motion, laid out against the acontis Jetson Orin figures

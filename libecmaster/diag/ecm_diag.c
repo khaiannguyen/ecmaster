@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_diag.c — bus diagnostics model (Phase 7.2). See ecm_diag.h.
  *

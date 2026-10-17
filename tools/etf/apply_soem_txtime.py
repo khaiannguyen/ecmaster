@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """apply_soem_txtime.py -- ecmaster Phase 8.5 step 6.3: SO_TXTIME launch time in SOEM.
 
 Run inside the SOEM tree:   cd ~/projects/SOEM && python3 apply_soem_txtime.py

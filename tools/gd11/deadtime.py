@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """deadtime.py -- Phase 11.5 IS-08 / IS-10: end-to-end dead time and the
 cycle budget of one ecm_run run, from its log (outside the RT path).
 

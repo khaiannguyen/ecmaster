@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_profile.h — Phase 9.9: a soft_bus node that stands in for another slave
  * (a vendor servo, our P1 draft), described by a profile file generated

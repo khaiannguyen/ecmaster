@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_dc_e2e.c — offline closed-loop simulation of Phase 6, simulated time.
  *

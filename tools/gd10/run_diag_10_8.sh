@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_diag_10_8.sh — Phase 10.8: axis diagnosis (EMCY / 0x603F -> axis
 # error with text, slave configuration errors -> axis error, no retry) and

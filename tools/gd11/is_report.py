@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """is_report.py -- Phase 11.5: merge results.csv of run_is_11_5.sh (one per
 boot profile, P0 and P1) into Markdown tables for docs/rt_profiles.md.
 

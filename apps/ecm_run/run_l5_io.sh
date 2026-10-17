@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_l5_io.sh — Phase 7.4: L5-07 (late replies), L5-08 (duplicate /
 # reordered replies), L5-09 (stale inputs), L5-12 (mailbox repeat /

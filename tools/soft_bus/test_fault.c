@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_fault.c — offline tests for Phase 7: fault injection (esc_fault.c),
  * process data watchdog, error counter semantics, mailbox repeat protocol.

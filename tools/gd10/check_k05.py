@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """
 check_k05.py -- Phase 10 K-05: libecmaster holds no CiA402 object index.
 

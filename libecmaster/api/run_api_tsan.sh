@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_api_tsan.sh -- Phase 11.1: the api handoff under TSan + negative control
 # (same shape as libecmaster/xchg/run_xchg_tsan.sh).

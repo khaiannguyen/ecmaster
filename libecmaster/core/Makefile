@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/core — ecm_dc (Phase 6) + reply-age gate test (Phase 7.4)
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra -std=gnu11

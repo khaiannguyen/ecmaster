@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 
 /* Single source of truth for the EtherCAT process-data group identifiers.

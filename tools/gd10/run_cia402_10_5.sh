@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_cia402_10_5.sh — Phase 10.5: the master's CiA402 layer (libecm_cia402
 # axis state machine in the RT hook) driving virtual drives on soft_bus

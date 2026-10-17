@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_sha256.c -- Phase 11.2, see ecm_sha256.h */
 #include "ecm_sha256.h"
 

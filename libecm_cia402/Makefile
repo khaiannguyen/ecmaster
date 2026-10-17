@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecm_cia402 -- Phase 10.3: CiA402 layer of the master (axis configuration).
 # Kept out of libecmaster: every object index with a CiA402 meaning lives here.
 #   make test        offline unit tests (no SOEM, no network)

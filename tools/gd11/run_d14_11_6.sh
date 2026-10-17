@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_d14_11_6.sh -- Phase 11.6 D-14: the remote diagnostics API next to the
 # two REAL IS620N axes in motion (claude/giai_doan_11_ke_hoach.md §7).

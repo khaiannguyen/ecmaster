@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """pcap_dc.py -- Phase 9.5: what DC configuration the master wrote, per slave.
 
 Reads a classic pcap (tshark -F pcap) captured on the master's interface and

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """esi_check.py -- Phase 8.2: does an ESI file describe the SII image a slave
 (soft_bus, later the LAN9252 EEPROM) actually carries?
 

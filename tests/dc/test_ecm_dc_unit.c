@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_ecm_dc_unit.c — fast unit tests for ecm_dc (no soft_bus involved).
  * Build: gcc -std=gnu11 -O2 -Wall -I../../libecmaster/core -o test_ecm_dc_unit \

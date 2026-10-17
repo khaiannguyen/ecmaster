@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_diag_soem.c — SOEM glue for ecm_diag (Phase 7.2). See ecm_diag_soem.h.
  * Frame building follows the pattern already used for the L6-05 0x0928

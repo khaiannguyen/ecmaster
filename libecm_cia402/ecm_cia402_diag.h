@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_cia402_diag.h — Phase 10.8: axis diagnosis for the CiA402 layer.
  * Pure logic (no SOEM, not RT): unit tested offline (test_cia402_diag.c).

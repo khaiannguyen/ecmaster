@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_cia402_axis.h — Phase 10.5: master-side CiA402 axis, run in the RT hook.
  *

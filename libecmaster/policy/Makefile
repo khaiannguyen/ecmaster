@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # libecmaster/policy — Phase 7.3 master fault policy (docs/fault_policy.md).
 #   make test        offline unit tests (no SOEM, no network)
 #   make test_asan   same, with ASan/UBSan

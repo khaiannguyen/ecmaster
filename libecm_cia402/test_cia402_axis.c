@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * test_cia402_axis.c -- Phase 10.5, offline closed loop: the master's axis
  * state machine (ecm_cia402_rt) against the virtual drive of soft_bus

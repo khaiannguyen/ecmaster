@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """pcap2struct.py -- Phase 7.5: structure of an EtherCAT master session.
 
 Reads a classic pcap captured on the master's interface (tshark -F pcap)

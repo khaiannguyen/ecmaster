@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_recover_10_0.sh — Phase 10.0 R-07 follow-up: a power-cycled slave gets
 # the ENI's PS CoE InitCmds again during recovery, and is NOT taken to OP

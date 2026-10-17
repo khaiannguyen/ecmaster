@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_sha256.h -- Phase 11.2: SHA-256 (FIPS 180-4) for `info` (which ENI is
  * loaded), no library dependency. Tested against the FIPS / NIST vectors. */
 #ifndef ECM_SHA256_H

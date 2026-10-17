@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_l5_policy.sh — Phase 7.3: L5-01, L5-02, L5-03/04, L5-05, L5-11b,
 # L5-13 against soft_bus, each with its negative control where one exists.

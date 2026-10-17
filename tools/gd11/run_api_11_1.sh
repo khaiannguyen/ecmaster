@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_api_11_1.sh -- Phase 11.1: stats.json of `ecm_run --api` on soft_bus
 # (claude/giai_doan_11_ke_hoach.md §2, docs/api.md). Functional checks; the

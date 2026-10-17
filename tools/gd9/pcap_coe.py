@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """pcap_coe.py -- Phase 9.3: list the CoE SDO traffic of a master session.
 
 Reads a classic pcap (tshark -F pcap) captured on the master's interface

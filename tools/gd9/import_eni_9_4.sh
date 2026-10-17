@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # import_eni_9_4.sh — Phase 9.4: take the ENI files exported by TwinCAT
 # (docs/twincat_9_4.md), convert, audit and check them.

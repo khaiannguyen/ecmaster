@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_groups.sh — Phase 9.1: group assignment per slave, empty
 # GROUP_IO, one-slave bus (P1/P2/P4: one LAN9252) and a motion-only bus

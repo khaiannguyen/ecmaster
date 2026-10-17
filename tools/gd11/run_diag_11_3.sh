@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_diag_11_3.sh -- Phase 11.3: ecm_diag as a client of ecm_run's API
 # (claude/giai_doan_11_ke_hoach.md §4, docs/api.md §11).

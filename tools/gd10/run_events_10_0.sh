@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_events_10_0.sh — Phase 10.0 R-07: what the real IS620N drives and the
 # master report when something happens on the bus, with ecm_run in OP and NO

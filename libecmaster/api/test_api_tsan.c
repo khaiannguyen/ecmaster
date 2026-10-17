@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* test_api_tsan.c -- Phase 11.1: the two-slot handoff under ThreadSanitizer.
  *
  *   ./test_api_tsan [puts]     one producer, one consumer (the api thread's shape)

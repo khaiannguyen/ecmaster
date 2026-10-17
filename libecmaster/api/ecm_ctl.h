@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_ctl.h -- Phase 11.2: ctl.sock, the command side of the remote
  * diagnostics API (docs/api.md §10, plan claude/giai_doan_11_ke_hoach.md §3).

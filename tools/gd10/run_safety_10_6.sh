@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_safety_10_6.sh — Phase 10.6: safety latches S1..S7 of the master's
 # CiA402 layer, through SOEM / ecm_run against the virtual drive of soft_bus.

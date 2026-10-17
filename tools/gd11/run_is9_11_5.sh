@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_is9_11_5.sh -- Phase 11.5 IS-09: the i226 receive path, configuration
 # only (claude/giai_doan_11_ke_hoach.md §6.3; docs/rt_profiles.md §10).

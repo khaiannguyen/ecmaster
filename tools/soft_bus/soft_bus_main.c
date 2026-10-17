@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * soft_bus_main.c — CLI + socket + main loop. All ESC logic lives in
  * esc_core.c, kept separate so it is testable offline (see test_offline.c).

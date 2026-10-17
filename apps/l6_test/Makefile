@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 SUDO ?= sudo   # Phase 9.0: make caps SUDO= when already root
 # l6_test — Phase 6 (L6) DC test tool. Needs SOEM v2.0.0 built with CMake.
 # Override SOEM_DIR / SOEM_BUILD if your tree lives elsewhere.

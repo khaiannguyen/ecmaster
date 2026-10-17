@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_100m.sh — Phase 9.2: the i226 at 100 Mbit/s (LAN9252 and most
 # servos only speak 100BASE-TX). Plan: claude/giai_doan_9_ke_hoach.md §4.

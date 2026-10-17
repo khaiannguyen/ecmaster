@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_l6_tests.sh — run one L6 scenario: soft_bus (slave side, ground truth)
 # + l6_test (master side), then check soft_bus's DC log.

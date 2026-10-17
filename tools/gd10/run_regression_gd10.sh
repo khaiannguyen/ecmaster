@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_regression_gd10.sh — Phase 10.10: the whole Phase 10 regression in one
 # run on the Jetson (plan claude/giai_doan_10_ke_hoach.md §12): the Phase 9

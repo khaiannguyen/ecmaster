@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_profile_10_7.sh — Phase 10.7: PP, PV and homing through SOEM / ecm_run
 # against the 4-axis virtual drive of soft_bus (config/profiles/

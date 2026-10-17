@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_mixed_9_9.sh — Phase 9.9: soft_bus nodes that stand in for real
 # slaves (profile from the ESI), and a mixed virtual bus P1 + IS620N driven

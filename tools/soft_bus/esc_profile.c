@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_profile.c — Phase 9.9 soft_bus node profiles (see esc_profile.h).
  * ========================================================================== */

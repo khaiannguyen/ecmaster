@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """
 make_multiaxis_prof.py -- Phase 10.2: write the soft_bus profile of a multi-axis
 CiA402 test drive (our own design, vendor 0x499 like soft_bus and P1).

@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_spsc_stress.c — Phase 7.6: every lock-free RT <-> non-RT queue of
  * the project under ThreadSanitizer, one producer thread + one consumer

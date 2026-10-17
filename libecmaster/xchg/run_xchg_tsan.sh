@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_xchg_tsan.sh — Phase 10.4 Q-05: the app <-> RT exchange under TSan,
 # with negative controls (same shape as tests/tsan/run_tsan.sh, Phase 7.6).

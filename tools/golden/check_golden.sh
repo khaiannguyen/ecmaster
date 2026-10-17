@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # check_golden.sh — Phase 7.5: regression check of the master's frame
 # structure against tools/golden/golden_ecm_run.txt.

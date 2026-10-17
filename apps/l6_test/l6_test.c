@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * l6_test.c — Phase 6 (L6) test tool: SOEM v2.0.0 DC(a) + ecm_dc DC(b)
  * against soft_bus over veth.

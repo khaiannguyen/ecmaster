@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_hook_10_4.sh — Phase 10.4: RT hook + app <-> RT exchange in ecm_run.
 # Plan: claude/giai_doan_10_ke_hoach.md §6, design docs/app_rt_exchange.md.

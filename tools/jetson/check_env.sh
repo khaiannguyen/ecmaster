@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # check_env.sh — Phase 9.0: read-only check of the Jetson before a
 # measurement session (soak, rt_tail, golden, L-series, R-01/R-02, D-01).

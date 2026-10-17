@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """eni_cycle.py -- Phase 10.0 R-09: a copy of an enicfg for another cycle time.
 
   eni_cycle.py eni_2servo.enicfg 500 -o /tmp/eni_2servo_500us.enicfg

@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 // hw_ts_test.c — L0-03: verify TX/RX hardware timestamps increase monotonically
 #include <stdio.h>
 #include <stdlib.h>

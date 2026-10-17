@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # shellcheck shell=bash
 # ==========================================================================
 # is_lib.sh -- Phase 11.5: shared verdict of one ecm_run log (sourced by

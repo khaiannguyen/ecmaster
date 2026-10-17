@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * esc_cia402.h — Phase 10.2: a virtual CiA402 drive inside a soft_bus node.
  *

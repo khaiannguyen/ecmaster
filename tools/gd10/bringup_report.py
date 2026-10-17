@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """bringup_report.py -- Phase 10.0: grade R-02, R-04, R-05, R-06 of the IS620N
 bring-up from the raw files run_bringup_10_0.sh collects, and print the
 "real behaviour" tables the plan asks for (claude/giai_doan_10_ke_hoach.md

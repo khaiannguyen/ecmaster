@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 """extlinux_p1.py -- Phase 11.5: add the P1 boot entry (cpuidle.off=1) to
 /boot/extlinux/extlinux.conf without touching the existing entries.
 

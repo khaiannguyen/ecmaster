@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # check_ca_variant.sh -- Phase 9.3: the Complete Access ESI variant
 # (config/esi/softbus_esi_ca.xml) is up to date with softbus_esi.xml, valid
 # against the schema, and matches the SII of `soft_bus --coe-ca`; the default

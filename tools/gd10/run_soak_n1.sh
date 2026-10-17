@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_soak_n1.sh — Phase 10.1: long soak of a one-slave bus (open item of Phase 9.1:
 # the 30 min soak saw 1 isolated NOFRAME in 1.8 million cycles; the 8 h

@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_cia402_cfg.h — Phase 10.3: CiA402 axis configuration, the first part
  * of libecm_cia402 (the CiA402 layer kept OUT of libecmaster: every object

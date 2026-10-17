@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_x04.sh — Phase 9.3 X-04: IgH (an independent master) drives the
 # Phase 9.3 CoE features of soft_bus before SOEM is trusted with them.

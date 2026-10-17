@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * test_dc_offline.c — Phase 7.4: ecm_dc reply-age gate (L5-07);
  * W1/W2 (26/9): closed loop across 32-bit wraps, one late send.

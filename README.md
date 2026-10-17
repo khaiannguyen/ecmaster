@@ -60,3 +60,10 @@ cannot detect "WKC correct but data old".** `ecm_run` prints this for every
 such slave at startup. Commercial drives usually have no such counter, so
 they are `off`; use the drive's own status (statusword toggle bits, EMCY)
 in the application layer instead.
+
+## License
+Copyright 2026 khaiannguyen. ecmaster is free software under the **GNU General
+Public License v3.0 only** (`LICENSE`, SPDX `GPL-3.0-only`). It links SOEM
+v2.0.0, used under its GPLv3 terms; the components used, and how, are listed in
+`THIRD_PARTY.md`. Every file states its licence (SPDX header, or `REUSE.toml`
+for data files); check with `make test-license` (REUSE 3.3, `reuse lint`).

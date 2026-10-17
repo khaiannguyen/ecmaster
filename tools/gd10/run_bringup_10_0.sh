@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_bringup_10_0.sh — Phase 10.0: first contact with the two IS620N drives,
 # R-01 .. R-06 of claude/giai_doan_10_ke_hoach.md section 2.2. NOTHING here

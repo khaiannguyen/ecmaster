@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 # ==========================================================================
 # run_dc_9_5.sh — Phase 9.5: DC per slave from the ENI, against soft_bus
 # over veth. Plan: claude/giai_doan_9_ke_hoach.md §7.

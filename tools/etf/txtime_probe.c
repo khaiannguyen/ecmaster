@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * txtime_probe.c -- Phase 8.5 step 6.2 (T-03..T-06): launch-time accuracy of
  * the i226 with and without the ETF qdisc, before touching SOEM.

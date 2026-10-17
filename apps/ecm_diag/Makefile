@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
 SUDO ?= sudo   # Phase 9.0: make caps SUDO= when already root
 # ecm_diag — Phase 7.2 diagnostics CLI. Needs SOEM v2.0.0 built with CMake
 # (only for --standalone; the snapshot reader itself does not touch the bus).

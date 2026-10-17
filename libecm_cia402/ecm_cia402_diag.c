@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ecm_cia402_diag.c — Phase 10.8, see ecm_cia402_diag.h */
 #include "ecm_cia402_diag.h"
 #include "../libecmaster/diag/ecm_diag.h"     /* ecm_emcy_class_name (CiA 301 classes) */

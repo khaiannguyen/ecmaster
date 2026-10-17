@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 khaiannguyen */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /* ==========================================================================
  * ecm_json.h -- Phase 11.2: a small JSON tokenizer (no allocation), for the
  * one-line requests of ctl.sock and for config/api_sdo_allow.json.
