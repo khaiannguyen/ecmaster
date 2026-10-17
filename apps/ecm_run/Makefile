@@ -26,7 +26,8 @@ XCHG_SRC = ../../libecmaster/xchg/ecm_xchg.c                                    
 CIA402AX_SRC = ../../libecm_cia402/ecm_cia402_axis.c ../../libecm_cia402/ecm_cia402_diag.c   # Phase 10.5, 10.8
 API_SRC = ../../libecmaster/api/ecm_api.c ../../libecmaster/api/ecm_ctl.c ../../libecmaster/api/ecm_json.c ../../libecmaster/api/ecm_sha256.c   # Phase 11.1, 11.2
 # Phase 11.2: reported by ctl.sock info
-ECM_VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+# Phase 12.3: outside a git tree (source tarball) the VERSION file of the release
+ECM_VERSION ?= $(shell git describe --always --dirty 2>/dev/null || cat ../../VERSION 2>/dev/null || echo unknown)
 
 all: $(TARGET)
 

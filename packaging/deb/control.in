@@ -1,0 +1,18 @@
+Package: ecmaster
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: khaiannguyen <nguyenkhaian2906@gmail.com>
+Installed-Size: @SIZE@
+Depends: libc6, python3, ethtool, iproute2, libcap2-bin, systemd
+Recommends: linuxptp
+Section: misc
+Priority: optional
+Homepage: https://github.com/khaiannguyen/ecmaster
+Description: EtherCAT master on SOEM for Jetson Orin with PREEMPT_RT and Intel i226
+ ecm_run drives EtherCAT slaves (CiA402 drives, DC SYNC0) from a dedicated
+ RT core, with a remote diagnostics API (stats.json, ctl.sock), ecm_diag,
+ the soft_bus virtual slave chain, systemd units (ecm_run@NAME,
+ ecmaster-net@IFACE, ecmaster-clock@IFACE) and ecmaster-bootprofile.
+ Installed in /opt/ecmaster. Nothing is enabled by the package:
+ see /opt/ecmaster/share/doc/ecmaster/docs/systemd.md.
+ Licence GPL-3.0-only; links SOEM v2.0.0 (GPLv3).

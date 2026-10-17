@@ -62,6 +62,24 @@ such slave at startup. Commercial drives usually have no such counter, so
 they are `off`; use the drive's own status (statusword toggle bits, EMCY)
 in the application layer instead.
 
+## Install (Phase 12.3)
+Jetson Orin, JetPack r39.2 with the PREEMPT_RT kernel, i226 with the `igc`
+driver (`docs/i226.md`; the driver is not part of ecmaster).
+
+**Package** (arm64, built on the target):
+```bash
+tools/release/build_soem.sh                 # SOEM v2.0.0 + patches/ (sha256 checked) in build/SOEM
+make all SOEM_DIR=$PWD/build/SOEM
+make deb                                    # dist/ecmaster_<version>-1_arm64.deb
+sudo apt install ./dist/ecmaster_*.deb      # /opt/ecmaster; nothing enabled
+sudo /opt/ecmaster/sbin/ecmaster-port add enP1p1s0     # the EtherCAT port, kept at every boot
+sudo apt purge ecmaster                     # removes everything, port settings restored
+```
+**From source** (the release tarball `ecmaster-<version>.tar.gz` holds all
+that is needed, GPLv3): the same first two lines, then `sudo ./install.sh
+--iface enP1p1s0 --enable-net`, removed with `sudo ./uninstall.sh`. Both
+install the same layout; use one or the other. Running it: `docs/systemd.md`.
+
 ## License
 Copyright 2026 khaiannguyen. ecmaster is free software under the **GNU General
 Public License v3.0 only** (`LICENSE`, SPDX `GPL-3.0-only`). It links SOEM

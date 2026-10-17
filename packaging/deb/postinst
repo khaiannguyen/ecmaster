@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# ecmaster postinst (Phase 12.3): file capabilities (a .deb cannot carry
+# them), systemd reload. No unit is enabled here.
+set -e
+B=/opt/ecmaster/bin
+if [ "$1" = configure ]; then
+    setcap cap_net_raw,cap_net_admin,cap_ipc_lock,cap_sys_nice+ep $B/ecm_run
+    for b in ecm_diag ecm_peek soft_bus; do setcap cap_net_raw,cap_net_admin+ep $B/$b; done
+    if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+    echo "ecmaster: installed in /opt/ecmaster (PATH in new login shells)."
+    echo "ecmaster: next: sudo ecmaster-port add <EtherCAT port>; /opt/ecmaster/share/doc/ecmaster/docs/systemd.md"
+fi
+exit 0

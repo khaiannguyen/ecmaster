@@ -199,8 +199,8 @@ echo "=== install_system.sh --destdir"
 D=$T/pkg
 "$P/install_system.sh" --destdir "$D" --iface enP1p1s0 > "$T/i1.txt" 2>&1; r=$?
 M=$D/var/lib/ecmaster/system.list
-chk "I-01 installed: 4 helpers, 3 units, example.conf, NM conf, manifest of 9" \
-    "[ $r = 0 ] && [ \$(wc -l < $M) = 9 ] && while read -r f; do [ -f \"$D\$f\" ] || exit 1; done < $M"
+chk "I-01 installed: 5 helpers, 3 units, example.conf, NM conf, manifest of 10" \
+    "[ $r = 0 ] && [ \$(wc -l < $M) = 10 ] && while read -r f; do [ -f \"$D\$f\" ] || exit 1; done < $M"
 chk "I-02 placeholders replaced (/opt/ecmaster/libexec in the units), helpers executable, NM conf names the port" \
     "! grep -rq '@PREFIX@\|@LIBEXEC@' $D && grep -q 'ExecStart=/opt/ecmaster/libexec/ecmaster-run %i' $D/etc/systemd/system/ecm_run@.service \
      && [ -x $D/opt/ecmaster/libexec/ecmaster-net.sh ] && grep -qx 'unmanaged-devices=interface-name:enP1p1s0' $D/etc/NetworkManager/conf.d/99-ecmaster-unmanaged.conf"

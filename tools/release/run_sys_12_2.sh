@@ -29,6 +29,7 @@
 #           rx-usecs / GRO as in the sys01a snapshot
 #
 # Env: IFACE (default enP1p1s0) IF_M IF_S SB_PRIO SB_CPU LOG
+#      SYS02_BIN (ecm_run of SYS-02; default the tree's, INS-02: the installed one)
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -81,7 +82,7 @@ sys01b)
     ;;
 sys02)
     echo "=== SYS-02 ecm_run@sys02 on $IF_M (soft_bus, 2 virtual IS620N, CSP)"
-    [ -e /etc/systemd/system/ecm_run@.service ] || { echo "  not installed: run sys01a first"; FAIL=$((FAIL + 1)); continue; }
+    systemctl cat ecm_run@.service >/dev/null 2>&1 || { echo "  not installed: run sys01a first"; FAIL=$((FAIL + 1)); continue; }
     for i in "$IF_M" "$IF_S"; do ip link show "$i" >/dev/null 2>&1 || { echo "  $i missing: sudo ip link add $IF_M type veth peer name $IF_S && sudo ip link set $IF_M up && sudo ip link set $IF_S up"; exit 2; }; done
     pgrep -x soft_bus >/dev/null && { echo "  soft_bus already running"; exit 2; }
     IS=$LOG/is620n_sim.prof
@@ -99,9 +100,9 @@ sys02)
 ECM_IFACE=$IF_M
 ECM_ARGS="--n 2 --eni $ROOT/config/eni/eni_2servo_mm.enicfg --pdo-scan --no-tx-ts --pdo-set 1:0x607F:0=8388608,2:0x607F:0=8388608 --hook cia402 --cia402-lead 20 --axis 1:0,2:0 --axis-modes csp --cia402-script '0.5 enable all; 1.5 cos 1 100000 1; 1.5 cos 2 100000 1'"
 ECM_NET_CHECK=no
-ECM_BIN=$ROOT/apps/ecm_run/ecm_run
+ECM_BIN=${SYS02_BIN:-$ROOT/apps/ecm_run/ecm_run}
 EOF
-    python3 /opt/ecmaster/libexec/ecmaster-run --print sys02 > "$LOG/sys02_cmd.txt" 2>&1
+    /opt/ecmaster/libexec/ecmaster-run --print sys02 > "$LOG/sys02_cmd.txt" 2>&1
     rm -rf /run/ecmaster/sys02
     t0=$(date '+%Y-%m-%d %H:%M:%S')
     systemctl start ecm_run@sys02

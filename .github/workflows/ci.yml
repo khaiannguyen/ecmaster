@@ -99,6 +99,8 @@ jobs:
         run: tests/tsan/run_tsan.sh 1000000
       - name: Boot-time integration (Phase 12.2 N/C/R/B/I, fakes for ethtool / ip / systemctl, + negative controls)
         run: tools/release/test_sys_offline.sh
+      - name: Release tooling (Phase 12.3 make dist, build_soem patch sums, install/uninstall, ecmaster-port, .deb, + negative controls)
+        run: tools/release/test_release_offline.sh
 
 
   golden:

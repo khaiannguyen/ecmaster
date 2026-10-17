@@ -76,6 +76,10 @@ if [ $UNINSTALL = 1 ]; then
             do_ rm -f "$DESTDIR$f"
         done < "$DESTDIR$MANIFEST"
         do_ rm -f "$DESTDIR$MANIFEST"
+        # Phase 12.3: a port declared later with ecmaster-port is not in the manifest
+        if [ -f "$DESTDIR$NMCONF" ] && head -1 "$DESTDIR$NMCONF" | grep -q '^# ecmaster'; then
+            echo "  rm $NMCONF"; do_ rm -f "$DESTDIR$NMCONF"
+        fi
         # our own directories only, each only when empty (never /opt, /etc...)
         for d in "$PREFIX/libexec" "$PREFIX/sbin" "$PREFIX" /etc/ecmaster /var/lib/ecmaster; do
             [ -d "$DESTDIR$d" ] && do_ rmdir --ignore-fail-on-non-empty "$DESTDIR$d"
@@ -107,6 +111,7 @@ put "$HERE/libexec/ecmaster-net.sh"   "$PREFIX/libexec/ecmaster-net.sh"   755
 put "$HERE/libexec/ecmaster-clock.sh" "$PREFIX/libexec/ecmaster-clock.sh" 755
 put "$HERE/libexec/ecmaster-run"      "$PREFIX/libexec/ecmaster-run"      755
 put "$HERE/sbin/ecmaster-bootprofile" "$PREFIX/sbin/ecmaster-bootprofile" 755
+put "$HERE/sbin/ecmaster-port"        "$PREFIX/sbin/ecmaster-port"        755   # Phase 12.3
 for u in ecmaster-net@.service ecmaster-clock@.service ecm_run@.service; do
     put "$HERE/systemd/$u" "$UNITDIR/$u" 644
 done
@@ -117,7 +122,7 @@ if [ ${#IFACES[@]} -gt 0 ]; then
     LIST+=("$NMCONF")
     if [ $DRY = 0 ]; then
         mkdir -p "$DESTDIR$(dirname "$NMCONF")"
-        printf '# ecmaster (Phase 12.2): NetworkManager leaves the EtherCAT port(s) alone\n# (it would reset the qdisc and the link). Removed by install_system.sh --uninstall.\n[keyfile]\nunmanaged-devices=%s\n' \
+        printf '# ecmaster (Phase 12.2): NetworkManager leaves the EtherCAT port(s) alone\n# (it would reset the qdisc and the link). Managed by ecmaster-port / install_system.sh.\n[keyfile]\nunmanaged-devices=%s\n' \
             "$devs" > "$DESTDIR$NMCONF"
     fi
 fi

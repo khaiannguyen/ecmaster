@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# Phase 12.3: run logs and captures stay in the repository but not in the
+# source tarball (make dist = git archive); the evidence pack carries them.
+**/log_* export-ignore
+**/log_*/** export-ignore
+*.log export-ignore
+*.pcap export-ignore
+*.pcapng export-ignore

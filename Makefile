@@ -8,6 +8,8 @@
 #                             capabilities -- Phase 8 operating trap), then getcap
 #   make all caps             the usual sequence after a change
 #   make test-offline         the CI "offline" job (no SOEM, no network)
+#   make dist / make deb      Phase 12.3: source tarball / binary package in dist/
+#                             (SOEM: tools/release/build_soem.sh, SOEM_DIR=$PWD/build/SOEM)
 #   make test-license         Phase 12.1: reuse lint, SPDX headers, LIC-03
 #                             (needs reuse >= 3.0, see the script header)
 #
@@ -19,7 +21,7 @@ APPS     := apps/ecm_run apps/ecm_diag apps/ecm_peek apps/l4_test apps/l6_test
 CAPS_BIN := tools/soft_bus/soft_bus apps/ecm_run/ecm_run apps/ecm_diag/ecm_diag apps/ecm_peek/ecm_peek \
             apps/l4_test/l4_test apps/l6_test/l6_test
 
-.PHONY: all soft_bus apps caps caps-show test-offline test-license clean
+.PHONY: all soft_bus apps caps caps-show test-offline test-license dist deb clean
 
 all: soft_bus apps
 
@@ -58,6 +60,13 @@ test-offline:
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
 	tools/release/test_sys_offline.sh   # Phase 12.2: units, helpers, boot profiles, install_system.sh (fakes, no root)
+	tools/release/test_release_offline.sh   # Phase 12.3: make dist, build_soem patch check, install/uninstall, ecmaster-port, deb
+
+dist:
+	tools/release/make_dist.sh            # Phase 12.3: dist/ecmaster-VERSION.tar.gz (git archive of HEAD)
+
+deb:
+	tools/release/build_deb.sh            # Phase 12.3: dist/ecmaster_VERSION-1_ARCH.deb from the built binaries
 
 test-license:
 	tools/release/test_license_offline.sh

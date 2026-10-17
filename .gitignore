@@ -85,3 +85,7 @@ log_gd11_*/
 libecmaster/api/test_ctl_offline
 libecmaster/api/test_ctl_offline_asan
 libecmaster/api/test_ctl_neg
+
+# Phase 12.3: tools/release/build_soem.sh, make dist / make deb
+/build/
+/dist/

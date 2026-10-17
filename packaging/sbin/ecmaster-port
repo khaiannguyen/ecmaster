@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# ==========================================================================
+# ecmaster-port -- Phase 12.3: declare / withdraw an EtherCAT port after an
+# install (.deb or install.sh), without the source tree.
+#
+#   sudo ecmaster-port add IFACE      NetworkManager leaves IFACE alone, and
+#                                     ecmaster-net@IFACE is enabled now and at boot
+#   sudo ecmaster-port remove IFACE   the reverse (the port settings are restored)
+#   ecmaster-port status              ports declared, unit state
+#
+# The NetworkManager file is /etc/NetworkManager/conf.d/99-ecmaster-unmanaged.conf
+# (the same as install_system.sh --iface); its first line marks it as ours.
+# Env (tests): ECM_NMCONF SYSTEMCTL NMCLI
+# ==========================================================================
+set -u
+NMCONF=${ECM_NMCONF:-/etc/NetworkManager/conf.d/99-ecmaster-unmanaged.conf}
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+NMCLI=${NMCLI:-nmcli}
+usage () { echo "usage: ecmaster-port add|remove IFACE | status" >&2; exit 2; }
+ports () { sed -n 's/^unmanaged-devices=//p' "$NMCONF" 2>/dev/null | tr ';' '\n' | sed -n 's/^interface-name://p'; }
+write () {   # the port list on stdin -> NMCONF (removed when empty)
+    local list
+    list=$(grep . | sort -u | sed 's/^/interface-name:/' | paste -sd';')
+    if [ -z "$list" ]; then rm -f "$NMCONF"; return; fi
+    mkdir -p "$(dirname "$NMCONF")"
+    printf '# ecmaster (Phase 12.2): NetworkManager leaves the EtherCAT port(s) alone\n# (it would reset the qdisc and the link). Managed by ecmaster-port / install_system.sh.\n[keyfile]\nunmanaged-devices=%s\n' "$list" > "$NMCONF.tmp" &&
+        mv "$NMCONF.tmp" "$NMCONF"
+}
+reload () { command -v "$NMCLI" >/dev/null && $NMCLI general reload conf 2>/dev/null; return 0; }
+
+case ${1:-} in
+add|remove)
+    [ $# = 2 ] || usage
+    IF=$2
+    [[ "$IF" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || { echo "ecmaster-port: bad interface name '$IF'" >&2; exit 2; }
+    if [ "$1" = add ]; then
+        [ -e "/sys/class/net/$IF" ] || [ -n "${ECM_NMCONF:-}" ] || { echo "ecmaster-port: no interface $IF" >&2; exit 1; }
+        if ip -o route show default dev "$IF" 2>/dev/null | grep -q .; then
+            echo "ecmaster-port: $IF carries the default route: not an EtherCAT port" >&2; exit 2
+        fi
+        { ports; echo "$IF"; } | write; reload
+        $SYSTEMCTL enable --now "ecmaster-net@$IF" || { echo "ecmaster-port: ecmaster-net@$IF failed: journalctl -u ecmaster-net@$IF" >&2; exit 1; }
+        echo "ecmaster-port: $IF declared (unmanaged by NetworkManager, ecmaster-net@$IF enabled)"
+    else
+        $SYSTEMCTL disable --now "ecmaster-net@$IF" 2>/dev/null
+        ports | grep -vx "$IF" | write; reload
+        echo "ecmaster-port: $IF withdrawn (settings restored, NetworkManager may manage it again)"
+    fi
+    ;;
+status)
+    p=$(ports)
+    [ -n "$p" ] || { echo "no EtherCAT port declared ($NMCONF)"; exit 0; }
+    for i in $p; do echo "$i: ecmaster-net@$i $($SYSTEMCTL is-enabled "ecmaster-net@$i" 2>/dev/null) / $($SYSTEMCTL is-active "ecmaster-net@$i" 2>/dev/null)"; done
+    ;;
+*) usage ;;
+esac

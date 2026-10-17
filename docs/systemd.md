@@ -14,6 +14,11 @@ Mục tiêu: sau mỗi lần boot, Jetson tự về đúng cấu hình đã đo,
 Lý do có `ecmaster-net@`: IS-09 đo 31 936 NOFRAME với `rx-usecs` mặc định của driver, so với 87 khi `rx-usecs 0` (`docs/i226.md`). Tốc độ link không bị ép: slave tự thương lượng 100 Mbit/s.
 
 ## 2. Cài và gỡ
+Từ GĐ12.3 có hai đường cài, cùng bố cục `/opt/ecmaster` (README mục Install):
+- **Gói `.deb`:** `sudo apt install ./dist/ecmaster_*.deb`, rồi `sudo ecmaster-port add enP1p1s0` (NetworkManager bỏ qua cổng, bật `ecmaster-net@enP1p1s0`). Gỡ: `sudo ecmaster-port remove enP1p1s0`, `sudo apt purge ecmaster`.
+- **Từ mã nguồn:** `sudo ./install.sh --iface enP1p1s0 --enable-net`, gỡ bằng `sudo ./uninstall.sh`. `install.sh` cài binary, cấu hình, tài liệu, rồi gọi `packaging/install_system.sh` (phần dưới).
+
+Chỉ phần tích hợp hệ thống (không binary), dùng khi phát triển:
 ```bash
 sudo packaging/install_system.sh --iface enP1p1s0 --enable-net    # cài + bật ecmaster-net@enP1p1s0
 sudo packaging/install_system.sh --dry-run --iface enP1p1s0       # xem trước, không ghi gì
@@ -69,4 +74,4 @@ sudo systemctl stop ecm_run@demo                               # SIGTERM = kết
 
 ## 6. Chưa làm ở bước này
 - `jetson_clocks` không tự chạy lúc boot (các số đo đều ở MAXN_SUPER + `jetson_clocks`): vẫn chạy tay. Có thể thêm unit ở bước sau nếu cần.
-- Gói `.deb` và `install.sh` cài binary: bước 12.3.
+- `ecmaster-port status` liệt kê cổng đã khai báo và trạng thái unit.

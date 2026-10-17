@@ -18,6 +18,7 @@ path = [
     "tools/golden/*.txt", "tools/gd9/*.enicfg", "**/testdata/**",
     "**/*.log", "**/*.pcap", "**/*.pcapng", "**/log_*/**",
     "apps/ecm_run/soem.supp",
+    "VERSION", "patches/SHA256SUMS", "packaging/deb/control.in", "packaging/deb/copyright",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = "2026 khaiannguyen"

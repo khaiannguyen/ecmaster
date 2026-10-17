@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# ecmaster postrm (Phase 12.3): purge removes what the package did not own:
+# the NetworkManager file written by ecmaster-port, the run state.
+set -e
+NM=/etc/NetworkManager/conf.d/99-ecmaster-unmanaged.conf
+if [ "$1" = purge ]; then
+    if [ -f $NM ] && head -1 $NM | grep -q '^# ecmaster'; then
+        rm -f $NM
+        command -v nmcli >/dev/null && nmcli general reload conf >/dev/null 2>&1 || true
+    fi
+    rm -rf /run/ecmaster
+    rmdir /etc/ecmaster 2>/dev/null || true
+fi
+if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+exit 0
