@@ -9,6 +9,7 @@ IS620N). Entry point: `apps/ecm_run`.
 |---|---|
 | Remote diagnostics API (`stats.json`, `ctl.sock`, `ecm_diag --api`) | `docs/api.md` |
 | RT boot profiles P0/P1, ETF, short cycles, dead time, 250 us budget | `docs/rt_profiles.md` |
+| Boot-time set-up (systemd units, `/etc/ecmaster/NAME.conf`, `ecmaster-bootprofile`) | `docs/systemd.md` |
 | Benchmark on 2 IS620N, next to the acontis Jetson Orin figures | `docs/benchmark.md` |
 | i226 driver, ETF / LaunchTime, receive path | `docs/i226.md` |
 | Fault policy, recovery | `docs/fault_policy.md` |

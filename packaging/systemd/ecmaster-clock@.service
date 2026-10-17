@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# Phase 12.2: only for ecm_run --link etf (docs/i226.md). phc2sys keeps the
+# PHC of %I on CLOCK_REALTIME; systemd-timesyncd is stopped while it runs and
+# started again on stop if it was running before.
+#   systemctl start ecmaster-clock@enP1p1s0
+[Unit]
+Description=ecmaster: PHC of %I follows CLOCK_REALTIME (phc2sys) for ecm_run --link etf
+After=ecmaster-net@%i.service
+Wants=ecmaster-net@%i.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/ecmaster/clock-%i.env
+ExecStartPre=@LIBEXEC@/ecmaster-clock.sh pre %I
+ExecStart=@LIBEXEC@/ecmaster-clock.sh run %I
+ExecStopPost=@LIBEXEC@/ecmaster-clock.sh post %I
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,10 @@
 #   tools/jetson/check_env.sh --iface enP1p1s0 --etf   also the ETF prerequisites
 #   tools/jetson/check_env.sh --soak                leftovers are FAIL, not WARN
 #   tools/jetson/check_env.sh --no-iface            host checks only (veth rigs)
+#   tools/jetson/check_env.sh --boot                Phase 12.2 (SYS-01): right after a
+#                                    reboot, the port must already be set up by
+#                                    ecmaster-net@IFACE (enabled, active, rx-usecs 0,
+#                                    GRO off, NetworkManager unmanaged); each is a FAIL
 #
 # Collects the traps found so far: isolcpus lost (Phase 8.5 measured the
 # wake tail "without isolcpus"), NetworkManager resetting the qdisc, ETF
@@ -22,13 +26,14 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-IFACE=enP1p1s0; ETF=0; SOAK=0; NO_IFACE=0; RT_CPU=3
+IFACE=enP1p1s0; ETF=0; SOAK=0; NO_IFACE=0; RT_CPU=3; BOOT=0
 while [ $# -gt 0 ]; do
     case $1 in
         --iface) IFACE=$2; shift ;;
         --etf) ETF=1 ;;
         --soak) SOAK=1 ;;
         --no-iface) NO_IFACE=1 ;;
+        --boot) BOOT=1 ;;
         --rt-cpu) RT_CPU=$2; shift ;;
         *) echo "unknown option $1"; exit 3 ;;
     esac
@@ -40,6 +45,7 @@ info () { echo "  [INFO] $*"; }
 warn () { echo "  [WARN] $*"; NW=$((NW+1)); }
 fail () { echo "  [FAIL] $*"; NF=$((NF+1)); }
 leftover () { if [ $SOAK = 1 ]; then fail "$@"; else warn "$@"; fi; }
+bootreq () { if [ $BOOT = 1 ]; then fail "$@"; else warn "$@"; fi; }   # Phase 12.2
 have () { command -v "$1" >/dev/null 2>&1; }
 
 echo "=== host"
@@ -139,14 +145,14 @@ if [ $NO_IFACE = 0 ]; then
                 *) pass "EEE $eee" ;;
             esac
             gro=$(ethtool -k "$IFACE" 2>/dev/null | awk -F': ' '/^generic-receive-offload:/{print $2}')
-            case "$gro" in off*) pass "GRO off" ;; "") ;; *) warn "GRO $gro: sudo ethtool -K $IFACE gro off gso off tso off" ;; esac
+            case "$gro" in off*) pass "GRO off" ;; "") ;; *) bootreq "GRO $gro: sudo ethtool -K $IFACE gro off gso off tso off" ;; esac
             rxu=$(ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
             # Phase 10.0: without root the query can fail silently -> it passed unseen at 3 us
             [ -z "$rxu" ] && rxu=$(sudo -n ethtool -c "$IFACE" 2>/dev/null | awk -F': ' '/^rx-usecs:/{print $2}')
             case "$rxu" in
                 0) pass "rx-usecs 0" ;;
-                "") warn "interrupt coalescing not readable (run check_env with sudo): want rx-usecs 0" ;;
-                *) warn "rx-usecs $rxu: sudo ethtool -C $IFACE rx-usecs 0   (igc queue-pair mode: rx-usecs covers tx too)" ;;
+                "") bootreq "interrupt coalescing not readable (run check_env with sudo): want rx-usecs 0" ;;
+                *) bootreq "rx-usecs $rxu: sudo ethtool -C $IFACE rx-usecs 0   (igc queue-pair mode: rx-usecs covers tx too)" ;;
             esac
         else
             warn "ethtool not installed"
@@ -158,6 +164,17 @@ if [ $NO_IFACE = 0 ]; then
                 "") info "NetworkManager does not know $IFACE" ;;
                 *) fail "NetworkManager manages $IFACE ($st): it resets the qdisc -- sudo nmcli device set $IFACE managed no" ;;
             esac
+        fi
+        # Phase 12.2: what makes the settings above survive a reboot
+        if have systemctl && [ -d /run/systemd/system ]; then
+            u=ecmaster-net@$IFACE.service
+            en=$(systemctl is-enabled "$u" 2>/dev/null); ac=$(systemctl is-active "$u" 2>/dev/null)
+            if [ "$en" = enabled ] && [ "$ac" = active ]; then pass "$u enabled and active (settings restored at boot)"
+            elif [ "$en" = enabled ]; then fail "$u enabled but $ac: journalctl -u $u"
+            else bootreq "$u not enabled ($en): rx-usecs / GRO are lost at reboot -- sudo systemctl enable --now $u (packaging/install_system.sh)"; fi
+            nmc=/etc/NetworkManager/conf.d/99-ecmaster-unmanaged.conf
+            if grep -q "interface-name:$IFACE\b" "$nmc" 2>/dev/null; then pass "$IFACE unmanaged at boot ($nmc)"
+            elif have nmcli; then bootreq "$IFACE not in $nmc: 'nmcli device set ... managed no' does not survive a reboot -- packaging/install_system.sh --iface $IFACE"; fi
         fi
         if have tc; then
             q=$(tc qdisc show dev "$IFACE" 2>/dev/null)

@@ -57,6 +57,7 @@ test-offline:
 	$(MAKE) -C libecmaster/api test test_asan negctl tsan schema   # Phase 11.1, 11.2 (ctl.sock offline + negative controls)
 	python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
 	tests/tsan/run_tsan.sh 1000000
+	tools/release/test_sys_offline.sh   # Phase 12.2: units, helpers, boot profiles, install_system.sh (fakes, no root)
 
 test-license:
 	tools/release/test_license_offline.sh

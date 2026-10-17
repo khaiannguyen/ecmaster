@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# Phase 12.2: ecm_run with /etc/ecmaster/%i.conf (see example.conf).
+#   systemctl start ecm_run@demo        systemctl stop ecm_run@demo
+#   journalctl -u ecm_run@demo          /run/ecmaster/demo/stats.json (--api)
+# Restart=no: a master that stopped while driving axes is not restarted
+# behind the operator's back (docs/fault_policy.md). Stop = SIGTERM = the
+# normal end of ecm_run: S6 walk-down of the axes, final stats.json.
+[Unit]
+Description=ecmaster EtherCAT master (/etc/ecmaster/%i.conf)
+After=network.target time-sync.target
+
+[Service]
+Type=simple
+ExecStart=@LIBEXEC@/ecmaster-run %i
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=no
+LimitMEMLOCK=infinity
+LimitRTPRIO=99
+
+[Install]
+WantedBy=multi-user.target

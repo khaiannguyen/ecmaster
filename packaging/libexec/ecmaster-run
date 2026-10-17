@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+"""ecmaster-run -- Phase 12.2: start ecm_run from /etc/ecmaster/NAME.conf
+(ecm_run@NAME.service). The file is read, never sourced.
+
+  ecmaster-run NAME              check, then exec ecm_run
+  ecmaster-run --print NAME      print the command line and exit (no checks
+                                 of the machine; for tests and for reading)
+  ecmaster-run --conf-dir DIR NAME
+
+NAME.conf: KEY=VALUE lines, '#' comments, values optionally in "..." or '...'.
+  ECM_IFACE       EtherCAT port (required)
+  ECM_ARGS        the other ecm_run options (required), split like a shell
+                  command line ('...' / "..." group words, e.g.
+                  --cia402-script '0.5 enable all; 1.5 cos 1 100000 1');
+                  never run by a shell: no variables ('$', '`'), and an
+                  unquoted ; | & < > ( ) is refused
+  ECM_API         yes (default) | no: add --api --api-dir /run/ecmaster/NAME
+                  unless ECM_ARGS already has --api-dir
+  ECM_NET_CHECK   yes (default) | no: refuse to start when ECM_IFACE is not
+                  set up (ecmaster-net.sh check: rx-usecs 0, GRO off);
+                  `no` for veth test rigs
+  ECM_BIN         ecm_run to use (default PREFIX/bin/ecm_run)
+
+Refused (exit 2, ecm_run not started): unknown key, missing ECM_IFACE /
+ECM_ARGS, --iface in ECM_ARGS, shell syntax in a value, ECM_IFACE carrying
+a default route (the port of the SSH session or of the Internet, never an
+EtherCAT bus), port not set up (ECM_NET_CHECK=yes), --link etf without
+phc2sys running (ecmaster-clock@IFACE.service).
+
+The service has Restart=no: after a fault the operator decides
+(docs/fault_policy.md). Stop with `systemctl stop ecm_run@NAME`: SIGTERM
+takes ecm_run through its normal end (S6 walk-down of the axes, final
+stats.json).
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+PREFIX = os.path.dirname(HERE)                      # PREFIX/libexec/ecmaster-run
+KEYS = {"ECM_IFACE", "ECM_ARGS", "ECM_API", "ECM_NET_CHECK", "ECM_BIN"}
+BAD = re.compile(r"[;|&`$<>\\\"'()]")       # values other than ECM_ARGS
+BAD_ARGS = re.compile(r"[`$\\]")                 # ECM_ARGS: quotes allowed, see split_args
+NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+IFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+
+
+class Refused(Exception):
+    pass
+
+
+def read_conf(path):
+    conf = {}
+    with open(path) as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line)
+            if not m:
+                raise Refused("%s:%d: not KEY=VALUE: %s" % (path, n, line))
+            k, v = m.group(1), m.group(2).strip()
+            if k not in KEYS:
+                raise Refused("%s:%d: unknown key %s (known: %s)" % (path, n, k, ", ".join(sorted(KEYS))))
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            if (BAD_ARGS if k == "ECM_ARGS" else BAD).search(v):
+                raise Refused("%s:%d: %s: shell syntax is not allowed in a value" % (path, n, k))
+            conf[k] = v
+    return conf
+
+
+def split_args(v):
+    """words of ECM_ARGS; an unquoted shell operator is refused (the value is
+    never given to a shell: 'a; b' would only reach ecm_run as words)"""
+    lx = shlex.shlex(v, posix=True, punctuation_chars=True)
+    lx.whitespace_split = True
+    words = list(lx)
+    for w in words:
+        if w and all(c in "();<>|&" for c in w):
+            raise Refused("ECM_ARGS: shell operator %r outside quotes" % w)
+    return words
+
+
+def yesno(conf, key, default):
+    v = conf.get(key, default).lower()
+    if v not in ("yes", "no"):
+        raise Refused("%s=%s: yes or no" % (key, v))
+    return v == "yes"
+
+
+def command(name, conf):
+    for k in ("ECM_IFACE", "ECM_ARGS"):
+        if not conf.get(k):
+            raise Refused("%s missing" % k)
+    iface = conf["ECM_IFACE"]
+    if not IFACE.match(iface):
+        raise Refused("ECM_IFACE=%s: bad interface name" % iface)
+    args = split_args(conf["ECM_ARGS"])
+    if "--iface" in args:
+        raise Refused("ECM_ARGS has --iface: the port is ECM_IFACE")
+    binary = conf.get("ECM_BIN") or os.path.join(PREFIX, "bin", "ecm_run")
+    argv = [binary, "--iface", iface] + args
+    if yesno(conf, "ECM_API", "yes"):
+        if "--api" not in args:
+            argv.append("--api")
+        if "--api-dir" not in args:
+            argv += ["--api-dir", "/run/ecmaster/" + name]
+    return argv
+
+
+def machine_checks(conf, argv):
+    iface = conf["ECM_IFACE"]
+    if not os.path.exists("/sys/class/net/" + iface):
+        raise Refused("ECM_IFACE=%s: no such interface" % iface)
+    r = subprocess.run(["ip", "-o", "route", "show", "default", "dev", iface], capture_output=True, text=True)
+    if r.stdout.strip():
+        raise Refused("ECM_IFACE=%s carries a default route (%s): not an EtherCAT port" % (iface, r.stdout.strip()))
+    if yesno(conf, "ECM_NET_CHECK", "yes"):
+        net = os.path.join(HERE, "ecmaster-net.sh")
+        r = subprocess.run([net, "check", iface], capture_output=True, text=True)
+        sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            raise Refused("%s is not set up: systemctl enable --now ecmaster-net@%s "
+                          "(or ECM_NET_CHECK=no for a veth rig)" % (iface, iface))
+    if "etf" in [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--link"]:
+        if subprocess.run(["pgrep", "-x", "phc2sys"], capture_output=True).returncode != 0:
+            raise Refused("--link etf needs phc2sys: systemctl start ecmaster-clock@%s" % iface)
+    if not os.access(argv[0], os.X_OK):
+        raise Refused("%s: not an executable (ECM_BIN?)" % argv[0])
+
+
+def main(av):
+    show = False
+    conf_dir = "/etc/ecmaster"
+    rest = []
+    i = 0
+    while i < len(av):
+        if av[i] == "--print":
+            show = True
+        elif av[i] == "--conf-dir" and i + 1 < len(av):
+            conf_dir = av[i + 1]
+            i += 1
+        elif av[i] in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            rest.append(av[i])
+        i += 1
+    if len(rest) != 1:
+        print(__doc__)
+        return 2
+    name = rest[0]
+    try:
+        if not NAME.match(name):
+            raise Refused("bad instance name %r" % name)
+        path = os.path.join(conf_dir, name + ".conf")
+        if not os.path.isfile(path):
+            raise Refused("%s does not exist (example: %s/example.conf)" % (path, conf_dir))
+        conf = read_conf(path)
+        argv = command(name, conf)
+        if show:
+            print(" ".join(shlex.quote(a) for a in argv))
+            return 0
+        machine_checks(conf, argv)
+    except (Refused, OSError, ValueError) as e:
+        print("ecmaster-run: refused: %s" % e, file=sys.stderr)
+        return 2
+    print("ecmaster-run: %s" % " ".join(shlex.quote(a) for a in argv), flush=True)
+    os.execv(argv[0], argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

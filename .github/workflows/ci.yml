@@ -97,6 +97,8 @@ jobs:
         run: python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
         run: tests/tsan/run_tsan.sh 1000000
+      - name: Boot-time integration (Phase 12.2 N/C/R/B/I, fakes for ethtool / ip / systemctl, + negative controls)
+        run: tools/release/test_sys_offline.sh
 
 
   golden:

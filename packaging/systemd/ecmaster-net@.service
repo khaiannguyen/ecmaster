@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+# Phase 12.2: the EtherCAT port as measured, at every boot.
+#   systemctl enable --now ecmaster-net@enP1p1s0
+# Stop / disable restores the saved settings (ecmaster-net.sh down).
+[Unit]
+Description=ecmaster: EtherCAT port %I (rx-usecs 0, GRO/GSO/TSO off, EEE off, link up)
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@LIBEXEC@/ecmaster-net.sh up %I
+ExecStop=@LIBEXEC@/ecmaster-net.sh down %I
+
+[Install]
+WantedBy=multi-user.target

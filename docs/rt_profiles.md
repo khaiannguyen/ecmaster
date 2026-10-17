@@ -28,6 +28,33 @@ Hai cách tắt deep idle khác nhau ở phạm vi:
 
 ## 2. Thêm và chuyển sang P1
 
+### 2.0 Từ GĐ12: profile mặc định P0, công cụ `ecmaster-bootprofile`
+**Mặc định xuất xưởng là P0.** Chỉ chuyển sang P1 khi cần:
+
+| Tình huống | Profile |
+|---|---|
+| Chu kỳ ≥ 500 µs (1 ms là cấu hình đã đo đủ: BM-02, D-14) | **P0** |
+| Chu kỳ 250 µs (IS-07: P1 + etf + `--rx-guard-us 60`) | **P1** |
+| Chạy pin, ưu tiên điện năng | P0 (P1 tốn thêm ~30 mW, §5.3) |
+| Đo so sánh, cần đuôi wake jitter thấp nhất | P1 |
+
+```bash
+ecmaster-bootprofile status                    # entry, DEFAULT, profile đang boot
+sudo ecmaster-bootprofile add-p1               # thêm entry P1; DEFAULT KHÔNG đổi
+sudo ecmaster-bootprofile set-default P1 && sudo reboot
+tools/gd11/rt_profile.sh --expect P1           # sau boot
+sudo ecmaster-bootprofile set-default P0 && sudo reboot      # quay lại P0
+sudo ecmaster-bootprofile remove-p1            # (tuỳ chọn) xoá entry P1: file về đúng như trước
+```
+
+- Công cụ cài ở `/opt/ecmaster/sbin/` (`packaging/install_system.sh`). Từ repo gọi được trực tiếp: `packaging/sbin/ecmaster-bootprofile`.
+- Mỗi lần ghi đều sao lưu `extlinux.conf.bak-<ngày giờ>` (không bao giờ ghi đè bản sao lưu cũ). Có `--dry-run` để xem diff trước.
+- Entry P1 giống entry của `extlinux_p1.py` (cùng `LABEL real-time-noidle`), thêm một dòng `# ecmaster P1 of <P0>` để `set-default P0` biết entry gốc. `remove-p1` bị từ chối khi DEFAULT đang là P1.
+- Chọn P1 cho một lần boot mà không đổi DEFAULT: chọn entry ở boot menu qua console UART (`ttyTCU0`).
+- `rx-usecs 0`, GRO off và NetworkManager unmanaged được giữ qua reboot bởi `ecmaster-net@IFACE` (`docs/systemd.md`); `jetson_clocks` vẫn phải chạy tay sau mỗi lần boot (§2 dưới).
+
+### 2.1 Cách cũ (GĐ11): `extlinux_p1.py`
+
 Script `tools/gd11/extlinux_p1.py` chép entry `DEFAULT` hiện tại thành `LABEL real-time-noidle`, đổi `MENU LABEL` và thêm `cpuidle.off=1` vào cuối `APPEND`. Các entry cũ giữ nguyên, và trước mỗi lần ghi file được sao lưu thành `extlinux.conf.bak-<ngày giờ>`.
 
 ```bash

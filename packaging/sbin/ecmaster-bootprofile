@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 khaiannguyen
+# SPDX-License-Identifier: GPL-3.0-only
+"""ecmaster-bootprofile -- Phase 12.2: RT boot profiles in
+/boot/extlinux/extlinux.conf (docs/rt_profiles.md).
+
+  P0  the RT entry as installed: isolcpus=3 irqaffinity=0-2 ...; cpuidle on,
+      ecm_run holds /dev/cpu_dma_latency = 0 while it runs. The default.
+  P1  P0 + cpuidle.off=1: needed for cycles below 500 us (250 us measured),
+      costs ~30 mW (no CPU ever enters an idle state).
+
+  ecmaster-bootprofile status                  entries, DEFAULT, booted profile
+  ecmaster-bootprofile add-p1 [--from LABEL]   add the P1 entry (copy of DEFAULT
+                                               or LABEL + cpuidle.off=1);
+                                               DEFAULT is NOT changed
+  ecmaster-bootprofile set-default P0|P1|LABEL
+  ecmaster-bootprofile remove-p1               delete the P1 entry (refused while
+                                               it is the DEFAULT)
+  common: --file PATH (default /boot/extlinux/extlinux.conf), --dry-run
+
+Every write keeps a copy PATH.bak-YYYYMMDD-HHMMSS first. add-p1 followed by
+remove-p1 gives the original file back byte for byte (SYS-05). The P1 entry
+is LABEL real-time-noidle with a marker line '# ecmaster P1 of <P0 label>',
+the same entry tools/gd11/extlinux_p1.py writes (Phase 11.5) plus the marker.
+To boot P1 once without changing DEFAULT: choose it in the boot menu on the
+serial console (ttyTCU0).
+
+Refused (exit 2, nothing written): P1 exists already, no such label, the
+source entry has no APPEND or already has cpuidle.off, no DEFAULT line,
+remove-p1 while DEFAULT is P1.
+"""
+import datetime
+import difflib
+import os
+import re
+import shutil
+import sys
+
+P1_LABEL = "real-time-noidle"
+FLAG = "cpuidle.off=1"
+MARK = "# ecmaster P1 of "
+
+
+class Refused(Exception):
+    pass
+
+
+def parse(lines):
+    """-> (default label, {label: (start, end)}); end exclusive"""
+    default, blocks, cur, start = None, {}, None, None
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        m = re.match(r"(?i)^DEFAULT\s+(\S+)", s)
+        if m and cur is None:
+            default = m.group(1)
+        m = re.match(r"(?i)^LABEL\s+(\S+)", s)
+        if m:
+            if cur is not None:
+                blocks[cur] = (start, i)
+            cur, start = m.group(1), i
+    if cur is not None:
+        blocks[cur] = (start, len(lines))
+    return default, blocks
+
+
+def p0_of(lines, blocks):
+    a, b = blocks[P1_LABEL]
+    for ln in lines[a:b]:
+        if ln.strip().startswith(MARK):
+            return ln.strip()[len(MARK):].split()[0]
+    return None
+
+
+def add_p1(lines, src):
+    default, blocks = parse(lines)
+    src = src or default
+    if P1_LABEL in blocks:
+        raise Refused("LABEL %s exists already" % P1_LABEL)
+    if not src or src not in blocks:
+        raise Refused("no LABEL %s (labels: %s)" % (src, ", ".join(blocks) or "none"))
+    a, b = blocks[src]
+    body = lines[a:b]
+    while body and not body[-1].strip():
+        body = body[:-1]
+    out, seen = [], False
+    indent = "      "
+    for ln in body:
+        s = ln.strip()
+        if re.match(r"(?i)^LABEL\s", s):
+            ln = re.sub(r"(?i)(LABEL\s+)\S+", r"\g<1>" + P1_LABEL, ln, count=1)
+            ln = ln if ln.endswith("\n") else ln + "\n"
+            out.append(ln)
+            out.append("%s%s%s\n" % (indent, MARK, src))
+            continue
+        if re.match(r"(?i)^MENU\s+LABEL\s", s):
+            indent = ln[:len(ln) - len(ln.lstrip())]
+            ln = ln.rstrip("\n") + " (P1: cpuidle.off=1)\n"
+        elif re.match(r"(?i)^APPEND\s", s):
+            if "cpuidle.off" in ln:
+                raise Refused("LABEL %s already has cpuidle.off" % src)
+            ln = ln.rstrip("\n") + " " + FLAG + "\n"
+            seen = True
+        out.append(ln if ln.endswith("\n") else ln + "\n")
+    if not seen:
+        raise Refused("LABEL %s has no APPEND line" % src)
+    new = list(lines)
+    tail = ""
+    if new and not new[-1].endswith("\n"):
+        tail = "nonl"                    # remembered in the marker for remove-p1
+        new[-1] += "\n"
+    if tail:
+        out[1] = out[1].rstrip("\n") + " " + tail + "\n"
+    return new + ["\n"] + out
+
+
+def remove_p1(lines):
+    default, blocks = parse(lines)
+    if P1_LABEL not in blocks:
+        raise Refused("no LABEL %s" % P1_LABEL)
+    if default == P1_LABEL:
+        raise Refused("DEFAULT is %s: set-default P0 first" % P1_LABEL)
+    a, b = blocks[P1_LABEL]
+    nonl = any(ln.strip().startswith(MARK) and ln.strip().endswith(" nonl") for ln in lines[a:b])
+    if a > 0 and not lines[a - 1].strip():
+        a -= 1                           # the blank line add-p1 put in front
+    new = lines[:a] + lines[b:]
+    if nonl and new and new[-1].endswith("\n"):
+        new[-1] = new[-1][:-1]
+    return new
+
+
+def set_default(lines, want):
+    default, blocks = parse(lines)
+    label = want
+    if want.upper() == "P1":
+        label = P1_LABEL
+    elif want.upper() == "P0":
+        if P1_LABEL in blocks:
+            label = p0_of(lines, blocks)
+            if not label:
+                raise Refused("the P1 entry has no '%s' marker: give the P0 label" % MARK.strip())
+        elif default and default != P1_LABEL:
+            label = default
+        else:
+            raise Refused("no P1 entry and no other DEFAULT: give the P0 label")
+    if label not in blocks:
+        raise Refused("no LABEL %s (labels: %s)" % (label, ", ".join(blocks)))
+    new, done = [], False
+    for ln in lines:
+        if not done and re.match(r"(?i)^\s*DEFAULT\s+\S+", ln):
+            ln = re.sub(r"(?i)(DEFAULT\s+)\S+", r"\g<1>" + label, ln, count=1)
+            done = True
+        new.append(ln)
+    if not done:
+        raise Refused("no DEFAULT line")
+    return new
+
+
+def booted():
+    try:
+        cmd = open("/proc/cmdline").read()
+    except OSError:
+        return "?"
+    if "cpuidle.off=1" in cmd:
+        return "P1 (cpuidle.off=1 on the running kernel's command line)"
+    if "isolcpus=" in cmd:
+        return "P0 (isolcpus, cpuidle on)"
+    return "neither: no isolcpus on the command line (not an RT profile)"
+
+
+def status(path, lines):
+    default, blocks = parse(lines)
+    print("file    %s" % path)
+    print("DEFAULT %s%s" % (default, "  (= P1)" if default == P1_LABEL else ""))
+    for lab, (a, b) in blocks.items():
+        app = next((ln.strip() for ln in lines[a:b] if re.match(r"(?i)^\s*APPEND\s", ln)), "")
+        flags = [f for f in app.split() if f.split("=")[0] in ("isolcpus", "irqaffinity", "cpuidle.off", "nohz_full")]
+        tag = " [P1]" if lab == P1_LABEL else ""
+        print("LABEL   %-20s %s%s" % (lab, " ".join(flags) or "(no RT flag)", tag))
+    if P1_LABEL in blocks:
+        print("P1 entry present, P0 = %s" % p0_of(lines, blocks))
+    else:
+        print("no P1 entry (ecmaster-bootprofile add-p1)")
+    if path == "/boot/extlinux/extlinux.conf":
+        print("booted  %s" % booted())
+
+
+def main(av):
+    path, dry, src, rest = "/boot/extlinux/extlinux.conf", False, None, []
+    i = 0
+    while i < len(av):
+        a = av[i]
+        if a == "--file" and i + 1 < len(av):
+            path = av[i + 1]
+            i += 1
+        elif a == "--from" and i + 1 < len(av):
+            src = av[i + 1]
+            i += 1
+        elif a == "--dry-run":
+            dry = True
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            rest.append(a)
+        i += 1
+    if not rest or rest[0] not in ("status", "add-p1", "remove-p1", "set-default") \
+            or (rest[0] == "set-default") != (len(rest) == 2) or len(rest) > 2:
+        print(__doc__)
+        return 2
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()
+        if rest[0] == "status":
+            status(path, lines)
+            return 0
+        if rest[0] == "add-p1":
+            new, what = add_p1(lines, src), "LABEL %s added (DEFAULT unchanged)" % P1_LABEL
+        elif rest[0] == "remove-p1":
+            new, what = remove_p1(lines), "LABEL %s removed" % P1_LABEL
+        else:
+            new = set_default(lines, rest[1])
+            what = "DEFAULT -> %s" % parse(new)[0]
+    except (Refused, OSError) as e:
+        print("ecmaster-bootprofile: refused: %s" % e, file=sys.stderr)
+        return 2
+    sys.stdout.writelines(difflib.unified_diff(lines, new, path, path + " (new)"))
+    if new == lines:
+        print("no change")
+        return 0
+    if dry:
+        print("dry run: %s; nothing written" % what)
+        return 0
+    bak = path + ".bak-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    n, base = 1, bak
+    while os.path.exists(bak):          # two writes in one second: never overwrite a backup
+        bak = "%s-%d" % (base, n)
+        n += 1
+    shutil.copy2(path, bak)
+    tmp = path + ".ecmaster-tmp"
+    with open(tmp, "w") as fh:
+        fh.writelines(new)
+    shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+    print("written: %s; backup %s" % (what, bak))
+    if rest[0] == "set-default":
+        print("takes effect at the next boot; back: ecmaster-bootprofile set-default P0")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
