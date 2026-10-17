@@ -17,7 +17,8 @@
 #   LIC-03b  negative controls: a vendor ESI, a PDF, an IgH copyright line,
 #            an ESI-generated profile, each planted alone in a copy -> FAIL
 #
-# Needs: reuse (pip install --user reuse), python3, git.
+# Needs: reuse >= 3.0 (REUSE.toml; not the Ubuntu 24.04 apt package, 2.1),
+# python3, git. Exit 2 with the install command when reuse is missing or old.
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -29,7 +30,15 @@ chk () {   # NAME CONDITION...
     local n=$1; shift
     if eval "$*"; then echo "  PASS $n"; PASS=$((PASS + 1)); else echo "  FAIL $n"; FAIL=$((FAIL + 1)); fi
 }
-command -v reuse >/dev/null || { echo "reuse missing: pip install --user reuse (or pipx install reuse)"; exit 2; }
+HOWTO="python3 -m venv ~/.venvs/reuse && ~/.venvs/reuse/bin/pip install reuse && ln -sf ~/.venvs/reuse/bin/reuse ~/.local/bin/reuse (or pipx install reuse); not apt: Ubuntu 24.04 ships reuse 2.1"
+command -v reuse >/dev/null || { echo "reuse missing: $HOWTO"; exit 2; }
+# REUSE.toml needs reuse >= 3.0; 2.x ignores it and reports every data file
+# as unlicensed (Phase 12.1, seen on the Jetson with the apt package)
+RV=$(reuse --version 2>/dev/null | grep -o '[0-9][0-9]*\.[0-9][0-9.]*' | head -1)
+case "${RV%%.*}" in
+    ''|0|1|2) echo "reuse ${RV:-?} ($(command -v reuse)) is too old: REUSE.toml needs reuse >= 3.0 -- $HOWTO"; exit 2 ;;
+esac
+echo "reuse $RV ($(command -v reuse))"
 
 copy () {   # DEST: tracked + new (not ignored) files, no .git
     mkdir -p "$1"

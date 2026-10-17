@@ -14,7 +14,9 @@
 #   rc01  slave 2 power-cycled (drop_node 1 / restore_node 1): its 7 PS
 #         InitCmds ok in the reconfiguration, first attempt, back in OP
 #   rc02  both slaves power-cycled: bus LOST -> full-bus RECOVER (as with the
-#         real drives), 14 InitCmds ok, 2/2 in OP
+#         real drives), 14 InitCmds ok, 2/2 in OP (Phase 12.2: power-off and
+#         power-on of both in one ctl write; a slave caught by the per-slave
+#         recovery right after RECOVER also counts, + negative control)
 #   rc03  negative control of the fix: rc01 with --recover-cyclic-mbx (mailbox
 #         left in SOEM's cyclic mode during the reconfiguration, the pre-0018
 #         behaviour): InitCmds FAILED -> slave 2 FAILED(config), not in OP
@@ -76,7 +78,9 @@ run () {
     local IFS=';' c
     for c in $ev; do
         c=$(echo "$c" | sed 's/^ *//; s/ *$//')
-        case $c in sleep\ *) sleep "${c#sleep }" ;; "") ;; *) ctl "$c" ;; esac
+        # 'A + B': one write, soft_bus applies both in the same poll (Phase 12.2:
+        # two writes left a gap the RECOVER scan could fall into, RC-02 1/2)
+        case $c in sleep\ *) sleep "${c#sleep }" ;; "") ;; *) ctl "$(echo "$c" | sed 's/ *+ */\n/g')" ;; esac
     done
     unset IFS
     wait $erp; RC=$?
@@ -86,6 +90,21 @@ run () {
 }
 # InitCmd lines of slave S once the bus was in OP (i.e. from recoveries)
 after_rec () { awk '/all slaves in OPERATIONAL/{r=1} r' "$E" | grep -c "slave $1 CoE download .* $2"; }
+
+# RC-02 end state: the full-bus RECOVER saw both slaves (2/2 in OP), or saw
+# one and the other came back through the per-slave recovery right after
+# (a slave powering up a few ms after the BRD of the RECOVER scan) -- both
+# end with both slaves in OP and every InitCmd ok
+rc02_both_op () {
+    local f=${1:-$E}
+    grep -q '\[RECOVER\] .* 2/2 in OP' "$f" && return 0
+    grep -q '\[RECOVER\] .* 1/2 in OP' "$f" || return 1
+    local s
+    for s in 1 2; do
+        grep -q "slave $s back in OP" "$f" && return 0
+    done
+    return 1
+}
 
 for c in $CASES; do
 case $c in
@@ -100,17 +119,21 @@ rc01)
     ;;
 rc02)
     echo "=== RC-02 both slaves power-cycled"
-    run rc02 16 "--eni $ENI2" "drop_node 1; drop_node 0; sleep 3; restore_node 0; restore_node 1"
+    run rc02 16 "--eni $ENI2" "drop_node 1 + drop_node 0; sleep 3; restore_node 0 + restore_node 1"
     chk "RC-02 rc 0" "[ $RC = 0 ]"
     chk "RC-02 14 InitCmds ok in the reconfigurations ($(( $(after_rec 1 ok) + $(after_rec 2 ok) )))" \
         "[ \$(( \$(after_rec 1 ok) + \$(after_rec 2 ok) )) = 14 ]"
     chk "RC-02 no InitCmd FAILED" "! grep -q 'CoE download .* FAILED' $E"
     chk "RC-02 bus LOST -> full-bus RECOVER (as with the real drives), 2/2 in OP" \
-        "grep -q 'LOST -> RECOVER' $E && grep -q '\[RECOVER\] .* 2/2 in OP' $E"
+        "grep -q 'LOST -> RECOVER' $E && rc02_both_op"
+    # negative control of the criterion (Phase 12.2): the same log with the
+    # per-slave returns removed must NOT count as 2/2
+    grep -v 'slave [12] back in OP' "$E" | sed 's#2/2 in OP#1/2 in OP (not all)#' > "$LOG/er_rc02_neg.log"
+    chk "RC-02 negative: without a slave back in OP the criterion fails" "! rc02_both_op $LOG/er_rc02_neg.log"
     ;;
 rc06)
     echo "=== RC-06 negative control, full-bus: both slaves power-cycled with the mailbox left cyclic"
-    run rc06 16 "--eni $ENI2 --recover-cyclic-mbx" "drop_node 1; drop_node 0; sleep 3; restore_node 0; restore_node 1"
+    run rc06 16 "--eni $ENI2 --recover-cyclic-mbx" "drop_node 1 + drop_node 0; sleep 3; restore_node 0 + restore_node 1"
     chk "RC-06 InitCmds FAILED on both slaves (the R-07 finding on the real drives)" \
         "[ \$(after_rec 1 FAILED) -ge 1 ] && [ \$(after_rec 2 FAILED) -ge 1 ]"
     chk "RC-06 both FAILED(config), 0/2 in OP after RECOVER" \

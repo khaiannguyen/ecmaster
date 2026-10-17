@@ -19,6 +19,11 @@
 #   make all caps                                  (as your user, first)
 #   sudo -E tools/gd11/run_regression_gd11.sh      (~45 min)
 #   sudo -E STEPS="offline api ctl" tools/gd11/run_regression_gd11.sh
+#   sudo -E STEPS="offline gd10" GD10_STEPS="recover" tools/gd11/run_regression_gd11.sh
+#
+# STEPS is this script's own list: it is removed from the environment of the
+# Phase 10 runner (Phase 12.2 fix: it was passed down, every Phase 10 step
+# was "unknown"); GD10_STEPS chooses the Phase 10 steps.
 #
 # --api on under timing is covered by D-01 (6 x 30 min) and D-14 / BM-02 (real
 # drives): too long for a regression; their last results are listed in the
@@ -26,7 +31,7 @@
 # Each step: own log in $RLOG, exit code and RESULT line(s) collected into
 # $RLOG/summary.md. Steps are independent.
 #
-# Env: STEPS SB_PRIO (default 79) SB_CPU (default 2) IS620N_ESI RLOG
+# Env: STEPS GD10_STEPS SB_PRIO (default 79) SB_CPU (default 2) IS620N_ESI RLOG
 # ==========================================================================
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -77,7 +82,7 @@ case $s in
 offline) step offline "make test-offline + test_is_offline + test_bench_offline" -- \
              bash -c 'make test-offline && tools/gd11/test_is_offline.sh && tools/bench/test_bench_offline.sh' ;;
 gd10)    step gd10 "Phase 10 regression, API off (golden, gd9, 10.2..10.9, recover)" -- \
-             env RLOG="$RLOG/gd10" "$ROOT/tools/gd10/run_regression_gd10.sh" ;;
+             env -u STEPS ${GD10_STEPS:+STEPS="$GD10_STEPS"} RLOG="$RLOG/gd10" "$ROOT/tools/gd10/run_regression_gd10.sh" ;;
 api)     step api  "11.1 stats.json A-01..A-11"            -- env LOG="$RLOG/api"  "$HERE/run_api_11_1.sh" ;;
 ctl)     step ctl  "11.2 ctl.sock C-01..C-09"              -- env LOG="$RLOG/ctl"  "$HERE/run_ctl_11_2.sh" ;;
 diag)    step diag "11.3 ecm_diag through the API G-01..G-07" -- env LOG="$RLOG/diag" "$HERE/run_diag_11_3.sh" ;;

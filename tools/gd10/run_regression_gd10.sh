@@ -94,7 +94,7 @@ G=$ROOT/tools/gd10
 for s in $STEPS; do
 case $s in
 gd9)     step gd9     "Phase 9 regression (${GD9_STEPS:-12 steps: offline incl. CiA402 negctl, golden, G, C, DC, E, M, P, F, V, B, L5})" -- \
-             env ${GD9_STEPS:+STEPS="$GD9_STEPS"} RLOG="$RLOG/gd9" "$ROOT/tools/gd9/run_regression_gd9.sh" ;;
+             env -u STEPS ${GD9_STEPS:+STEPS="$GD9_STEPS"} RLOG="$RLOG/gd9" "$ROOT/tools/gd9/run_regression_gd9.sh" ;;   # Phase 12.2: our STEPS is not the child's
 servo)   step servo   "10.2 virtual CiA402 drive D-01..D-07, A-04"            -- env LOG="$RLOG/servo"   "$G/run_servo_10_2.sh" ;;
 axes)    step axes    "10.3 axis configuration K-01n..K-08, K-05"              -- env LOG="$RLOG/axes"    "$G/run_axes_10_3.sh" ;;
 hook)    step hook    "10.4 RT hook + exchange Q-01..Q-03 (${Q03_SEC:-30} s), H-01..H-05" -- env LOG="$RLOG/hook" "$G/run_hook_10_4.sh" ;;

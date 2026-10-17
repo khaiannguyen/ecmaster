@@ -9,7 +9,7 @@
 #   make all caps             the usual sequence after a change
 #   make test-offline         the CI "offline" job (no SOEM, no network)
 #   make test-license         Phase 12.1: reuse lint, SPDX headers, LIC-03
-#                             (needs reuse: pip install --user reuse)
+#                             (needs reuse >= 3.0, see the script header)
 #
 # SOEM must be v2.0.0 built with -DEC_MAXGROUP=4 and patches/soem-mbx-cnt.patch
 # + patches/soem-txtime.patch (see .github/workflows/ci.yml).
