@@ -39,14 +39,17 @@ git add tools/golden/golden_ecm_run.txt          # commit cùng thay đổi code
 
 ## CI (`.github/workflows/ci.yml`)
 
+*(Cập nhật GĐ12.4; nguồn đúng luôn là `ci.yml`.)*
+
 | Job | Nội dung | Chặn merge |
 |---|---|---|
-| `offline` | test offline soft_bus, telemetry, core (ecm_dc), diag, policy, kèm ASan/UBSan | có |
-| `golden` | SOEM v2.0.0 + `EC_MAXGROUP=4` + `patches/soem-mbx-cnt.patch`, veth, golden, đối chứng âm; giữ pcap khi fail | có |
+| `offline` | `make test-offline` tương đương: ESI/ENI, soft_bus, mọi `libecmaster`, `libecm_cia402` (negctl), TSan, `check_k05`, `tests/dc` (GĐ12.4), giấy phép (GĐ12.1), tích hợp hệ thống (GĐ12.2), công cụ phát hành (GĐ12.3); ASan/UBSan | có |
+| `golden` | SOEM v2.0.0 + `EC_MAXGROUP=4` + 2 patch, veth, 4 golden + đối chứng âm, các suite veth GĐ9/10; giữ pcap khi fail | có |
 | `l5-smoke` | 7.2 `run_l5_diag.sh`; 7.3 L5-01/02/05 + đối chứng âm; 7.4 L5-09/12 + đối chứng âm | không (`continue-on-error`): runner dùng chung, không RT |
+| `etf-soft` | GĐ8.5 `ecm_run --link etf` trên veth nhiều hàng đợi, ETF phần mềm (chỉ chức năng) | không |
 
 CI cũ build SOEM **không** có `-DEC_MAXGROUP=4`, trong khi `ecm_run` cần group 2.
 
-Đã mô phỏng cả ba job trên một bản chép sạch của repo với SOEM clone đúng tag + bản vá: đạt hết. Chưa chạy trên GitHub thật.
+CI chạy trên GitHub ở mỗi lần push (từ GĐ8).
 
 **Lần dùng thật đầu tiên (25/9):** sửa lỗi tắt máy (rời OP ngay khi vòng lặp dừng, xem `fault_policy.md` §12) làm SHUTDOWN có thêm một vòng "AL control + statecheck". `check_golden.sh` báo đúng dòng đó, golden được sinh lại có chủ đích (546 → 547 dòng).

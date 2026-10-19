@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 khaiannguyen */
 /* SPDX-License-Identifier: GPL-3.0-only */
-// hw_ts_test.c — L0-03: verify TX/RX hardware timestamps increase monotonically
+// hw_ts_test.c — L0-03: print the TX/RX hardware timestamps of 5 frames, to check
+// by eye that the i226 delivers them and that they increase (Phase 12.4: the
+// program itself checks nothing and always exits 0)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

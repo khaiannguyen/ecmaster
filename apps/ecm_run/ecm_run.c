@@ -192,7 +192,7 @@
 #include <grp.h>
 #include <stdatomic.h>
 
-#define IOMAP_SIZE   (256 * 1024)   /* see IOMAP_SIZE note in the Phase 3 file header */
+#define IOMAP_SIZE   (256 * 1024)   /* per group; SOEM maps a group into one buffer */
 
 static uint8 IOmap_motion[IOMAP_SIZE];
 static uint8 IOmap_io[IOMAP_SIZE];
@@ -602,8 +602,8 @@ static group_stats_t io;
 
 
 /* One snapshot per second of wall-clock progress, written with NO I/O
- * inside the hot loop -- see the Phase 3 file header note on why this
- * exists. */
+ * inside the hot loop: printing from the RT thread costs microseconds and
+ * can block on the terminal; everything is printed after the loop. */
 typedef struct {
     uint64_t tick;
     uint64_t motion_cycles, motion_mismatch, motion_overrun;
@@ -1689,8 +1689,8 @@ static void *telemetry_thread_fn(void *arg)
     return NULL;
 }
 
-/* Inert for now -- no CiA402 logic until later platforms. Exists so the
- * 5-thread skeleton matches master_plan_v2.md §2.4 from the start. */
+/* Application thread (master_plan_v2.md §2.4): the CiA402 test driver
+ * (Phase 10.5) and the xchg test producer (Phase 10.4); idle otherwise. */
 /* ---- Phase 10.5 test driver of the CiA402 layer (application thread) ---- */
 typedef struct { double t; char op[12]; int axis; double a, b; } cia_step_t;
 static int cia_parse(const char *src, cia_step_t *st, int max)
@@ -1910,8 +1910,8 @@ static void *mailbox_thread_fn(void *arg)
     return NULL;
 }
 
-/* ~100ms cadence per master_plan_v2.md §2.4. Nothing to poll yet (no
- * CoE/mailbox until Phase 5) -- deliberately its OWN thread, separate
+/* Mailbox thread (master_plan_v2.md §2.4): runs the SDO queue of
+ * libecmaster/mailbox (Phase 5) -- deliberately its OWN thread, separate
  * from telemetry, so that Phase 9's future SDO/mailbox calls here
  * (which can block far longer than a 1ms/8ms cycle) can never delay
  * telemetry's ring-draining -- see the Phase 4 review note on this. */
@@ -4155,7 +4155,7 @@ int main(int argc, char **argv)
     else
         fprintf(stderr, "ecm_run: all slaves in OPERATIONAL. Starting cyclic loop (base tick = %ld us, no IO group).\n",
                 motion_cycle_us);
-    fprintf(stderr, "ecm_run: no further stderr output from the RT thread until the loop ends -- see the Phase 3 file header for why.\n");
+    fprintf(stderr, "ecm_run: no further stderr output from the RT thread until the loop ends -- printing from the RT thread would cost microseconds.\n");
 
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);                 /* Phase 10.6 S6: same shutdown path */

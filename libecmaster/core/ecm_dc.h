@@ -32,9 +32,9 @@ typedef struct {
     int32_t  kp_div;          /* u_P = e / kp_div         (default 8)          */
     int32_t  ki_div;          /* u_I = sum(e) / ki_div    (default 256)        */
     int64_t  max_adjust_ns;   /* |u| clamp per cycle      (default cycle/20)   */
-    int64_t  lock_window_ns;  /* |e| inside -> counts toward lock (5 us)       */
+    int64_t  lock_window_ns;  /* |e| inside -> counts toward lock (cycle/100)  */
     uint32_t lock_samples;    /* consecutive in-window samples to lock (100)   */
-    int64_t  unlock_ns;       /* |e| above this while locked -> unlock (c/4)   */
+    int64_t  unlock_ns;       /* |e| above this while locked -> unlock (c/20)  */
     int64_t  gate_ns;         /* Phase 7.4 reply-age gate: reject a sample
                                * whose DC time moved more than this away from
                                * the host clock; 0 = off (default). Only valid

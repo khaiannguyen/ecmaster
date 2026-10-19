@@ -16,7 +16,7 @@
  *   table   every mapped entry of every slave, in mapping order: slave,
  *           direction, PDO, index, sub, bit length, bit offset inside the
  *           slave's own outputs/inputs. Built from one of two sources:
- *             - the ENI (.enicfg "pdo" records, ecm_eni_pdo_table())
+ *             - the ENI (.enicfg "pdo" records, read by libecmaster/config)
  *             - a scan of the bus at PREOP (ecm_pdo_soem.h): CoE 0x1C12/
  *               0x1C13 + 0x16xx/0x1Axx, SII PDO categories as fallback
  *   loc     where each slave's outputs/inputs start in its group's IOmap
@@ -81,7 +81,7 @@ typedef struct {
 } ecm_pdo_handle_t;
 
 /* 0 ok; -1 if the entry is not mapped (err names the slave and lists what
- * it does map), or is longer than 64 bit (use ecm_pdo_copy_*). */
+ * it does map), or is longer than 64 bit (not supported). */
 int ecm_pdo_bind(const ecm_pdo_table_t *t, const ecm_pdo_loc_t *loc, int slave,
                  uint16_t index, uint8_t sub, ecm_pdo_handle_t *h, char *err, size_t errlen);
 

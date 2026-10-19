@@ -170,7 +170,7 @@
 #define REG_SM1_STATUS  (REG_SM_BASE + 1 * REG_SM_ENTRY_SIZE + SM_OFF_STATUS) /* 0x080D */
 #define SM_STATUS_MAILBOX_FULL  0x08
 
-/* ---- Distributed Clock — not used at this stage, reserved for later ---- */
+/* ---- Distributed Clock (esc_dc.c, Phase 6) ---- */
 #define REG_DC_RECV_TIME_PORT0 0x0900
 #define REG_DC_SYSTEM_TIME     0x0910
 #define REG_DC_SYSTEM_OFFSET   0x0920

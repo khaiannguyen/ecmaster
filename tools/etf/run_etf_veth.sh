@@ -11,7 +11,7 @@
 #
 # Uses its own pair (vethe_m / vethe_s) so the golden rig veth_m / veth_s is not
 # touched. Needs root, soft_bus and ecm_run built (ecm_run with the SOEM txtime
-# patch). Parameters are wider than on the i226 (delta 400 / lead 350 / asap 150)
+# patch). Parameters are wider than on the i226 (delta 500 / lead 450 / asap 300, DELTA_US / LEAD_US / ASAP_US)
 # because a CI runner is not RT.
 #
 # Usage: sudo -E tools/etf/run_etf_veth.sh [smoke|l5|all]     (default all)

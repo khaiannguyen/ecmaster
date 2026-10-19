@@ -1,5 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 khaiannguyen */
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Phase 12.4: interface only, NOT implemented -- no file defines these ops
+ * and none includes this header. The ETF backend of master-v1.0 is the
+ * SOEM patch patches/soem-txtime.patch; AF_XDP (Phase 11.8) is deferred. */
 #ifndef ECM_LINK_OPS_H
 #define ECM_LINK_OPS_H
 

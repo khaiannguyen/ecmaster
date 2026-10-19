@@ -97,6 +97,8 @@ jobs:
         run: python3 tools/gd10/check_k05.py --self-test && python3 tools/gd10/check_k05.py
       - name: ThreadSanitizer on the lock-free queues (7.6, self-check + negative control)
         run: tests/tsan/run_tsan.sh 1000000
+      - name: DC unit + 1 h closed loop in simulated time with the soft_bus ESC, naive formula must slip (Phase 6, in CI since 12.4)
+        run: make -C tests/dc test
       - name: Boot-time integration (Phase 12.2 N/C/R/B/I, fakes for ethtool / ip / systemctl, + negative controls)
         run: tools/release/test_sys_offline.sh
       - name: Release tooling (Phase 12.3 make dist, build_soem patch sums, install/uninstall, ecmaster-port, .deb, + negative controls)

@@ -14,6 +14,10 @@ IS620N). Entry point: `apps/ecm_run`.
 | i226 driver, ETF / LaunchTime, receive path | `docs/i226.md` |
 | Fault policy, recovery | `docs/fault_policy.md` |
 | CiA402 layer, safety boundary | `docs/cia402.md`, `docs/safety_boundary.md` |
+| Every test: script, rig, negative control, last result; DoD | `TEST_PLAN.md` |
+| ETG.1500 master class self-assessment | `ETG1500_COMPLIANCE.md` |
+| What the master does on the wire, requirements for a new slave | `docs/ban_giao_slave.md` |
+| Third-party components and licences | `THIRD_PARTY.md` |
 
 Regression (veth, no drive): `sudo -E tools/gd11/run_regression_gd11.sh`.
 
@@ -25,6 +29,32 @@ Regression (veth, no drive): `sudo -E tools/gd11/run_regression_gd11.sh`.
 - Remote diagnostics API on (2 readers, 20 Hz SDO, client churn): wake jitter
   and occupancy p99.99 unchanged; API thread 0.2 % of one core.
 
+## Architecture
+```
+apps/ecm_run      the master (one process, 5 threads)
+  RT thread       main() itself, SCHED_FIFO 80 on the isolated CPU 3: one tick =
+                  send/receive of each process data group (LRW), WKC check,
+                  DC master-shift (PI on the reference clock), bus state
+                  machine, the application hook, mailbox pump (1 frame/cycle),
+                  diagnostic frame once a second; never blocks, never prints
+  telemetry       histograms (wake jitter, prep_send, turnaround, occupancy)
+  application     CiA402 / xchg producers (hook ring, seqlock)
+  mailbox         SDO queue (SOEM cyclic mailbox, pumped by the RT thread)
+  monitor         bus events, per-slave recovery, diagnostics, API (--api)
+libecm_cia402     axis = (slave, n): drive state machine, CSP/CSV/PP/PV/HM,
+                  safety latches S1..S7 (docs/cia402.md, docs/safety_boundary.md)
+libecmaster       no CiA402 object knowledge (check_k05.py): config (ENI
+                  loader), core (DC), diag, mailbox, pdo (bind by index/sub),
+                  policy (bus FSM, recovery), telemetry, xchg, api
+SOEM v2.0.0       + patches/ (mailbox Cnt, SO_TXTIME), EC_MAXGROUP=4
+i226 / igc        af_packet, or etf: launch time by the NIC (--link etf)
+tools/soft_bus    a chain of N virtual ESCs on veth: the slave of every test
+```
+Two process data groups (`GROUP_MOTION` 1 ms with DC, `GROUP_IO` slower);
+fault policy RUN / DEGRADED / LOST / RECOVER with per-slave recovery and
+configuration errors never retried (`docs/fault_policy.md`); remote
+diagnostics `stats.json` + `ctl.sock` off the RT path (`docs/api.md`).
+
 ## Known limitations
 - The API is for diagnostics: no axis command, no bus state change, no
   "clear failed" through it. `sdo_write` only for objects in an allowlist
@@ -32,14 +62,41 @@ Regression (veth, no drive): `sudo -E tools/gd11/run_regression_gd11.sh`.
 - A slave whose ESC has no FMMU left for the SM1 status (the IS620N has 2)
   gets no cyclic mailbox: no SDO and no EMCY in SAFE-OP/OP (the API answers
   `no_mailbox`). Start-up InitCmds work. Drive faults are seen through 0x603F.
+  New slaves for this master should have >= 3 FMMUs.
 - All i226 interrupts are on CPU0 (Tegra); the tail of the receive path is
   what limits 250 us. Keep CPU0 light; API and web clients on CPUs 1-2.
 - The JetPack RT kernel has no `NO_HZ_FULL` / `RCU_NOCB`: CPU 3 still gets
   the tick.
-- i226 `rx-usecs 0` and GRO/GSO/TSO off must be set again after every boot.
-- No poll-mode backend (AF_XDP) yet: Phase 11.8, deferred.
-- No LRD/LWR, `tx_launch_err` only through `tools/etf/txtime_probe`.
+- i226 `rx-usecs 0` and GRO/GSO/TSO off are kept across reboots only with
+  `ecmaster-net@IFACE` enabled (`docs/systemd.md`); `jetson_clocks` is
+  still a manual step after boot.
+- No poll-mode backend (AF_XDP, Phase 11.8, deferred); `libecmaster/link`
+  is an interface without implementation.
+- No LRD/LWR process data, `tx_launch_err` only through `tools/etf/txtime_probe`.
+- Turnaround is measured with software timestamps (both directions, network
+  stack included); hardware timestamps are used only for the ETF launch
+  accuracy (`tools/etf/txtime_probe`).
+- No sync window monitoring: 0x092C is not read (ETG.1500 1103); the DC
+  quality reported is the master-shift error |e| and the slaves' SYNC0
+  ground truth on soft_bus.
+- Not implemented: Hot Connect, slave-to-slave (ETG.1500 1201), cable
+  redundancy, EoE / FoE / SoE / AoE / VoE, SDO Info use, a master object
+  dictionary (`ETG1500_COMPLIANCE.md`).
+- Known code issues kept for after v1.0 (none seen in a test or on the
+  rig): an SDO that times out while queued behind another leaves its job
+  on the caller's stack (`libecmaster/mailbox`); soft_bus answers no SDO
+  Info request although two test profiles advertise it; soft_bus starts the
+  ESM only on a write that starts at 0x0120; `xchg` counts a SET dropped
+  during a bus loss as applied; the histogram sum is unsigned (mean only).
 
+## Not testable on this rig, and why
+| Item | Why | Covered instead by |
+|---|---|---|
+| A LAN9252 slave (X-02/X-03 against it, R-01 on it, its SII written to the chip) | the LAN9252 / STM32H723 slave is a separate project (Platform 1), not built yet | 2 Inovance IS620N (Phase 10: bring-up R-01..R-09, CSP W-08, D-14, BM-02); soft_bus with the P1 draft profile; IgH and TwinCAT cross-checks (X-01, X-02s, X-04, X-05) |
+| Cyclic mailbox in OP on a real slave | the IS620N has 2 FMMUs (above) | soft_bus (3 FMMUs) L4-03, D-15 negative control on the IS620N |
+| ETG Conformance Test Tool | not available to the project | `ETG1500_COMPLIANCE.md` (self-assessment) |
+| More than 2 real slaves, 4 axes on one slave, 250 us on a real 4-axis slave | hardware | soft_bus N = 8 / 32, `cia402_4ax.prof` (8 h CSP soak), IS-05/IS-10 budget |
+| Cable redundancy, Hot Connect | not implemented | -- |
 
 ## Input freshness (`ecm_run --fresh`, GD9.8)
 

@@ -11,9 +11,10 @@
  *    (LogicalStartBit/StopBit, PhysicalStartBit), byte-aligned ones keep the
  *    original byte path. TwinCAT maps the SM1 "mailbox full" signal with a
  *    1-bit FMMU (MBoxState, 0x080D.0) — see fmmu_apply_bits().
- *  - AL Control/Status (ESM state transitions) not implemented — that is
- *    Phase 3 scope (state machine).
- *  - Distributed Clocks (0x0900+) not implemented — Phase 4 scope.
+ *  - AL Control/Status: [RESOLVED, Phase 3] ESM transitions, AL status
+ *    codes (esc_al_control_write). Triggered only by a write that STARTS
+ *    at 0x0120 (a real ESC reacts to any write covering it).
+ *  - Distributed Clocks: [RESOLVED, Phase 6] esc_dc.c.
  *  - SM watchdog: [RESOLVED, Phase 7] process data watchdog modelled
  *    (0x0400/0x0420/0x0440/0x0442, trigger on complete writes to SMs with
  *    control bit6) — see esc_wd_check(). PDI watchdog is not modelled.
@@ -22,8 +23,9 @@
  *    (esc_fault.c), since a software bus has no physical layer errors.
  *  - No CoE SDO mailbox server: [RESOLVED, Phase 5] esc_coe.c now
  *    implements one on SM0/SM1 (see esc_coe.h for scope: expedited +
- *    segmented upload/download, Abort for unknown objects; no SDO Info,
- *    no Emergency, no Complete Access).
+ *    segmented upload/download, Abort for unknown objects, Emergency and
+ *    Complete Access since Phase 9; no SDO Info: other CoE services get
+ *    no answer).
  *  - Reserved register regions accept writes freely (a real ESC would
  *    reject/ignore them) — accepted trade-off, see project notes.
  * ========================================================================== */

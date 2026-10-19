@@ -16,8 +16,11 @@ all: test_ecm_dc_unit test_dc_e2e
 test_ecm_dc_unit: test_ecm_dc_unit.c $(CORE)/ecm_dc.c $(CORE)/ecm_dc.h
 	$(CC) $(CFLAGS) -o $@ test_ecm_dc_unit.c $(CORE)/ecm_dc.c
 
-test_dc_e2e: test_dc_e2e.c $(SB)/esc_core.c $(SB)/esc_dc.c $(CORE)/ecm_dc.c
-	$(CC) $(CFLAGS) -o $@ test_dc_e2e.c $(SB)/esc_core.c $(SB)/esc_dc.c $(CORE)/ecm_dc.c
+# Phase 12.4: esc_core.c calls into the CoE, fault, profile and CiA402 parts
+# since Phase 5..10; the test had stopped linking (it was in no make target)
+SB_SRCS = $(addprefix $(SB)/,esc_core.c esc_coe.c esc_dc.c esc_fault.c esc_profile.c esc_cia402.c)
+test_dc_e2e: test_dc_e2e.c $(SB_SRCS) $(CORE)/ecm_dc.c
+	$(CC) $(CFLAGS) -o $@ test_dc_e2e.c $(SB_SRCS) $(CORE)/ecm_dc.c -lm
 
 test: all
 	./test_ecm_dc_unit && ./test_dc_e2e

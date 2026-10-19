@@ -9,8 +9,11 @@
 > Access also becomes a Class B `shall` (ETG.1500 V1.0.2 Table 1, 503: Class A "shall", Class B "should,
 > shall if ENI Import supported"; re-checked against the PDF in GD9.11); implemented and closed in GD9.
 >
-> Last update: GD9.11 (1/10/2026) -- 503 closed (IgH X-04 and a TwinCAT CA ENI done); ENI loader for vendor
-> ENIs (302, 101), EMCY (505), DC per slave from the ENI (1101), mixed bus with a vendor servo profile.
+> Last update: GD12.4 (19/10/2026), final for `master-v1.0`. GD9.11: 503 closed (IgH X-04 and a TwinCAT CA ENI);
+> ENI loader for vendor ENIs (302, 101), EMCY (505), DC per slave from the ENI (1101), mixed bus with a vendor
+> servo profile. GD10-11: two real Inovance IS620N servo drives (CiA402 CSP over DC, 1 h runs), remote
+> diagnostics API. GD12.4: **1103 corrected to not implemented** (no code reads 0x092C; the earlier row was
+> wrong), 404 restricted on slaves with 2 FMMUs.
 
 ## Basic Features
 
@@ -51,7 +54,7 @@
 | 401 | Support Mailbox | shall | shall | ✅ | ✅ | Phase 5 |
 | 402 | Mailbox Resilient Layer | shall | shall | ✅ | ✅ | Handled by SOEM |
 | 403 | Multiple Mailbox channels | may | may | ❌ | ❌ | Not needed |
-| 404 | Mailbox polling | shall | shall | ✅ | ✅ | SOEM 2.0's new mailbox cyclic API |
+| 404 | Mailbox polling | shall | shall | ✅ | ✅ | SOEM 2.0's mailbox cyclic API, pumped by the RT thread (one mailbox frame per cycle). **Restriction (GD11.6 D-15):** it needs an FMMU for the SM1 status; on a slave whose ESC has only 2 FMMUs (Inovance IS620N) the master does not run the cyclic mailbox (start-up InitCmds still work, no SDO/EMCY in SAFE-OP/OP, the API answers `no_mailbox`); `--mbx-cyclic-force` is the negative control |
 
 ## CAN application layer over EtherCAT (CoE)
 
@@ -84,7 +87,7 @@
 |---|---|---|---|---|---|---|
 | 1101 | DC support | shall | shall if DC supported | ✅ (`ec_dc.c`, DC(a)) | ✅ | **Core of this project** — Phase 6, DC(a)+DC(b). GD9.5: with an ENI, reference clock, AssignActivate (0x0300/0x0700), SYNC1 and shift per slave from the ENI; a slave without DC gets no SYNC0; reference clock on a non-DC slave refused (DC-01..DC-05). Vendor servo as reference clock on the mixed bus (DC-02) |
 | 1102 | Continuous Propagation Delay compensation | should | should | ⏳ | ✅ | Spec's suggested technique (5.13.2): replace the NOP with a periodic BWR at 0x0900 — applied inside the PI loop |
-| 1103 | Sync window monitoring | should | should | ⏳ | ✅ | Read 0x092C (System Time Difference) via BRD — added to `ecm_diag` in Phase 7 |
+| 1103 | Sync window monitoring | should | should | ⏳ | ❌ | **Not implemented** (corrected in GD12.4: no code in `apps/` or `libecmaster/` reads 0x092C; the earlier ✅ was wrong). The master reports its own DC control error \|e\| (p50..p99.99, LOCKED/unlocks) and, on soft_bus, the slaves' SYNC0 ground truth (SYNC0 intervals without a frame). Planned with the Platform 1 slave (handover BG-03) |
 
 ## Slave-to-Slave Communication & Master information
 
@@ -118,8 +121,10 @@
 | Cross-check with IgH EtherCAT Master 1.6.13 | IgH brings the same bus (N=8) to OP for 600 s with 0 WKC errors, DC bus shift + SYNC0 | GD8 8.1 (X-01a/b/c) |
 | Cross-check with TwinCAT 3 as master | TwinCAT drives soft_bus over a real cable: OP, OP→PREOP, CoE online read/write, device scan | GD8 8.3 (X-02s) |
 | Launch time (TSN, SO_TXTIME + ETF offload on i226) | `ecm_run --link etf`: motion frame launched by the NIC at the cycle target, offset ~314 ns, spread ~30 ns; R-02 A/B vs af_packet: no WKC loss at N=8/32, DC error p99 halved at N=8. At 100 Mbit/s (LAN9252 link speed, GD9.2): ETF offload missed 0 / invalid 0 over 600 000 frames, launch_err p50 40 ns, max 177 ns. Not an ETG requirement; a master-side implementation choice for 201/1101 | GD8 8.5, GD9.2, `docs/i226.md` |
+| Real servo drives (Phase 10-11) | 2 × Inovance IS620N: bring-up R-01..R-09 (SII ↔ ESI, PDO from the drive, DC, power-cycle recovery with the ENI InitCmds), CSP on both axes 1 h (W-08), 1 ms benchmark 4 × 1 h with and without CPU load (BM-02: 0 overrun, 0 lost frame, DC \|e\| p99.99 1 µs with ETF), 250 µs 1 h (IS-07) | `docs/bringup_10_0.md`, `docs/w_10_9.md`, `docs/benchmark.md`, `docs/rt_profiles.md` |
+| Packaging (Phase 12) | GPL-3.0-only with REUSE headers; source tarball that rebuilds SOEM + ecmaster alone (LIC-02); `.deb` and `install.sh` (INS-01/02); systemd units restore the RT port set-up at boot (SYS-01..04) | `TEST_PLAN.md`, `docs/systemd.md` |
 | Vendor slave on a virtual bus | soft_bus node profiles generated from an ESI (Inovance IS620N, P1 draft): SII, CoE dictionary, PDO assign rules, 0x001D/0x001E on a PDO size mismatch; TwinCAT mixed ENIs reach OP on P1 + IS620N in both orders | GD9.9, `docs/soft_bus_profiles.md` |
 
 ## Self-assessment conclusion
 
-The project meets most of **Class B** (every Class B `shall` item is implemented except 1201; 503 Complete Access, mandatory since ENI import, is closed in GD9), plus a substantial part of **Class A** (including DC, which Class A requires at a higher bar than Class B in some respects). No claim of fully meeting either class is made, due to the deliberate omission of 1201 (Slave-to-Slave) — a scoping decision, not a technical shortcoming.
+The project meets most of **Class B** (every Class B `shall` item is implemented except 1201; 503 Complete Access, mandatory since ENI import, is closed in GD9), plus a substantial part of **Class A** (including DC, which Class A requires at a higher bar than Class B in some respects). Of the `should` items, 102 (IRQ field), 303 (explicit device identification) and 1103 (sync window monitoring) are not implemented. Mailbox polling (404) does not run on slaves with only 2 FMMUs (see 404). No claim of fully meeting either class is made, due to the deliberate omission of 1201 (Slave-to-Slave) — a scoping decision, not a technical shortcoming.

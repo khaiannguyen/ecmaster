@@ -89,7 +89,7 @@ int main(int argc, char **argv)
     request_state(EC_STATE_SAFE_OP, 200000, "INIT_TO_SAFEOP_DIRECT"); /* expect: rejected */
 
     printf("\n--- Human-readable summary ---\n");
-    printf("Run run_l2_tests.sh against this output to grade L2-01..04 and L2-06.\n");
+    printf("Grade L2-01..04 and L2-06 from the L2: lines above (no grading script).\n");
     printf("L2-05 (forced reject) is NOT covered here — needs a soft_bus-side hook.\n");
 
     ecx_close(&ctx);
