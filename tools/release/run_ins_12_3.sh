@@ -31,8 +31,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 IFACE=${IFACE:-enP1p1s0}
 LOG=${LOG:-$ROOT/log_gd12_ins_$(date +%Y%m%d_%H%M%S)}
-mkdir -p "$LOG"; LOG=$(cd "$LOG" && pwd)
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E)"; exit 3; }
+mkdir -p "$LOG"; LOG=$(cd "$LOG" && pwd)
+chown "${SUDO_USER:-root}:" "$LOG"     # LIC-02 writes into it as that user (make_dist)
 [ $# -gt 0 ] || { sed -n '4,30p' "$0"; exit 2; }
 PASS=0; FAIL=0
 chk () { local n=$1; shift; if eval "$*"; then echo "  [PASS] $n"; PASS=$((PASS + 1)); else echo "  [FAIL] $n"; FAIL=$((FAIL + 1)); fi; }
