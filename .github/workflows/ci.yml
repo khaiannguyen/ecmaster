@@ -103,6 +103,8 @@ jobs:
         run: tools/release/test_sys_offline.sh
       - name: Release tooling (Phase 12.3 make dist, build_soem patch sums, install/uninstall, ecmaster-port, .deb, + negative controls)
         run: tools/release/test_release_offline.sh
+      - name: Soak watcher fault rules (Phase 12.5, + negative controls)
+        run: python3 tools/release/soak_watch.py --self-test
 
 
   golden:

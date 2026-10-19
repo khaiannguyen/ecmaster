@@ -62,6 +62,7 @@ test-offline:
 	$(MAKE) -C tests/dc test   # Phase 12.4: DC unit + closed loop with the soft_bus ESC (was in no target)
 	tools/release/test_sys_offline.sh   # Phase 12.2: units, helpers, boot profiles, install_system.sh (fakes, no root)
 	tools/release/test_release_offline.sh   # Phase 12.3: make dist, build_soem patch check, install/uninstall, ecmaster-port, deb
+	python3 tools/release/soak_watch.py --self-test   # Phase 12.5: soak fault rules + negative controls
 
 dist:
 	tools/release/make_dist.sh            # Phase 12.3: dist/ecmaster-VERSION.tar.gz (git archive of HEAD)

@@ -105,8 +105,10 @@ real slave. `IS620N` = two Inovance IS620N drives. `x` = another master
 | Soak N=1 | 8 h, 1 slave, veth: rare-event rate | `tools/gd10/run_soak_n1.sh` | 0 overrun, DC LOCKED 0 unlock, 0 LOST, WKC 0/0/0, NOFRAME ≤ 2 | 0 NOFRAME / 28.8 M (GĐ10.1) |
 | Soak CSP | 8 h, 4 CSP axes on one virtual slave | `tools/gd10/run_soak_cia402.sh` | as above + 0 underrun / late, tracking ≤ 1 inc, hook p99.99 ≤ 20 µs, S6 | PASS (GĐ10.10) |
 | rt_tail | kernel latency floor on CPU 3 | `tools/rt_tail/rt_tail.sh` | (reading) | 10 h max 7 µs (GĐ7) |
-| Soak 8 h, real drives in motion | Phase 12.5, on the tagged commit | `tools/release/run_soak_12_5.sh` (12.5) | W-08 limits; 0 overrun, NOFRAME ≤ 2/h, DC LOCKED, 0 axis error, no throttling | 12.5 |
-| valgrind | no memory error, no leak | `VALGRIND=1` (L5-03), 12.5 | definitely lost 0, 0 errors | 12.5 |
+| Soak 8 h, real drives in motion | the tagged commit, 2 IS620N, both axes CSP (W-08 motion and limits), `--api` | `tools/release/run_soak_12_5.sh` (+ `soak_watch.py`: stops at the first fault with S6) | W-08 checks with NOFRAME ≤ 2 per hour; no fault; CPU 3 never below 95 % of max frequency; no zone above 95 °C; VmRSS growth ≤ 1 MiB. Watcher rules: `soak_watch.py --self-test` (negative controls, in `test-offline`); stop at the first fault seen on the veth rehearsal (overrun on a non-RT host → SIGTERM → S6) | 12.5 |
+| Final regression | the tagged commit: clean tree, check_env, full Phase 9–11 regression, licence, L0 10 min, valgrind | `tools/release/run_final_12_5.sh` | valgrind self-check: a planted 4 KiB leak must be reported | 12.5 |
+| valgrind | no memory error, no leak in ecm_run through a cable pull (L5-03) | `run_final_12_5.sh` step `vg` | planted leak | 12.5 |
+| L0 | kernel wake-up floor on CPU 3, 10 min | `run_final_12_5.sh` step `l0` (`rt_tail.sh`) | `BREAK_US` stops cyclictest and keeps the trace | 12.5 |
 
 ## 5. `master_plan_v2.md` §12 Definition of Done
 | Item | Status | Evidence |
