@@ -106,16 +106,16 @@ real slave. `IS620N` = two Inovance IS620N drives. `x` = another master
 | Soak CSP | 8 h, 4 CSP axes on one virtual slave | `tools/gd10/run_soak_cia402.sh` | as above + 0 underrun / late, tracking ≤ 1 inc, hook p99.99 ≤ 20 µs, S6 | PASS (GĐ10.10) |
 | rt_tail | kernel latency floor on CPU 3 | `tools/rt_tail/rt_tail.sh` | (reading) | 10 h max 7 µs (GĐ7) |
 | Soak 8 h, real drives in motion | the tagged commit, 2 IS620N, both axes CSP (W-08 motion and limits), `--api` | `tools/release/run_soak_12_5.sh` (+ `soak_watch.py`: stops at the first fault with S6) | W-08 checks with NOFRAME ≤ 2 per hour; no fault; CPU 3 never below 95 % of max frequency; no zone above 95 °C; VmRSS growth ≤ 1 MiB. Watcher rules: `soak_watch.py --self-test` (negative controls, in `test-offline`); stop at the first fault seen on the veth rehearsal (overrun on a non-RT host → SIGTERM → S6) | 12.5 |
-| Final regression | the tagged commit: clean tree, check_env, full Phase 9–11 regression, licence, L0 10 min, valgrind | `tools/release/run_final_12_5.sh` | valgrind self-check: a planted 4 KiB leak must be reported | 12.5 |
-| valgrind | no memory error, no leak in ecm_run through a cable pull (L5-03) | `run_final_12_5.sh` step `vg` | planted leak | 12.5 |
-| L0 | kernel wake-up floor on CPU 3, 10 min | `run_final_12_5.sh` step `l0` (`rt_tail.sh`) | `BREAK_US` stops cyclictest and keeps the trace | 12.5 |
+| Final regression | the tagged commit: clean tree, check_env, full Phase 9–11 regression, licence, L0 10 min, valgrind | `tools/release/run_final_12_5.sh` | valgrind self-check: a planted 4 KiB leak must be reported | **6/6** 19/10 `cf2b241` |
+| valgrind | no memory error, no leak in ecm_run through a cable pull (L5-03) | `run_final_12_5.sh` step `vg` | planted leak | 0 B lost, 0 errors |
+| L0 | kernel wake-up floor on CPU 3, 10 min | `run_final_12_5.sh` step `l0` (`rt_tail.sh`) | `BREAK_US` stops cyclictest and keeps the trace | max 8 µs |
 
 ## 5. `master_plan_v2.md` §12 Definition of Done
 | Item | Status | Evidence |
 |---|---|---|
 | ETG.1500 self-assessment | ✅ | `ETG1500_COMPLIANCE.md` (final, 1103 corrected) |
 | soft_bus N ≥ 8, L1-06 | ✅ | L1 10/0 |
-| L0–L6 in one script | ✅ | `run_regression_gd11.sh` (+ L0 `rt_tail` in 12.5) |
+| L0–L6 in one script | ✅ | `run_final_12_5.sh` (regression + L0 `rt_tail`) |
 | ≥ 2 link backends, A/B with one binary | ✅ | af_packet / etf, R-02, BM-02 |
 | Hardware timestamps | ✅ partly | launch accuracy with HW timestamps; turnaround uses software timestamps (README) |
 | p50 … p99.99 | ✅ | `libecmaster/telemetry` |
@@ -126,14 +126,14 @@ real slave. `IS620N` = two Inovance IS620N drives. `x` = another master
 | TSan on the SPSC queues, arm64 | ✅ | CI + Jetson |
 | X-01 / X-02 / X-03 | X-01 ✅; **X-02/X-03 against a LAN9252 → Platform 1** | X-02s with TwinCAT on soft_bus |
 | R-01 on a real LAN9252 | **→ Platform 1** | R-01..R-09 on the IS620N |
-| Soak ≥ 8 h, valgrind, thermal | 12.5 | §4 |
+| Soak ≥ 8 h, valgrind, thermal | ✅ | §4 (8 h with both axes moving) |
 | `ecm_diag` | ✅ | L5-06, G-01..07 |
 | Golden pcap + compare | ✅ | §2 |
 | SII image written to the LAN9252 | **→ Platform 1** | — |
-| ≥ 3 `.pcapng` | 12.6 | evidence pack |
+| ≥ 3 `.pcapng` | ✅ | evidence pack `pcap/` (`make_evidence.sh`) |
 | `TEST_PLAN.md` | ✅ | this file |
 | README "not testable" | ✅ | README |
 | No hard-coded PDO / object index in `libecmaster` | ✅ | K-05 (`check_k05.py`); the only object indexes are 0x1C12/0x1C13 (ETG.1000.6 PDO assign, device-independent) |
-| Tag + reference figures | 12.6 | release notes |
+| Tag + reference figures | ✅ | `master-v1.0` = `cf2b241`, `docs/release_notes_1.0.md` |
 
 Items "→ Platform 1" need the LAN9252 slave; they are not marked as met.
