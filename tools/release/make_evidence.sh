@@ -122,12 +122,19 @@ IS7=${IS7:-$(ls -td "$ROOT"/log_gd11_is7_*/ 2>/dev/null | head -1)}
 if [ $CAPTURE = 1 ]; then
     echo "=== captures on veth with the tag's binaries"
     command -v tshark >/dev/null || die "tshark missing"
-    for i in veth_m veth_s; do ip link show "$i" >/dev/null 2>&1 || { ip link add veth_m type veth peer name veth_s; ip link set veth_m up; ip link set veth_s up; break; }; done
+    ip link show veth_m >/dev/null 2>&1 || ip link add veth_m type veth peer name veth_s || die "cannot create veth_m/veth_s"
+    # a pair made by hand (ip link add ...) is DOWN: tshark/libpcap refuses it
+    ip link set veth_m up && ip link set veth_s up || die "cannot bring veth_m/veth_s up"
+    # dumpcap may not write as root into the user's directory (permission denied)
+    chmod 777 "$W" "$E" "$E/pcap"
     cap () {   # NAME N SECONDS EVENTS -- ecm_run args...
         local name=$1 n=$2 dur=$3 ev=$4; shift 5
         "$T/tools/soft_bus/soft_bus" --iface veth_s --n "$n" --pdo-size 4 --dc 32 --no-sm-wd > "$W/sb_$name.log" 2>&1 & local sb=$!
-        tshark -q -i veth_m -w "$E/pcap/$name.pcapng" -f "ether proto 0x88a4" > /dev/null 2>&1 & local ts=$!
-        for _ in $(seq 50); do [ -s "$E/pcap/$name.pcapng" ] && break; sleep 0.1; done; sleep 1
+        tshark -q -i veth_m -w "$E/pcap/$name.pcapng" -f "ether proto 0x88a4" > "$W/ts_$name.log" 2>&1 & local ts=$!
+        for _ in $(seq 50); do [ -s "$E/pcap/$name.pcapng" ] && break; sleep 0.1; done
+        kill -0 $ts 2>/dev/null || { cat "$W/ts_$name.log"; kill -INT $sb 2>/dev/null; die "tshark on veth_m did not start ($name)"; }
+        kill -0 $sb 2>/dev/null || { cat "$W/sb_$name.log"; die "soft_bus did not start ($name)"; }
+        sleep 1
         "$T/apps/ecm_run/ecm_run" --iface veth_m --n "$n" --no-tx-ts --duration-sec "$dur" "$@" > "$W/er_$name.log" 2>&1 & local er=$!
         [ -n "$ev" ] && bash -c "$ev"
         wait $er; sleep 0.5
@@ -137,6 +144,7 @@ if [ $CAPTURE = 1 ]; then
     cap esm_pd 8 2 "" -- --motion-slaves 4
     cap sdo_startup 8 2 "" -- --motion-slaves 4 --eni "$T/config/eni/eni_8node_dc_sdo.enicfg"
     cap cable_pull 8 12 "sleep 4; ip link set veth_s down; sleep 2; ip link set veth_s up" -- --motion-slaves 4
+    chmod 755 "$W" "$E" "$E/pcap"; chown -R "$U:" "$E/pcap"
     grep -q 'CoE download' "$E/pcap/sdo_startup.ecm_run.log" || echo "make_evidence: note: sdo_startup log shows no CoE download"
     grep -q 'LOST -> RECOVER' "$E/pcap/cable_pull.ecm_run.log" || echo "make_evidence: note: cable_pull has no LOST -> RECOVER"
 fi
