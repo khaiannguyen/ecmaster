@@ -79,9 +79,13 @@ W=$(mktemp -d); trap 'git -C "$ROOT" worktree remove --force "$W/tree" >/dev/nul
 E=$W/ecmaster-$V-evidence; mkdir -p "$E"/{final,soak,golden,bench,pcap,machine}
 
 echo "=== worktree of $TAG ($CS)"
-git -C "$ROOT" worktree add -q --detach "$W/tree" "$TAG" || die "git worktree add failed"
+# The worktree is made BY the user: a root-made one leaves root-owned files
+# in .git/worktrees/ and the user's git calls below fail (index, lock).
+chown -R "$U:" "$W"
+GD=$(git -C "$ROOT" rev-parse --absolute-git-dir)
+[ -d "$GD/worktrees" ] && chown -R "$U:" "$GD/worktrees"     # left by an earlier root run
+sudo -u "$U" git -C "$ROOT" worktree add -q --detach "$W/tree" "$TAG" || die "git worktree add failed"
 T=$W/tree
-chown -R "$U:" "$W" 2>/dev/null
 if [ $BUILD = 1 ] || [ $CAPTURE = 1 ]; then
     S=${SOEM_DIR:-$ROOT/build/SOEM}
     sudo -u "$U" "$T/tools/release/build_soem.sh" "$S" > "$W/build_soem.txt" 2>&1 || { cat "$W/build_soem.txt"; die "build_soem failed"; }
@@ -90,7 +94,7 @@ if [ $BUILD = 1 ] || [ $CAPTURE = 1 ]; then
 fi
 if [ $BUILD = 1 ]; then
     echo "=== release files"
-    sudo -u "$U" "$T/tools/release/make_dist.sh" --out "$W/dist" > /dev/null || die "make dist failed"
+    sudo -u "$U" "$T/tools/release/make_dist.sh" --out "$W/dist" > "$W/dist.txt" 2>&1 || { cat "$W/dist.txt"; die "make dist failed"; }
     sudo -u "$U" "$T/tools/release/build_deb.sh" --out "$W/dist" > "$W/deb.txt" 2>&1 || { cat "$W/deb.txt"; die "build_deb failed"; }
     cp "$W/dist/ecmaster-$V.tar.gz" "$W"/dist/ecmaster_"$V"-1_*.deb "$OUT/"
 fi
